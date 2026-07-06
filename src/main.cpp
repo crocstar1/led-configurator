@@ -327,7 +327,15 @@ void handleGetConfig() {
     json += String((int)cfg.static_mask[0]) + "." + String((int)cfg.static_mask[1]) + "." + String((int)cfg.static_mask[2]) + "." + String((int)cfg.static_mask[3]);
     json += "\",\"gw\":\"";
     json += String((int)cfg.static_gw[0]) + "." + String((int)cfg.static_gw[1]) + "." + String((int)cfg.static_gw[2]) + "." + String((int)cfg.static_gw[3]);
-    json += "\"";
+    json += "\",\"matrix\":{\"cols\":";
+    json += String((int)MATRIX_X);
+    json += ",\"rows\":";
+    json += String((int)VIRTUAL_Y);
+    json += ",\"total\":";
+    json += String((int)NUM_IC_CHIPS);
+    json += ",\"topology\":";
+    json += String((int)cfg.topology);
+    json += "}";
     appendStatusLayersJson(json);
     appendHardwareMapJson(json);
     appendZoneMetadataJson(json);

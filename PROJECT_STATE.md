@@ -1,0 +1,171 @@
+# Project State
+
+## Project Goal
+
+This repository contains standalone firmware for an ESP32-based USP-1 LED matrix
+controller.
+
+USP-1 is treated here as a dedicated LED matrix controller, not as full EVSE
+firmware. The controller reads optocoupler input signals, maps port state,
+renders LED matrix zones, exposes a web setup UI, and stores configuration in
+NVS.
+
+## Confirmed Hardware Mapping
+
+Inputs are active-low: `LOW = active`.
+
+| Signal | GPIO | Current role |
+| --- | ---: | --- |
+| Data1 | GPIO16 | Port1 charging |
+| Data2 | GPIO17 | Port1 error |
+| Data3 | GPIO18 | Port2 charging, reserved |
+| Data4 | GPIO19 | Port2 error, reserved |
+| Data5 | GPIO21 | Port3 charging, reserved |
+| Data6 | GPIO25 | Port3 error, reserved |
+| Data7 | GPIO26 | Port4 charging, reserved |
+| Data8 | GPIO27 | Port4 error, reserved |
+
+LED outputs:
+
+| Output | GPIO | State |
+| --- | ---: | --- |
+| LED1 | GPIO22 | primary matrix output |
+| LED2 | GPIO23 | reserved |
+| LED3 | GPIO32 | reserved |
+| LED4 | GPIO33 | reserved |
+
+## Port Logic
+
+- Current active port count: 1.
+- Port1 is active.
+- Port2, Port3, and Port4 are reserved/disabled.
+- Port1 input mapping:
+  - Data1 = charging.
+  - Data2 = error.
+- Status priority: `error > charging > waiting`.
+- Port zones must follow real runtime status.
+- Port zone preview/custom UI must not hide runtime error indication.
+
+## Fixed Zone Model
+
+Fixed zone IDs:
+
+| ID | Zone |
+| ---: | --- |
+| 0 | Off |
+| 1 | Port1 |
+| 2 | Port2 reserved |
+| 3 | Port3 reserved |
+| 4 | Port4 reserved |
+| 5 | Logo |
+| 6 | QR |
+| 7 | Service |
+| 8 | Custom |
+
+Rules:
+
+- One pixel belongs to only one zone.
+- Port zones render station port status only: waiting, charging, error.
+- Rainbow is not allowed for port zones.
+- Free zones are separate from port runtime status.
+- QR means highlighting a matrix area near/under a physical QR, not generating a QR code.
+
+## Runtime/Edit Model
+
+Runtime mode:
+
+- Runtime status is more important than preview/edit state.
+- Port zones are driven by real input status.
+- `error` cannot be hidden by custom/preview layers.
+- Free zones render independently according to their mode.
+
+Edit/preview mode:
+
+- UI preview should be client-side where possible.
+- Editing one selected zone must lock other zones.
+- Save actions should be explicit.
+- If backend is unavailable, UI may run in mock/default preview mode and warn that changes exist only in the browser.
+
+## Already Done
+
+- Board config added for confirmed USP-1 GPIO mapping.
+- Active-low input reading implemented.
+- `status_mapper` added with `error > charging > waiting`.
+- `/diagnostics` endpoint added.
+- LED primary output moved to GPIO22.
+- Legacy EVSE/integration code removed from this project scope.
+- NVS `matrix_v1` storage added.
+- Backend endpoints synchronized with the UI:
+  - `/save_zones`
+  - `/set_bright`
+  - `/set_logo_anim`
+  - `/save_status_colors`
+- `/get_config` extended with `layers`, `hardware_map`, `zones`, and `matrix`.
+- Status layers are applied in renderer.
+- Fixed zone model added.
+- Runtime/preview split improved so UI preview does not call `/set_mode`.
+- UI pass added with tabs:
+  - Matrix Zones / Zones editor.
+  - Port Status editor.
+  - Free Zones editor.
+  - Diagnostics.
+- UI mock/default mode added for local `index.html` preview without ESP32 backend.
+
+## Currently In Work
+
+Current focus: UI review and cleanup before the next implementation step.
+
+Known active review topics:
+
+- Verify visible UI text is consistently Russian, including backend-provided zone labels localized on the frontend.
+- Verify Free Zones pixel drawing behavior after the frontend fix.
+- Reduce technical/explanatory copy in primary UI panels.
+- Keep detailed technical state mostly in Diagnostics.
+
+## Known UI Issues
+
+- Backend zone metadata names are still English (`Port 1`, `Logo`, `Service`, `Custom`), but the frontend now localizes zone labels by fixed zone ID.
+- Free Zones custom pixel drawing was separated from static color in the frontend:
+  - static mode fills the selected free zone;
+  - custom drawing uses the selected color as a brush;
+  - clear drawing clears only the selected free zone custom layer.
+- Free zone modes for QR, Service, and Custom are preview-only until FreeZoneConfig storage exists.
+- Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
+- Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
+
+## Backlog
+
+- FreeZoneConfig storage for Logo, QR, Service, and Custom.
+- Per-free-zone static/custom/rainbow settings.
+- Brightness schedule by time of day.
+- WiFi manager.
+- DHCP/static network settings.
+- AP fallback behavior and UX.
+- OTA UX redesign.
+- Multi-matrix outputs on LED1..LED4.
+- Runtime configurable matrix dimensions.
+- Topology selector UX and validation.
+- Optional per-port status color override.
+
+## Build
+
+Build command:
+
+```powershell
+pio run -e esp32dev
+```
+
+The assistant should not run PlatformIO automatically when the environment is
+unstable or when the user explicitly asks not to. Ask the user to run the build.
+
+## Do Not Touch Without Separate Task
+
+- WiFi manager.
+- OTA implementation/UX.
+- Network settings.
+- Rules engine or broader EVSE logic.
+- Dynamic arbitrary zone creation/deletion.
+- Per-port override logic.
+- Brightness schedule.
+- Multi-matrix FastLED outputs.
+- Hardware pin mapping, unless new confirmed hardware input is provided.
