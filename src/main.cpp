@@ -481,6 +481,9 @@ void handleDiagnostics() {
     json.reserve(1400);
     json += "{\"activePortCount\":";
     json += String((int)status.activePortCount);
+    json += ",\"runtimeMode\":\"";
+    json += ledMode;
+    json += "\"";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
     json += String((int)USP1_PRIMARY_LED_PIN);
     json += ",\"index\":";

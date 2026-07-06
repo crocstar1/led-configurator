@@ -159,6 +159,13 @@ bool getStatusLayerColorForStatus(int index, PortStatus status, CRGB &color) {
     return true;
 }
 
+CRGB visibleErrorColor(CRGB preferred) {
+    if ((uint16_t)preferred.r + preferred.g + preferred.b < 40) {
+        return CRGB(255, 0, 0);
+    }
+    return preferred;
+}
+
 void led_refresh_internal() {
     static uint8_t rainbowHue = 0;
     rainbowHue += 1; 
@@ -204,6 +211,7 @@ void led_refresh_internal() {
                     layerColor.nscale8_video(cfg.bright_ports);
 
                     if (zoneStatus == PORT_STATUS_ERROR) {
+                        layerColor = visibleErrorColor(layerColor);
                         leds[i] = ((millis() / 500) % 2 == 0) ? layerColor : CRGB::Black;
                     } else if (zoneStatus == PORT_STATUS_WAITING) {
                         layerColor.nscale8_video(pulseBright);
@@ -226,7 +234,7 @@ void led_refresh_internal() {
                 leds[i] = CRGB::Black;
             } else if (zoneStatus == PORT_STATUS_ERROR) {
                 // Моргаем кастомным цветом ошибки (раз в 500 мс)
-                leds[i] = ((millis() / 500) % 2 == 0) ? customError : CRGB::Black;
+                leds[i] = ((millis() / 500) % 2 == 0) ? visibleErrorColor(customError) : CRGB::Black;
             } else if (zoneStatus == PORT_STATUS_CHARGING) {
                 leds[i] = customCharge; // Горит кастомным цветом зарядки
             } else {
