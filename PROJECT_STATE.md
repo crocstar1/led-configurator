@@ -132,18 +132,34 @@ Edit/preview mode:
   - sparse custom pixel layer per free zone.
 - Service/gear menu added:
   - Diagnostics moved out of the primary working tabs;
-  - Network is a placeholder;
+  - Network now has an MVP Wi-Fi settings/status screen;
   - Firmware is a placeholder.
+- Basic Auth stage added:
+  - `/` and existing configuration endpoints require `admin/admin`;
+  - `/diagnostics` remains protected;
+  - `/update` OTA upload is now protected before firmware bytes are accepted;
+  - WebSocket write commands now require a runtime token exposed only through
+    authenticated `/get_config`.
+- Network config MVP added:
+  - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
+  - network settings are stored separately in NVS namespace `net_cfg`;
+  - DHCP and static IP fields are supported;
+  - AP fallback defaults are `NEK_EVSE_LAB` / `12345678`;
+  - service menu Network section shows mode/status/IP/RSSI/DHCP and has a
+    settings form;
+  - endpoints added: `/network_status`, `/scan_networks`, `/save_network`,
+    `/network_reconnect`;
+  - network endpoints are protected with Basic Auth.
 
 ## Currently In Work
 
-Current focus: auth + network/OTA architecture audit before implementation.
+Current focus: verify network config MVP, then continue with OTA UX cleanup.
 
 Known active review topics:
 
-- Audit current Test-led auth, network, OTA, and protected endpoints.
-- Compare with original `proj1` firmware as a reference.
-- Propose standalone auth/network/OTA architecture before writing code.
+- Design NVS-backed auth credentials instead of hardcoded `admin/admin`.
+- Verify standalone WiFi STA/AP fallback and service menu network UI.
+- Clean up OTA UX after the protected `/update` baseline.
 
 ## Known UI Issues
 
@@ -162,17 +178,25 @@ Known active review topics:
 ## Backlog
 
 - FreeZoneConfig storage follow-up: manual UI/hardware verification and any bug fixes found during reload/reboot testing.
-- Replace Network placeholder in the service menu with WiFi manager UX.
+- Network MVP follow-up:
+  - validate STA connect/reconnect behavior on hardware;
+  - decide whether AP fallback default password is acceptable for production;
+  - add safer reset/clear-network flow;
+  - consider async/non-blocking startup connection after hardware testing.
 - Replace Firmware placeholder in the service menu with OTA / remote firmware update UX.
 - Brightness schedule by time of day.
-- WiFi manager.
-- DHCP/static network settings.
-- AP fallback behavior and UX.
+- Full WiFi manager polish beyond current MVP.
 - OTA UX redesign.
 - Multi-matrix outputs on LED1..LED4.
 - Runtime configurable matrix dimensions.
 - Topology selector UX and validation.
 - Optional per-port status color override.
+- Auth follow-up:
+  - move credentials from hardcoded `admin/admin` to an `auth_cfg` NVS
+    namespace;
+  - add password change UX in the service menu;
+  - define a safe settings reset flow;
+  - review whether AP fallback may keep a default password in production.
 
 ## Build
 

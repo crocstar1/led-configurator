@@ -270,7 +270,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             margin-bottom: 6px;
         }
 
-        select, input[type="color"] {
+        select, input[type="color"], input[type="text"], input[type="password"] {
             width: 100%;
             border: 1px solid var(--line);
             border-radius: 9px;
@@ -280,6 +280,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             font: inherit;
             font-size: 13px;
             font-weight: 650;
+        }
+
+        input[type="checkbox"] {
+            accent-color: var(--blue);
         }
 
         input[type="range"] {
@@ -607,7 +611,62 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="service-section" id="service_network">
-                <div class="notice">Настройки сети будут добавлены позже.</div>
+                <div class="section">
+                    <div class="row">
+                        <strong>Сеть</strong>
+                        <button class="btn" id="refresh_network_btn" type="button">Обновить</button>
+                    </div>
+                    <div class="diag-grid" id="network_summary"></div>
+                    <form id="network_form" class="section">
+                        <div>
+                            <label for="network_ssid">SSID</label>
+                            <input id="network_ssid" name="ssid" type="text" autocomplete="off">
+                        </div>
+                        <div>
+                            <label for="network_password">Пароль Wi-Fi</label>
+                            <input id="network_password" name="password" type="password" autocomplete="new-password" placeholder="пусто = не менять пароль">
+                        </div>
+                        <label class="row" style="justify-content:flex-start;">
+                            <input id="network_dhcp" name="dhcp" type="checkbox" checked>
+                            <span>DHCP</span>
+                        </label>
+                        <div class="grid-2" id="network_static_fields">
+                            <div>
+                                <label for="network_static_ip">Static IP</label>
+                                <input id="network_static_ip" name="static_ip" type="text" inputmode="numeric">
+                            </div>
+                            <div>
+                                <label for="network_gateway">Gateway</label>
+                                <input id="network_gateway" name="gateway" type="text" inputmode="numeric">
+                            </div>
+                            <div>
+                                <label for="network_subnet">Subnet</label>
+                                <input id="network_subnet" name="subnet" type="text" inputmode="numeric">
+                            </div>
+                            <div>
+                                <label for="network_dns">DNS</label>
+                                <input id="network_dns" name="dns" type="text" inputmode="numeric">
+                            </div>
+                        </div>
+                        <div class="grid-2">
+                            <div>
+                                <label for="network_ap_ssid">AP fallback SSID</label>
+                                <input id="network_ap_ssid" name="ap_ssid" type="text">
+                            </div>
+                            <div>
+                                <label for="network_ap_password">AP fallback пароль</label>
+                                <input id="network_ap_password" name="ap_password" type="password">
+                            </div>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn" id="scan_network_btn" type="button">Сканировать</button>
+                            <button class="btn primary" type="submit">Сохранить</button>
+                            <button class="btn" id="network_apply_btn" type="button">Применить</button>
+                        </div>
+                    </form>
+                    <div class="diag-grid" id="network_scan"></div>
+                    <div class="hint" id="network_message"></div>
+                </div>
             </section>
 
             <section class="service-section" id="service_firmware">
@@ -707,6 +766,7 @@ let freeStaticColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrushColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrightness = { '5': 100, '6': 100, '7': 100, '8': 100 };
 let diagnostics = null;
+let networkStatus = null;
 let rainbowTick = 0;
 let backendAvailable = false;
 let mockMode = false;
@@ -793,6 +853,48 @@ function buildMockDiagnostics() {
             { port: 4, enabled: false, zoneId: 4, chargingInput: 'Data7', errorInput: 'Data8', status: 'disabled' },
         ],
     };
+}
+
+function buildMockNetworkStatus() {
+    return {
+        mode: 'ap_fallback',
+        status: 'mock',
+        configured: false,
+        connected: false,
+        ssid: '',
+        connectedSsid: '',
+        ip: '',
+        rssi: 0,
+        dhcp: true,
+        staticIp: '192.168.1.150',
+        gateway: '192.168.1.1',
+        subnet: '255.255.255.0',
+        dns: '8.8.8.8',
+        apSsid: 'NEK_EVSE_LAB',
+        apIp: '192.168.4.1',
+        apClients: 1,
+    };
+}
+
+function networkModeLabel(mode) {
+    const labels = {
+        sta: 'STA',
+        ap_fallback: 'AP fallback',
+        connecting: 'подключение',
+    };
+    return labels[mode] || mode || 'неизвестно';
+}
+
+function networkStatusLabel(status) {
+    const labels = {
+        connected: 'подключено',
+        connecting: 'подключение',
+        not_configured: 'SSID не сохранен',
+        connect_failed: 'подключение не удалось',
+        connect_timeout: 'таймаут подключения',
+        mock: 'локальный preview',
+    };
+    return labels[status] || status || 'неизвестно';
 }
 
 function sanitizeZoneMapForSize(map) {
@@ -1164,6 +1266,7 @@ function setServiceOpen(open) {
     backdrop.classList.toggle('open', open);
     backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
     if (open) loadDiagnostics();
+    if (open && activeServiceSection === 'network') loadNetworkStatus();
 }
 
 document.getElementById('service_open_btn').addEventListener('click', () => setServiceOpen(true));
@@ -1180,7 +1283,17 @@ document.querySelectorAll('[data-service]').forEach(btn => {
             section.classList.toggle('active', section.id === `service_${activeServiceSection}`);
         });
         if (activeServiceSection === 'diagnostics') loadDiagnostics();
+        if (activeServiceSection === 'network') loadNetworkStatus();
     });
+});
+
+document.getElementById('refresh_network_btn').addEventListener('click', loadNetworkStatus);
+document.getElementById('scan_network_btn').addEventListener('click', scanNetworks);
+document.getElementById('network_apply_btn').addEventListener('click', applyNetworkConfig);
+document.getElementById('network_dhcp').addEventListener('change', updateNetworkStaticFields);
+document.getElementById('network_form').addEventListener('submit', e => {
+    e.preventDefault();
+    saveNetworkConfig();
 });
 
 document.getElementById('zone_select').addEventListener('change', e => {
@@ -1404,6 +1517,135 @@ async function loadDiagnostics() {
         renderDiagnostics();
         document.getElementById('runtime_label').textContent = 'локальный предпросмотр: контроллер недоступен';
         document.getElementById('runtime_dot').style.background = 'var(--orange)';
+    }
+}
+
+function setNetworkMessage(text, isError = false) {
+    const el = document.getElementById('network_message');
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+function fillNetworkForm(status) {
+    document.getElementById('network_ssid').value = status.ssid || '';
+    document.getElementById('network_password').value = '';
+    document.getElementById('network_dhcp').checked = status.dhcp !== false;
+    document.getElementById('network_static_ip').value = status.staticIp || '192.168.1.150';
+    document.getElementById('network_gateway').value = status.gateway || '192.168.1.1';
+    document.getElementById('network_subnet').value = status.subnet || '255.255.255.0';
+    document.getElementById('network_dns').value = status.dns || '8.8.8.8';
+    document.getElementById('network_ap_ssid').value = status.apSsid || 'NEK_EVSE_LAB';
+    document.getElementById('network_ap_password').value = '';
+    updateNetworkStaticFields();
+}
+
+function updateNetworkStaticFields() {
+    const dhcp = document.getElementById('network_dhcp').checked;
+    document.getElementById('network_static_fields').classList.toggle('field-hidden', dhcp);
+}
+
+async function loadNetworkStatus() {
+    if (!backendAvailable) {
+        networkStatus = buildMockNetworkStatus();
+        renderNetworkStatus();
+        setNetworkMessage('Backend недоступен, показан локальный preview.');
+        return;
+    }
+
+    try {
+        const res = await fetch('/network_status');
+        if (!res.ok) throw new Error(`network_status ${res.status}`);
+        networkStatus = await res.json();
+        renderNetworkStatus();
+        setNetworkMessage('');
+    } catch (err) {
+        networkStatus = buildMockNetworkStatus();
+        renderNetworkStatus();
+        setNetworkMessage('Не удалось получить статус сети.', true);
+    }
+}
+
+function renderNetworkStatus() {
+    if (!networkStatus) return;
+    document.getElementById('network_summary').innerHTML = [
+        diagCard('Режим', networkModeLabel(networkStatus.mode)),
+        diagCard('Состояние', networkStatus.connected ? 'подключено' : networkStatusLabel(networkStatus.status)),
+        diagCard('SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'),
+        diagCard('IP', networkStatus.ip || networkStatus.apIp || 'нет'),
+        diagCard('RSSI', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'),
+        diagCard('Адресация', networkStatus.dhcp ? 'DHCP' : 'Static'),
+    ].join('');
+    fillNetworkForm(networkStatus);
+}
+
+async function scanNetworks() {
+    if (!backendAvailable) {
+        document.getElementById('network_scan').innerHTML = [
+            diagCard('NEK_EVSE_LAB', 'mock · -45 dBm'),
+            diagCard('Office Wi-Fi', 'mock · -62 dBm'),
+        ].join('');
+        setNetworkMessage('Сканирование работает только через контроллер.');
+        return;
+    }
+
+    setNetworkMessage('Сканирование...');
+    try {
+        const res = await fetch('/scan_networks');
+        if (!res.ok) throw new Error(`scan ${res.status}`);
+        const networks = await res.json();
+        document.getElementById('network_scan').innerHTML = (networks || []).map(net =>
+            diagCard(net.ssid || '(hidden)', `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`)
+        ).join('') || '<div class="notice">Сети не найдены.</div>';
+        setNetworkMessage('');
+    } catch (err) {
+        setNetworkMessage('Не удалось выполнить сканирование.', true);
+    }
+}
+
+async function saveNetworkConfig() {
+    if (!backendAvailable) {
+        setNetworkMessage('Backend недоступен, настройки сети не сохранены.', true);
+        return;
+    }
+
+    const body = new URLSearchParams();
+    body.set('ssid', document.getElementById('network_ssid').value.trim());
+    body.set('password', document.getElementById('network_password').value);
+    body.set('dhcp', document.getElementById('network_dhcp').checked ? '1' : '0');
+    body.set('static_ip', document.getElementById('network_static_ip').value.trim());
+    body.set('gateway', document.getElementById('network_gateway').value.trim());
+    body.set('subnet', document.getElementById('network_subnet').value.trim());
+    body.set('dns', document.getElementById('network_dns').value.trim());
+    body.set('ap_ssid', document.getElementById('network_ap_ssid').value.trim());
+    body.set('ap_password', document.getElementById('network_ap_password').value);
+
+    try {
+        const res = await fetch('/save_network', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        setNetworkMessage('Настройки сети сохранены. Нажмите «Применить» для переподключения.');
+        await loadNetworkStatus();
+    } catch (err) {
+        setNetworkMessage(`Не удалось сохранить сеть: ${err.message}`, true);
+    }
+}
+
+async function applyNetworkConfig() {
+    if (!backendAvailable) {
+        setNetworkMessage('Backend недоступен, применить настройки нельзя.', true);
+        return;
+    }
+
+    try {
+        const res = await fetch('/network_reconnect', { method: 'POST' });
+        if (!res.ok) throw new Error(await res.text());
+        setNetworkMessage('Переподключение запущено. Интерфейс может временно пропасть.');
+        setTimeout(loadNetworkStatus, 4000);
+    } catch (err) {
+        setNetworkMessage(`Не удалось применить настройки: ${err.message}`, true);
     }
 }
 

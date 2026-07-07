@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h> 
+#include <esp_system.h>
 #include <Update.h> // Встроенная библиотека ESP32 для безопасной OTA-прошивки
 #include <ctype.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "usp1_inputs.h"
 #include "status_mapper.h"
 #include "zone_model.h"
+#include "network_config.h"
 
 WebServer server(80);
 WebSocketsServer webSocket(81); 
@@ -18,6 +20,17 @@ WebSocketsServer webSocket(81);
 // Учетные данные защиты инженерного пульта (Basic Auth)
 const char* www_username = "admin";
 const char* www_password = "admin";
+
+static const uint8_t WS_AUTH_CLIENT_LIMIT = 8;
+bool wsClientAuthorized[WS_AUTH_CLIENT_LIMIT] = {false};
+String wsAuthToken;
+bool otaUploadAuthorized = false;
+
+bool requireHttpAuth() {
+    if (server.authenticate(www_username, www_password)) return true;
+    server.requestAuthentication();
+    return false;
+}
 
 // Вспомогательная функция перевода HEX-строки (например, "0055ff") в 3 байта RGB
 void parseHexColor(String hex, uint8_t* targetArray) {
@@ -49,6 +62,14 @@ String rgbToHex(const uint8_t *rgb) {
     char buf[8];
     snprintf(buf, sizeof(buf), "#%02x%02x%02x", rgb[0], rgb[1], rgb[2]);
     return String(buf);
+}
+
+String jsonEscape(String value) {
+    value.replace("\\", "\\\\");
+    value.replace("\"", "\\\"");
+    value.replace("\n", "\\n");
+    value.replace("\r", "\\r");
+    return value;
 }
 
 uint8_t clampByteValue(int value, uint8_t fallback) {
@@ -291,18 +312,49 @@ void appendZoneMetadataJson(String &json) {
     json += "]";
 }
 
+void generateWsAuthToken() {
+    char token[17];
+    snprintf(token, sizeof(token), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
+    wsAuthToken = token;
+}
+
+bool webSocketClientAuthorized(uint8_t num) {
+    return num < WS_AUTH_CLIENT_LIMIT && wsClientAuthorized[num];
+}
+
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
     if (type == WStype_CONNECTED) {
-        // ПАМЯТЬ ХОЛСТА: Отправляем карту зон при коннекте
-        String mapPacket = "MAP:";
-        for (int i = 0; i < NUM_IC_CHIPS; i++) {
-            mapPacket += String(zoneMap[i]);
-            if (i < NUM_IC_CHIPS - 1) mapPacket += ",";
-        }
-        webSocket.sendTXT(num, mapPacket);
+        if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = false;
+        webSocket.sendTXT(num, "AUTH_REQUIRED");
+        return;
+    }
+    else if (type == WStype_DISCONNECTED) {
+        if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = false;
     }
     else if (type == WStype_TEXT) {
-        String msg = (char*)payload;
+        String msg;
+        msg.reserve(length);
+        for (size_t i = 0; i < length; i++) msg += (char)payload[i];
+
+        if (msg.startsWith("AUTH:")) {
+            const bool ok = (msg.substring(5) == wsAuthToken);
+            if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = ok;
+            webSocket.sendTXT(num, ok ? "AUTH_OK" : "AUTH_FAILED");
+            if (ok) {
+                String mapPacket = "MAP:";
+                for (int i = 0; i < NUM_IC_CHIPS; i++) {
+                    mapPacket += String(zoneMap[i]);
+                    if (i < NUM_IC_CHIPS - 1) mapPacket += ",";
+                }
+                webSocket.sendTXT(num, mapPacket);
+            }
+            return;
+        }
+
+        if (!webSocketClientAuthorized(num)) {
+            webSocket.sendTXT(num, "AUTH_REQUIRED");
+            return;
+        }
         led_feed_heartbeat();
 
         if (msg == "CLEAR") {
@@ -415,6 +467,9 @@ void handleGetConfig() {
     json += ",\"topology\":";
     json += String((int)cfg.topology);
     json += "}";
+    json += ",\"ws_token\":\"";
+    json += wsAuthToken;
+    json += "\"";
     appendStatusLayersJson(json);
     appendHardwareMapJson(json);
     appendZoneMetadataJson(json);
@@ -618,6 +673,149 @@ void handleSaveFreeZone() {
     server.send(200, "text/plain", "OK");
 }
 
+void handleNetworkStatus() {
+    if (!requireHttpAuth()) return;
+
+    const NetworkConfig &net = network_config_get();
+    String json;
+    json.reserve(900);
+    json += "{\"mode\":\"";
+    json += network_runtime_mode_string();
+    json += "\",\"status\":\"";
+    json += network_connection_status_string();
+    json += "\",\"configured\":";
+    json += network_has_saved_ssid() ? "true" : "false";
+    json += ",\"connected\":";
+    json += network_sta_connected() ? "true" : "false";
+    json += ",\"ssid\":\"";
+    json += jsonEscape(net.ssid);
+    json += "\",\"passwordConfigured\":";
+    json += net.password.length() > 0 ? "true" : "false";
+    json += ",\"connectedSsid\":\"";
+    json += jsonEscape(network_connected_ssid());
+    json += "\",\"ip\":\"";
+    json += network_local_ip_string();
+    json += "\",\"rssi\":";
+    json += String((int)network_rssi());
+    json += ",\"dhcp\":";
+    json += net.dhcp ? "true" : "false";
+    json += ",\"staticIp\":\"";
+    json += network_ip_to_string(net.staticIp);
+    json += "\",\"gateway\":\"";
+    json += network_ip_to_string(net.gateway);
+    json += "\",\"subnet\":\"";
+    json += network_ip_to_string(net.subnet);
+    json += "\",\"dns\":\"";
+    json += network_ip_to_string(net.dns);
+    json += "\",\"apSsid\":\"";
+    json += jsonEscape(net.apSsid);
+    json += "\",\"apIp\":\"";
+    json += network_ap_ip_string();
+    json += "\",\"apClients\":";
+    json += String(network_ap_client_count());
+    json += "}";
+
+    server.send(200, "application/json", json);
+}
+
+void handleScanNetworks() {
+    if (!requireHttpAuth()) return;
+
+    if (network_runtime_mode() == NETWORK_MODE_AP_FALLBACK) {
+        WiFi.mode(WIFI_AP_STA);
+    }
+
+    const int count = WiFi.scanNetworks(false, true);
+    String json = "[";
+    if (count > 0) {
+        for (int i = 0; i < count; i++) {
+            if (i > 0) json += ",";
+            json += "{\"ssid\":\"";
+            json += jsonEscape(WiFi.SSID(i));
+            json += "\",\"rssi\":";
+            json += String(WiFi.RSSI(i));
+            json += ",\"channel\":";
+            json += String(WiFi.channel(i));
+            json += ",\"secure\":";
+            json += (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "false" : "true";
+            json += "}";
+        }
+    }
+    json += "]";
+    WiFi.scanDelete();
+
+    server.send(200, "application/json", json);
+}
+
+void handleSaveNetworkConfig() {
+    if (!requireHttpAuth()) return;
+
+    NetworkConfig next = network_config_get();
+
+    const String previousSsid = next.ssid;
+    if (server.hasArg("ssid")) next.ssid = server.arg("ssid");
+    if (server.hasArg("password")) {
+        const String submittedPassword = server.arg("password");
+        if (submittedPassword.length() > 0 || next.ssid != previousSsid) {
+            next.password = submittedPassword;
+        }
+    }
+    if (server.hasArg("dhcp")) {
+        const String value = server.arg("dhcp");
+        next.dhcp = value == "1" || value == "true" || value == "on";
+    }
+    if (!next.dhcp && server.hasArg("static_ip")) {
+        IPAddress ip;
+        if (!network_parse_ip(server.arg("static_ip"), ip)) {
+            server.send(400, "text/plain", "BAD_STATIC_IP");
+            return;
+        }
+        next.staticIp = ip;
+    }
+    if (!next.dhcp && server.hasArg("gateway")) {
+        IPAddress ip;
+        if (!network_parse_ip(server.arg("gateway"), ip)) {
+            server.send(400, "text/plain", "BAD_GATEWAY");
+            return;
+        }
+        next.gateway = ip;
+    }
+    if (!next.dhcp && server.hasArg("subnet")) {
+        IPAddress ip;
+        if (!network_parse_ip(server.arg("subnet"), ip)) {
+            server.send(400, "text/plain", "BAD_SUBNET");
+            return;
+        }
+        next.subnet = ip;
+    }
+    if (!next.dhcp && server.hasArg("dns")) {
+        IPAddress ip;
+        if (!network_parse_ip(server.arg("dns"), ip)) {
+            server.send(400, "text/plain", "BAD_DNS");
+            return;
+        }
+        next.dns = ip;
+    }
+    if (server.hasArg("ap_ssid")) next.apSsid = server.arg("ap_ssid");
+    if (server.hasArg("ap_password") && server.arg("ap_password").length() > 0) {
+        next.apPassword = server.arg("ap_password");
+    }
+
+    String error;
+    if (!network_config_save(next, error)) {
+        server.send(400, "text/plain", error);
+        return;
+    }
+
+    server.send(200, "text/plain", "OK");
+}
+
+void handleNetworkReconnect() {
+    if (!requireHttpAuth()) return;
+    network_schedule_apply(1500);
+    server.send(200, "text/plain", "RECONNECT_SCHEDULED");
+}
+
 void handleDiagnostics() {
     if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
 
@@ -723,12 +921,13 @@ void setup() {
     usp1_inputs_setup();
     status_mapper_setup();
     led_setup();
+    generateWsAuthToken();
+    network_setup();
 
-    // Запуск локального Wi-Fi для тестов на столе
-    WiFi.softAP("NEK_EVSE_LAB", "12345678");
+    // Wi-Fi starts in STA mode when configured, otherwise AP fallback.
     Serial.println("\n=== СЕТЕВОЙ МОДУЛЬ УСП-1 ЗАПУЩЕН ===");
     Serial.print("Адрес конфигуратора: http://");
-    Serial.println(WiFi.softAPIP());
+    Serial.println(network_sta_connected() ? network_local_ip_string() : network_ap_ip_string());
 
     server.on("/", handleRoot);
     server.on("/get_size", handleGetMatrixSize);
@@ -740,30 +939,40 @@ void setup() {
     server.on("/set_logo_anim", handleSetLogoAnim);
     server.on("/save_status_colors", HTTP_POST, handleSaveStatusColors);
     server.on("/save_free_zone", HTTP_POST, handleSaveFreeZone);
+    server.on("/network_status", HTTP_GET, handleNetworkStatus);
+    server.on("/scan_networks", HTTP_GET, handleScanNetworks);
+    server.on("/save_network", HTTP_POST, handleSaveNetworkConfig);
+    server.on("/network_reconnect", HTTP_POST, handleNetworkReconnect);
     server.on("/diagnostics", handleDiagnostics);
 
     // ПРОМЫШЛЕННЫЙ ПРИЕМНИК OTA-ОБНОВЛЕНИЯ ПРОШИВКИ (Update.h)
     server.on("/update", HTTP_POST, []() {
+        if (!requireHttpAuth()) return;
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         ESP.restart(); // Перезапуск контроллера после успешной записи бинарника
     }, []() {
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
+            otaUploadAuthorized = server.authenticate(www_username, www_password);
+            if (!otaUploadAuthorized) return;
             Serial.printf("Начало OTA прошивки: %s\n", upload.filename.c_str());
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { 
                 Update.printError(Serial);
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (!otaUploadAuthorized) return;
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                 Update.printError(Serial);
             }
         } else if (upload.status == UPLOAD_FILE_END) {
+            if (!otaUploadAuthorized) return;
             if (Update.end(true)) { 
                 Serial.printf("OTA обновление завершено. Успешно записано: %u байт\n", upload.totalSize);
             } else {
                 Update.printError(Serial);
             }
+            otaUploadAuthorized = false;
         }
     });
 
@@ -774,6 +983,7 @@ void setup() {
 
 void loop() {
     server.handleClient();
+    network_loop();
     webSocket.loop(); 
     updatePortStatusFromInputs();
 }
