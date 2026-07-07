@@ -124,25 +124,26 @@ Edit/preview mode:
   - Matrix Zones / Zones editor.
   - Port Status editor.
   - Free Zones editor.
-  - Diagnostics.
 - UI mock/default mode added for local `index.html` preview without ESP32 backend.
 - FreeZoneConfig storage added for Logo, QR, Service, and Custom:
   - per-zone mode: static/custom/rainbow;
   - per-zone static color;
   - per-zone brightness;
   - sparse custom pixel layer per free zone.
+- Service/gear menu added:
+  - Diagnostics moved out of the primary working tabs;
+  - Network is a placeholder;
+  - Firmware is a placeholder.
 
 ## Currently In Work
 
-Current focus: verify FreeZoneConfig storage after implementation.
+Current focus: auth + network/OTA architecture audit before implementation.
 
 Known active review topics:
 
-- Verify Logo static/rainbow persistence after reload/reboot.
-- Verify QR, Service, and Custom mode/color persistence after reload/reboot.
-- Verify Custom pixel drawing persistence after reload/reboot.
-- Verify free zone custom layers remain sparse and do not write pixels outside the selected zone.
-- Verify port status rendering still has priority and is not affected by free zone rendering.
+- Audit current Test-led auth, network, OTA, and protected endpoints.
+- Compare with original `proj1` firmware as a reference.
+- Propose standalone auth/network/OTA architecture before writing code.
 
 ## Known UI Issues
 
@@ -156,14 +157,13 @@ Known active review topics:
 - Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
 - Free zone storage validates current compile-time matrix size. Future runtime matrix resize still needs migration/reset UX.
 - Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
+- Service menu build and manual desktop/mobile UI check passed.
 
 ## Backlog
 
 - FreeZoneConfig storage follow-up: manual UI/hardware verification and any bug fixes found during reload/reboot testing.
-- Move Diagnostics into a future gear/settings menu together with:
-  - diagnostics;
-  - network settings;
-  - OTA / remote firmware update UX.
+- Replace Network placeholder in the service menu with WiFi manager UX.
+- Replace Firmware placeholder in the service menu with OTA / remote firmware update UX.
 - Brightness schedule by time of day.
 - WiFi manager.
 - DHCP/static network settings.

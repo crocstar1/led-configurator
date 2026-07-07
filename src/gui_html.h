@@ -87,6 +87,12 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             white-space: nowrap;
         }
 
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         .dot {
             width: 9px;
             height: 9px;
@@ -96,7 +102,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .tabs {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 8px;
             margin-bottom: 14px;
         }
@@ -203,6 +209,42 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .tab-panel { display: none; }
         .tab-panel.active { display: block; }
+
+        .service-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: flex-start;
+            justify-content: flex-end;
+            padding: 16px;
+            background: rgba(17, 24, 39, 0.24);
+            z-index: 20;
+        }
+
+        .service-backdrop.open {
+            display: flex;
+        }
+
+        .service-panel {
+            width: min(520px, 100%);
+            max-height: calc(100vh - 32px);
+            overflow: auto;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            box-shadow: 0 18px 46px rgba(25, 39, 65, 0.18);
+            padding: 16px;
+        }
+
+        .service-tabs {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .service-section { display: none; }
+        .service-section.active { display: block; }
 
         .section {
             display: flex;
@@ -384,7 +426,6 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             body { padding: 12px 10px 24px; }
             .topbar { align-items: flex-start; }
             .brand h1 { font-size: 21px; }
-            .tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .layout { grid-template-columns: 1fr; }
             .panel { padding: 13px; border-radius: 11px; }
             .pixel { width: 28px; height: 28px; border-radius: 7px; }
@@ -397,6 +438,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .matrix { gap: 4px; }
             .grid-2 { grid-template-columns: 1fr; }
             .runtime-pill { display: none; }
+            .topbar { gap: 10px; }
+            .service-tabs, .tabs { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -407,14 +450,16 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             <h1>LED-контроллер матрицы</h1>
             <span>инженерная настройка контроллера</span>
         </div>
-        <div class="runtime-pill"><span class="dot" id="runtime_dot"></span><span id="runtime_label">режим: загрузка</span></div>
+        <div class="top-actions">
+            <div class="runtime-pill"><span class="dot" id="runtime_dot"></span><span id="runtime_label">режим: загрузка</span></div>
+            <button class="btn" id="service_open_btn" type="button">⚙ Сервис</button>
+        </div>
     </header>
 
     <nav class="tabs" aria-label="Разделы настройки">
         <button class="tab-btn active" data-tab="zones">Зоны матрицы</button>
         <button class="tab-btn" data-tab="status">Статусы портов</button>
         <button class="tab-btn" data-tab="free">Свободные зоны</button>
-        <button class="tab-btn" data-tab="diagnostics">Диагностика</button>
     </nav>
 
     <main class="layout">
@@ -524,9 +569,27 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </div>
             </section>
 
-            <section class="panel tab-panel" id="tab_diagnostics">
-                <div class="panel-title"><h2>Диагностика</h2><button class="btn" id="refresh_diag_btn">Обновить</button></div>
+        </aside>
+    </main>
+
+    <div class="service-backdrop" id="service_backdrop" aria-hidden="true">
+        <section class="service-panel" role="dialog" aria-modal="true" aria-label="Сервис">
+            <div class="panel-title">
+                <h2>Сервис</h2>
+                <button class="btn" id="service_close_btn" type="button">Закрыть</button>
+            </div>
+            <div class="service-tabs" aria-label="Сервисные разделы">
+                <button class="tab-btn active" data-service="diagnostics" type="button">Диагностика</button>
+                <button class="tab-btn" data-service="network" type="button">Сеть</button>
+                <button class="tab-btn" data-service="firmware" type="button">Прошивка</button>
+            </div>
+
+            <section class="service-section active" id="service_diagnostics">
                 <div class="section">
+                    <div class="row">
+                        <strong>Диагностика</strong>
+                        <button class="btn" id="refresh_diag_btn" type="button">Обновить</button>
+                    </div>
                     <div class="diag-grid" id="diag_summary"></div>
                     <div>
                         <label>Входы Data1..Data8</label>
@@ -542,8 +605,16 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                 </div>
             </section>
-        </aside>
-    </main>
+
+            <section class="service-section" id="service_network">
+                <div class="notice">Настройки сети будут добавлены позже.</div>
+            </section>
+
+            <section class="service-section" id="service_firmware">
+                <div class="notice">Удалённая прошивка будет оформлена отдельным безопасным экраном позже.</div>
+            </section>
+        </section>
+    </div>
 </div>
 
 <script>
@@ -619,6 +690,7 @@ const DEFAULT_FREE_STATIC_COLORS = {
 let COLS = 12;
 let ROWS = 8;
 let activeTab = 'zones';
+let activeServiceSection = 'diagnostics';
 let activeZoneId = '1';
 let activeStatus = 'waiting';
 let activeFreeZone = '5';
@@ -977,13 +1049,12 @@ function redrawMatrix() {
     document.getElementById('matrix_title').textContent =
         activeTab === 'zones' ? 'Матрица' :
         activeTab === 'status' ? 'Матрица' :
-        activeTab === 'free' ? 'Матрица' : 'Диагностика';
+        'Матрица';
 
     document.getElementById('matrix_hint').textContent =
         activeTab === 'zones' ? `${COLS}x${ROWS}, ${zoneViewMode === 'overview' ? 'обзор всей разметки' : 'редактирование выбранной зоны'}` :
         activeTab === 'status' ? `слой "${statusLabel(activeStatus)}", предпросмотр только в UI` :
-        activeTab === 'free' ? `${freeViewMode === 'overview' ? 'обзор свободных зон' : `${zoneDisplayName(activeFreeZone)}: ${modeLabel(freeModes[activeFreeZone])}`}` :
-        'состояние контроллера';
+        `${freeViewMode === 'overview' ? 'обзор свободных зон' : `${zoneDisplayName(activeFreeZone)}: ${modeLabel(freeModes[activeFreeZone])}`}`;
 
     grid.querySelectorAll('.pixel').forEach(p => {
         const key = keyOf(p.dataset.x, p.dataset.y);
@@ -1021,10 +1092,9 @@ function updateEditState() {
             ? 'Обзор: все зоны видны, рисование отключено'
             : `Редактор: зона ${activeZoneId} · ${zoneTool === 'erase' ? 'ластик' : 'кисть'}`) :
         activeTab === 'status' ? `Редактор: глобальный статус "${statusLabel(activeStatus)}"` :
-        activeTab === 'free' ? (freeViewMode === 'overview'
+        (freeViewMode === 'overview'
             ? 'Обзор: свободные зоны видны, рисование отключено'
-            : `Редактор: ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`) :
-        'Диагностика: только просмотр';
+            : `Редактор: ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
     document.getElementById('edit_state_line').textContent = mockMode
         ? `${text}. Контроллер недоступен: работает локальный предпросмотр 12x8.`
         : text;
@@ -1081,11 +1151,35 @@ grid.addEventListener('pointermove', e => {
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+        if (!btn.dataset.tab) return;
         activeTab = btn.dataset.tab;
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+        document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b === btn));
         document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab_${activeTab}`));
         redrawMatrix();
-        if (activeTab === 'diagnostics') loadDiagnostics();
+    });
+});
+
+function setServiceOpen(open) {
+    const backdrop = document.getElementById('service_backdrop');
+    backdrop.classList.toggle('open', open);
+    backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open) loadDiagnostics();
+}
+
+document.getElementById('service_open_btn').addEventListener('click', () => setServiceOpen(true));
+document.getElementById('service_close_btn').addEventListener('click', () => setServiceOpen(false));
+document.getElementById('service_backdrop').addEventListener('click', e => {
+    if (e.target.id === 'service_backdrop') setServiceOpen(false);
+});
+
+document.querySelectorAll('[data-service]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        activeServiceSection = btn.dataset.service;
+        document.querySelectorAll('[data-service]').forEach(b => b.classList.toggle('active', b === btn));
+        document.querySelectorAll('.service-section').forEach(section => {
+            section.classList.toggle('active', section.id === `service_${activeServiceSection}`);
+        });
+        if (activeServiceSection === 'diagnostics') loadDiagnostics();
     });
 });
 
@@ -1323,7 +1417,7 @@ function renderDiagnostics() {
     document.getElementById('diag_summary').innerHTML = [
         diagCard('Активных портов', diagnostics.activePortCount ?? 1),
         diagCard('Рабочий режим', runtimeModeLabel(mode)),
-        diagCard('Состояние редактора', activeTab === 'diagnostics' ? 'только просмотр' : 'предпросмотр в UI'),
+        diagCard('Состояние редактора', 'предпросмотр в UI'),
         diagCard('Основной LED-выход', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`),
         diagCard('Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'ESP32 контроллер'),
     ].join('');
