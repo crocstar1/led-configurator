@@ -133,7 +133,7 @@ Edit/preview mode:
 - Service/gear menu added:
   - Diagnostics moved out of the primary working tabs;
   - Network now has an MVP Wi-Fi settings/status screen;
-  - Firmware is a placeholder.
+  - Firmware has an OTA upload MVP.
 - Basic Auth stage added:
   - `/` and existing configuration endpoints require Basic Auth;
   - `/diagnostics` remains protected;
@@ -157,16 +157,21 @@ Edit/preview mode:
   - endpoints added: `/network_status`, `/scan_networks`, `/save_network`,
     `/network_reconnect`;
   - network endpoints are protected with Basic Auth.
+- OTA MVP added:
+  - service menu Firmware section uploads `firmware.bin` through `/update`;
+  - upload progress and success/error states are shown in the web UI;
+  - `/update` is protected with Basic Auth;
+  - backend rejects missing, empty, or non-`.bin` uploads;
+  - `ESP.restart()` is scheduled only after successful `Update.end(true)`.
 
 ## Currently In Work
 
-Current focus: verify auth config MVP and network config MVP, then continue with OTA UX cleanup.
+Current focus: verify OTA MVP upload flow on hardware.
 
 Known active review topics:
 
-- Verify NVS-backed auth credentials and password change UX.
-- Verify standalone WiFi STA/AP fallback and service menu network UI.
-- Clean up OTA UX after the protected `/update` baseline.
+- Verify firmware upload progress, success/error states, and reboot behavior.
+- Verify that `/update` remains unavailable without Basic Auth.
 
 ## Known UI Issues
 
@@ -190,10 +195,13 @@ Known active review topics:
   - decide whether AP fallback default password is acceptable for production;
   - add safer reset/clear-network flow;
   - consider async/non-blocking startup connection after hardware testing.
-- Replace Firmware placeholder in the service menu with OTA / remote firmware update UX.
+- OTA follow-up:
+  - add firmware version display;
+  - consider signed firmware validation;
+  - consider rollback/recovery behavior;
+  - improve post-reboot reconnect guidance after hardware testing.
 - Brightness schedule by time of day.
 - Full WiFi manager polish beyond current MVP.
-- OTA UX redesign.
 - Multi-matrix outputs on LED1..LED4.
 - Runtime configurable matrix dimensions.
 - Topology selector UX and validation.

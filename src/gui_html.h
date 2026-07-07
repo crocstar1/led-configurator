@@ -286,6 +286,17 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             accent-color: var(--blue);
         }
 
+        input[type="file"] {
+            width: 100%;
+            border: 1px dashed var(--line);
+            border-radius: 9px;
+            background: #ffffff;
+            color: var(--text);
+            padding: 10px;
+            font: inherit;
+            font-size: 13px;
+        }
+
         input[type="range"] {
             width: 100%;
             accent-color: var(--blue);
@@ -341,6 +352,22 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .field-hidden {
             display: none !important;
+        }
+
+        .progress {
+            width: 100%;
+            height: 10px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: var(--soft);
+            border: 1px solid var(--line);
+        }
+
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background: var(--blue);
+            transition: width 0.15s ease;
         }
 
         .btn:disabled, select option:disabled {
@@ -671,7 +698,25 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="service-section" id="service_firmware">
-                <div class="notice">Удалённая прошивка будет оформлена отдельным безопасным экраном позже.</div>
+                <div class="section">
+                    <div class="row">
+                        <strong>Прошивка</strong>
+                    </div>
+                    <form id="firmware_form" class="section">
+                        <div>
+                            <label for="firmware_file">Файл прошивки</label>
+                            <input id="firmware_file" name="update" type="file" accept=".bin,application/octet-stream">
+                        </div>
+                        <div class="hint" id="firmware_file_label">Файл не выбран.</div>
+                        <div class="progress" aria-hidden="true">
+                            <div class="progress-bar" id="firmware_progress"></div>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn primary" id="firmware_upload_btn" type="submit" disabled>Загрузить прошивку</button>
+                        </div>
+                    </form>
+                    <div class="hint" id="firmware_message">Выберите firmware.bin.</div>
+                </div>
             </section>
 
             <section class="service-section" id="service_security">
@@ -1313,6 +1358,7 @@ document.querySelectorAll('[data-service]').forEach(btn => {
         if (activeServiceSection === 'diagnostics') loadDiagnostics();
         if (activeServiceSection === 'network') loadNetworkStatus();
         if (activeServiceSection === 'security') loadAuthStatus();
+        if (activeServiceSection === 'firmware') updateFirmwareFileState();
     });
 });
 
@@ -1327,6 +1373,11 @@ document.getElementById('network_form').addEventListener('submit', e => {
 document.getElementById('auth_form').addEventListener('submit', e => {
     e.preventDefault();
     saveAuthConfig();
+});
+document.getElementById('firmware_file').addEventListener('change', updateFirmwareFileState);
+document.getElementById('firmware_form').addEventListener('submit', e => {
+    e.preventDefault();
+    uploadFirmware();
 });
 
 document.getElementById('zone_select').addEventListener('change', e => {
@@ -1754,6 +1805,126 @@ async function saveAuthConfig() {
     } catch (err) {
         setAuthMessage(`Не удалось сохранить пароль: ${err.message}`, true);
     }
+}
+
+function setFirmwareProgress(percent) {
+    const bar = document.getElementById('firmware_progress');
+    bar.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+}
+
+function setFirmwareMessage(text, isError = false) {
+    const el = document.getElementById('firmware_message');
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+function firmwareErrorLabel(code) {
+    const labels = {
+        AUTH_REQUIRED: 'требуется авторизация',
+        NO_FILE: 'файл не выбран',
+        BAD_FILE_TYPE: 'ожидается файл .bin',
+        EMPTY_FILE: 'пустой файл',
+        EMPTY_CHUNK: 'пустой блок данных',
+        UPDATE_BEGIN_FAILED: 'не удалось начать обновление',
+        UPDATE_WRITE_FAILED: 'ошибка записи прошивки',
+        UPDATE_END_FAILED: 'не удалось завершить обновление',
+        UPLOAD_ABORTED: 'загрузка прервана',
+        UPDATE_FAILED: 'обновление не выполнено',
+    };
+    return labels[code] || code || 'неизвестная ошибка';
+}
+
+function updateFirmwareFileState() {
+    const input = document.getElementById('firmware_file');
+    const button = document.getElementById('firmware_upload_btn');
+    const label = document.getElementById('firmware_file_label');
+    const file = input.files && input.files[0];
+
+    setFirmwareProgress(0);
+    button.disabled = !file;
+
+    if (!file) {
+        label.textContent = 'Файл не выбран.';
+        setFirmwareMessage('Выберите firmware.bin.');
+        return;
+    }
+
+    const sizeKb = Math.max(1, Math.ceil(file.size / 1024));
+    label.textContent = `${file.name} · ${sizeKb} КБ`;
+
+    if (!file.name.toLowerCase().endsWith('.bin')) {
+        button.disabled = true;
+        setFirmwareMessage('Ожидается файл прошивки .bin.', true);
+        return;
+    }
+
+    if (file.size <= 0) {
+        button.disabled = true;
+        setFirmwareMessage('Файл пустой.', true);
+        return;
+    }
+
+    setFirmwareMessage('Файл выбран. Можно загрузить.');
+}
+
+function uploadFirmware() {
+    if (!backendAvailable) {
+        setFirmwareMessage('Backend недоступен, прошивка возможна только через контроллер.', true);
+        return;
+    }
+
+    const input = document.getElementById('firmware_file');
+    const button = document.getElementById('firmware_upload_btn');
+    const file = input.files && input.files[0];
+
+    if (!file) {
+        setFirmwareMessage('Выберите firmware.bin.', true);
+        return;
+    }
+    if (!file.name.toLowerCase().endsWith('.bin')) {
+        setFirmwareMessage('Ожидается файл прошивки .bin.', true);
+        return;
+    }
+    if (file.size <= 0) {
+        setFirmwareMessage('Файл пустой.', true);
+        return;
+    }
+
+    const form = new FormData();
+    form.append('update', file, file.name);
+
+    const xhr = new XMLHttpRequest();
+    button.disabled = true;
+    setFirmwareProgress(0);
+    setFirmwareMessage('Загрузка прошивки...');
+
+    xhr.open('POST', '/update');
+    xhr.upload.onprogress = event => {
+        if (event.lengthComputable) {
+            setFirmwareProgress((event.loaded / event.total) * 100);
+        }
+    };
+    xhr.onload = () => {
+        button.disabled = false;
+        const response = (xhr.responseText || '').trim();
+        if (xhr.status >= 200 && xhr.status < 300 && response === 'OK') {
+            setFirmwareProgress(100);
+            button.disabled = true;
+            setFirmwareMessage('Прошивка загружена. Устройство перезагружается.');
+            window.setTimeout(() => setFirmwareMessage('Перезагрузка устройства...'), 700);
+            return;
+        }
+        setFirmwareMessage(`Ошибка прошивки: ${firmwareErrorLabel(response || String(xhr.status))}.`, true);
+    };
+    xhr.onerror = () => {
+        button.disabled = false;
+        setFirmwareMessage('Ошибка соединения при загрузке прошивки.', true);
+    };
+    xhr.onabort = () => {
+        button.disabled = false;
+        setFirmwareMessage('Загрузка прошивки прервана.', true);
+    };
+    xhr.send(form);
 }
 
 function renderDiagnostics() {

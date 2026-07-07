@@ -23,6 +23,10 @@ static const uint8_t WS_AUTH_CLIENT_LIMIT = 8;
 bool wsClientAuthorized[WS_AUTH_CLIENT_LIMIT] = {false};
 String wsAuthToken;
 bool otaUploadAuthorized = false;
+bool otaUpdateSuccess = false;
+bool otaRestartPending = false;
+String otaUpdateError = "";
+unsigned long otaRestartAt = 0;
 
 bool authRequestAuthenticated() {
     return server.authenticate(auth_config_username(), auth_config_password());
@@ -993,33 +997,66 @@ void setup() {
     server.on("/update", HTTP_POST, []() {
         if (!requireHttpAuth()) return;
         server.sendHeader("Connection", "close");
-        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-        ESP.restart(); // Перезапуск контроллера после успешной записи бинарника
+        if (otaUpdateSuccess && !Update.hasError()) {
+            otaRestartPending = true;
+            otaRestartAt = millis() + 1000;
+            server.send(200, "text/plain", "OK");
+        } else {
+            server.send(500, "text/plain", otaUpdateError.length() ? otaUpdateError : "UPDATE_FAILED");
+        }
     }, []() {
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
             otaUploadAuthorized = authRequestAuthenticated();
-            if (!otaUploadAuthorized) return;
-            Serial.printf("Начало OTA прошивки: %s\n", upload.filename.c_str());
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { 
+            otaUpdateSuccess = false;
+            otaUpdateError = "";
+            if (!otaUploadAuthorized) {
+                otaUpdateError = "AUTH_REQUIRED";
+                return;
+            }
+            if (upload.filename.length() == 0) {
+                otaUpdateError = "NO_FILE";
+                return;
+            }
+            String uploadName = upload.filename;
+            uploadName.toLowerCase();
+            if (!uploadName.endsWith(".bin")) {
+                otaUpdateError = "BAD_FILE_TYPE";
+                return;
+            }
+            Serial.printf("OTA start: %s\n", upload.filename.c_str());
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                otaUpdateError = "UPDATE_BEGIN_FAILED";
                 Update.printError(Serial);
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
-            if (!otaUploadAuthorized) return;
+            if (!otaUploadAuthorized || otaUpdateError.length()) return;
+            if (upload.currentSize == 0) {
+                return;
+            }
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                otaUpdateError = "UPDATE_WRITE_FAILED";
                 Update.printError(Serial);
             }
         } else if (upload.status == UPLOAD_FILE_END) {
             if (!otaUploadAuthorized) return;
-            if (Update.end(true)) { 
-                Serial.printf("OTA обновление завершено. Успешно записано: %u байт\n", upload.totalSize);
+            if (otaUpdateError.length() == 0 && upload.totalSize == 0) {
+                otaUpdateError = "EMPTY_FILE";
+            }
+            if (otaUpdateError.length() == 0 && Update.end(true)) {
+                otaUpdateSuccess = true;
+                Serial.printf("OTA complete: %u bytes\n", upload.totalSize);
             } else {
+                if (otaUpdateError.length() == 0) otaUpdateError = "UPDATE_END_FAILED";
                 Update.printError(Serial);
             }
             otaUploadAuthorized = false;
+        } else if (upload.status == UPLOAD_FILE_ABORTED) {
+            otaUpdateError = "UPLOAD_ABORTED";
+            otaUploadAuthorized = false;
+            Update.abort();
         }
     });
-
     server.begin();
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
@@ -1030,4 +1067,8 @@ void loop() {
     network_loop();
     webSocket.loop(); 
     updatePortStatusFromInputs();
+    if (otaRestartPending && millis() >= otaRestartAt) {
+        otaRestartPending = false;
+        ESP.restart();
+    }
 }
