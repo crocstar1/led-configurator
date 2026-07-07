@@ -238,7 +238,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .service-tabs {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 8px;
             margin-bottom: 12px;
         }
@@ -585,6 +585,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             <div class="service-tabs" aria-label="Сервисные разделы">
                 <button class="tab-btn active" data-service="diagnostics" type="button">Диагностика</button>
                 <button class="tab-btn" data-service="network" type="button">Сеть</button>
+                <button class="tab-btn" data-service="security" type="button">Безопасность</button>
                 <button class="tab-btn" data-service="firmware" type="button">Прошивка</button>
             </div>
 
@@ -671,6 +672,32 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
             <section class="service-section" id="service_firmware">
                 <div class="notice">Удалённая прошивка будет оформлена отдельным безопасным экраном позже.</div>
+            </section>
+
+            <section class="service-section" id="service_security">
+                <div class="section">
+                    <div class="row">
+                        <strong>Безопасность</strong>
+                    </div>
+                    <form id="auth_form" class="section">
+                        <div>
+                            <label for="auth_username">Логин</label>
+                            <input id="auth_username" name="username" type="text" autocomplete="username" value="admin">
+                        </div>
+                        <div>
+                            <label for="auth_password">Новый пароль</label>
+                            <input id="auth_password" name="password" type="password" autocomplete="new-password">
+                        </div>
+                        <div>
+                            <label for="auth_confirm">Повтор пароля</label>
+                            <input id="auth_confirm" name="confirm" type="password" autocomplete="new-password">
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn primary" type="submit">Сохранить пароль</button>
+                        </div>
+                    </form>
+                    <div class="hint" id="auth_message"></div>
+                </div>
             </section>
         </section>
     </div>
@@ -1267,6 +1294,7 @@ function setServiceOpen(open) {
     backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
     if (open) loadDiagnostics();
     if (open && activeServiceSection === 'network') loadNetworkStatus();
+    if (open && activeServiceSection === 'security') loadAuthStatus();
 }
 
 document.getElementById('service_open_btn').addEventListener('click', () => setServiceOpen(true));
@@ -1284,6 +1312,7 @@ document.querySelectorAll('[data-service]').forEach(btn => {
         });
         if (activeServiceSection === 'diagnostics') loadDiagnostics();
         if (activeServiceSection === 'network') loadNetworkStatus();
+        if (activeServiceSection === 'security') loadAuthStatus();
     });
 });
 
@@ -1294,6 +1323,10 @@ document.getElementById('network_dhcp').addEventListener('change', updateNetwork
 document.getElementById('network_form').addEventListener('submit', e => {
     e.preventDefault();
     saveNetworkConfig();
+});
+document.getElementById('auth_form').addEventListener('submit', e => {
+    e.preventDefault();
+    saveAuthConfig();
 });
 
 document.getElementById('zone_select').addEventListener('change', e => {
@@ -1646,6 +1679,80 @@ async function applyNetworkConfig() {
         setTimeout(loadNetworkStatus, 4000);
     } catch (err) {
         setNetworkMessage(`Не удалось применить настройки: ${err.message}`, true);
+    }
+}
+
+function setAuthMessage(text, isError = false) {
+    const el = document.getElementById('auth_message');
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+async function loadAuthStatus() {
+    document.getElementById('auth_password').value = '';
+    document.getElementById('auth_confirm').value = '';
+
+    if (!backendAvailable) {
+        document.getElementById('auth_username').value = 'admin';
+        setAuthMessage('Backend недоступен, пароль не будет сохранён.');
+        return;
+    }
+
+    try {
+        const res = await fetch('/auth_status');
+        if (!res.ok) throw new Error(`auth_status ${res.status}`);
+        const data = await res.json();
+        document.getElementById('auth_username').value = data.username || 'admin';
+        setAuthMessage('');
+    } catch (err) {
+        setAuthMessage('Не удалось загрузить настройки безопасности.', true);
+    }
+}
+
+async function saveAuthConfig() {
+    if (!backendAvailable) {
+        setAuthMessage('Backend недоступен, пароль не сохранён.', true);
+        return;
+    }
+
+    const username = document.getElementById('auth_username').value.trim();
+    const password = document.getElementById('auth_password').value;
+    const confirm = document.getElementById('auth_confirm').value;
+
+    if (!username) {
+        setAuthMessage('Введите логин.', true);
+        return;
+    }
+    if (!password) {
+        setAuthMessage('Введите новый пароль.', true);
+        return;
+    }
+    if (password.length < 6) {
+        setAuthMessage('Пароль должен быть не короче 6 символов.', true);
+        return;
+    }
+    if (password !== confirm) {
+        setAuthMessage('Пароли не совпадают.', true);
+        return;
+    }
+
+    const body = new URLSearchParams();
+    body.set('username', username);
+    body.set('password', password);
+    body.set('confirm', confirm);
+
+    try {
+        const res = await fetch('/save_auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+        });
+        if (!res.ok) throw new Error(await res.text());
+        document.getElementById('auth_password').value = '';
+        document.getElementById('auth_confirm').value = '';
+        setAuthMessage('Пароль сохранён. Обновите страницу и войдите заново.');
+    } catch (err) {
+        setAuthMessage(`Не удалось сохранить пароль: ${err.message}`, true);
     }
 }
 

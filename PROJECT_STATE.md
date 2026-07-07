@@ -135,11 +135,18 @@ Edit/preview mode:
   - Network now has an MVP Wi-Fi settings/status screen;
   - Firmware is a placeholder.
 - Basic Auth stage added:
-  - `/` and existing configuration endpoints require `admin/admin`;
+  - `/` and existing configuration endpoints require Basic Auth;
   - `/diagnostics` remains protected;
   - `/update` OTA upload is now protected before firmware bytes are accepted;
   - WebSocket write commands now require a runtime token exposed only through
     authenticated `/get_config`.
+- Auth config MVP added:
+  - credentials are loaded from NVS namespace `auth_cfg`;
+  - first boot or invalid auth config writes default `admin/admin`;
+  - credentials are currently stored as plaintext in NVS for the MVP;
+  - service menu has a Security section for changing username/password;
+  - endpoints added: `/auth_status`, `/save_auth`.
+  - local build passed after this stage.
 - Network config MVP added:
   - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
   - network settings are stored separately in NVS namespace `net_cfg`;
@@ -153,11 +160,11 @@ Edit/preview mode:
 
 ## Currently In Work
 
-Current focus: verify network config MVP, then continue with OTA UX cleanup.
+Current focus: verify auth config MVP and network config MVP, then continue with OTA UX cleanup.
 
 Known active review topics:
 
-- Design NVS-backed auth credentials instead of hardcoded `admin/admin`.
+- Verify NVS-backed auth credentials and password change UX.
 - Verify standalone WiFi STA/AP fallback and service menu network UI.
 - Clean up OTA UX after the protected `/update` baseline.
 
@@ -192,10 +199,10 @@ Known active review topics:
 - Topology selector UX and validation.
 - Optional per-port status color override.
 - Auth follow-up:
-  - move credentials from hardcoded `admin/admin` to an `auth_cfg` NVS
-    namespace;
-  - add password change UX in the service menu;
+  - replace plaintext NVS password storage with stronger hashing or another
+    safer credential format;
   - define a safe settings reset flow;
+  - add factory reset / auth reset procedure;
   - review whether AP fallback may keep a default password in production.
 
 ## Build

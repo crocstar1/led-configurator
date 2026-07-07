@@ -13,21 +13,23 @@
 #include "status_mapper.h"
 #include "zone_model.h"
 #include "network_config.h"
+#include "auth_config.h"
 
 WebServer server(80);
 WebSocketsServer webSocket(81); 
 
 // Учетные данные защиты инженерного пульта (Basic Auth)
-const char* www_username = "admin";
-const char* www_password = "admin";
-
 static const uint8_t WS_AUTH_CLIENT_LIMIT = 8;
 bool wsClientAuthorized[WS_AUTH_CLIENT_LIMIT] = {false};
 String wsAuthToken;
 bool otaUploadAuthorized = false;
 
+bool authRequestAuthenticated() {
+    return server.authenticate(auth_config_username(), auth_config_password());
+}
+
 bool requireHttpAuth() {
-    if (server.authenticate(www_username, www_password)) return true;
+    if (authRequestAuthenticated()) return true;
     server.requestAuthentication();
     return false;
 }
@@ -378,18 +380,18 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 }
 
 void handleRoot() { 
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication(); //только для тестов (в прошлой версии посмотреть)
+    if (!requireHttpAuth()) return; //только для тестов (в прошлой версии посмотреть)
     server.send_P(200, "text/html", PAGE_MAIN); 
 }
 
 void handleGetMatrixSize() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
     String sizeStr = String(MATRIX_X) + ":" + String(VIRTUAL_Y);
     server.send(200, "text/plain", sizeStr);
 }
 
 void handleSetMode() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
     if (server.hasArg("val")) {
         led_feed_heartbeat();
         led_set_mode_safe(server.arg("val"));
@@ -399,7 +401,7 @@ void handleSetMode() {
 
 // HTTP Ручка комплексного сохранения конфигурации кастомизации
 void handleSaveConfig() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
     
     // 1. Считываем и парсим ШИМ-яркость зон
     if (server.hasArg("b_ports")) cfg.bright_ports = server.arg("b_ports").toInt();
@@ -430,7 +432,7 @@ void handleSaveConfig() {
 
 // HTTP Ручки для выгрузки текущего конфига в форму настроек на сайте
 void handleGetConfig() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     String json;
     json.reserve(7600);
@@ -480,7 +482,7 @@ void handleGetConfig() {
 }
 
 void handleSaveZones() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -540,7 +542,7 @@ void handleSaveZones() {
 }
 
 void handleSetBright() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     if (!server.hasArg("type") || !server.hasArg("val")) {
         server.send(400, "text/plain", "MISSING_ARG");
@@ -567,7 +569,7 @@ void handleSetBright() {
 }
 
 void handleSetLogoAnim() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     if (!server.hasArg("val")) {
         server.send(400, "text/plain", "MISSING_ARG");
@@ -583,7 +585,7 @@ void handleSetLogoAnim() {
 }
 
 void handleSaveStatusColors() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -617,7 +619,7 @@ void handleSaveStatusColors() {
 }
 
 void handleSaveFreeZone() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -816,8 +818,47 @@ void handleNetworkReconnect() {
     server.send(200, "text/plain", "RECONNECT_SCHEDULED");
 }
 
+void handleAuthStatus() {
+    if (!requireHttpAuth()) return;
+
+    String json = "{\"username\":\"";
+    json += jsonEscape(auth_config_username_string());
+    json += "\"}";
+    server.send(200, "application/json", json);
+}
+
+void handleSaveAuth() {
+    if (!requireHttpAuth()) return;
+
+    String username = server.arg("username");
+    String password = server.arg("password");
+    String confirm = server.hasArg("confirm") ? server.arg("confirm") : server.arg("password_confirm");
+
+    username.trim();
+    if (username.length() == 0) {
+        server.send(400, "text/plain", "USERNAME_REQUIRED");
+        return;
+    }
+    if (password.length() == 0) {
+        server.send(400, "text/plain", "PASSWORD_REQUIRED");
+        return;
+    }
+    if (password != confirm) {
+        server.send(400, "text/plain", "PASSWORD_CONFIRM_MISMATCH");
+        return;
+    }
+
+    String error;
+    if (!auth_config_save_credentials(username, password, error)) {
+        server.send(400, "text/plain", error);
+        return;
+    }
+
+    server.send(200, "text/plain", "OK");
+}
+
 void handleDiagnostics() {
-    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+    if (!requireHttpAuth()) return;
 
     usp1_inputs_update();
     status_mapper_update(usp1_inputs_get_state());
@@ -918,6 +959,7 @@ void updatePortStatusFromInputs() {
 
 void setup() {
     Serial.begin(115200);
+    auth_config_setup();
     usp1_inputs_setup();
     status_mapper_setup();
     led_setup();
@@ -943,6 +985,8 @@ void setup() {
     server.on("/scan_networks", HTTP_GET, handleScanNetworks);
     server.on("/save_network", HTTP_POST, handleSaveNetworkConfig);
     server.on("/network_reconnect", HTTP_POST, handleNetworkReconnect);
+    server.on("/auth_status", HTTP_GET, handleAuthStatus);
+    server.on("/save_auth", HTTP_POST, handleSaveAuth);
     server.on("/diagnostics", handleDiagnostics);
 
     // ПРОМЫШЛЕННЫЙ ПРИЕМНИК OTA-ОБНОВЛЕНИЯ ПРОШИВКИ (Update.h)
@@ -954,7 +998,7 @@ void setup() {
     }, []() {
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
-            otaUploadAuthorized = server.authenticate(www_username, www_password);
+            otaUploadAuthorized = authRequestAuthenticated();
             if (!otaUploadAuthorized) return;
             Serial.printf("Начало OTA прошивки: %s\n", upload.filename.c_str());
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { 
