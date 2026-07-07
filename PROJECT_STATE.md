@@ -112,14 +112,14 @@ Edit/preview mode:
 - Backend endpoints synchronized with the UI:
   - `/save_zones`
   - `/set_bright`
-  - `/set_logo_anim`
   - `/save_status_colors`
   - `/save_free_zone`
 - `/get_config` extended with `layers`, `hardware_map`, `zones`, `matrix`, and
   `free_zones`.
 - Status layers are applied in renderer.
 - Fixed zone model added.
-- Runtime/preview split improved so UI preview does not call `/set_mode`.
+- Runtime/preview split improved so UI preview is client-side and does not call
+  hardware mode switching endpoints.
 - UI pass added with tabs:
   - Matrix Zones / Zones editor.
   - Port Status editor.
@@ -138,8 +138,7 @@ Edit/preview mode:
   - `/` and existing configuration endpoints require Basic Auth;
   - `/diagnostics` remains protected;
   - `/update` OTA upload is now protected before firmware bytes are accepted;
-  - WebSocket write commands now require a runtime token exposed only through
-    authenticated `/get_config`.
+  - legacy WebSocket write commands were removed during cleanup.
 - Auth config MVP added:
   - credentials are loaded from NVS namespace `auth_cfg`;
   - first boot or invalid auth config writes default `admin/admin`;
@@ -163,15 +162,20 @@ Edit/preview mode:
   - `/update` is protected with Basic Auth;
   - backend rejects missing, empty, or non-`.bin` uploads;
   - `ESP.restart()` is scheduled only after successful `Update.end(true)`.
+- Runtime cleanup stage added:
+  - WebSocket server and zone write commands were removed;
+  - legacy `/set_mode`, `/save_config`, and `/set_logo_anim` endpoints were removed;
+  - `ledMode`/hardware custom preview timeout was removed;
+  - diagnostics now reports neutral `runtimeMode: "runtime"` and port statuses separately.
 
 ## Currently In Work
 
-Current focus: verify OTA MVP upload flow on hardware.
+Current focus: verify runtime cleanup build and UI behavior on hardware.
 
 Known active review topics:
 
-- Verify firmware upload progress, success/error states, and reboot behavior.
-- Verify that `/update` remains unavailable without Basic Auth.
+- Verify that UI no longer depends on removed legacy endpoints.
+- Verify runtime error indication still follows Data inputs through `status_mapper`.
 
 ## Known UI Issues
 

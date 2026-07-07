@@ -1,8 +1,6 @@
 #include <WiFi.h>
 #include <WebServer.h>
-#include <WebSocketsServer.h> 
-#include <esp_system.h>
-#include <Update.h> // Встроенная библиотека ESP32 для безопасной OTA-прошивки
+#include <Update.h>
 #include <ctype.h>
 #include <string.h>
 #include "gui_html.h"
@@ -16,12 +14,7 @@
 #include "auth_config.h"
 
 WebServer server(80);
-WebSocketsServer webSocket(81); 
 
-// Учетные данные защиты инженерного пульта (Basic Auth)
-static const uint8_t WS_AUTH_CLIENT_LIMIT = 8;
-bool wsClientAuthorized[WS_AUTH_CLIENT_LIMIT] = {false};
-String wsAuthToken;
 bool otaUploadAuthorized = false;
 bool otaUpdateSuccess = false;
 bool otaRestartPending = false;
@@ -38,7 +31,7 @@ bool requireHttpAuth() {
     return false;
 }
 
-// Вспомогательная функция перевода HEX-строки (например, "0055ff") в 3 байта RGB
+// Convert a HEX color string to RGB bytes.
 void parseHexColor(String hex, uint8_t* targetArray) {
     if (hex.startsWith("#")) hex = hex.substring(1);
     if (hex.length() == 6) {
@@ -46,22 +39,6 @@ void parseHexColor(String hex, uint8_t* targetArray) {
         targetArray[1] = strtol(hex.substring(2, 4).c_str(), NULL, 16); // G
         targetArray[2] = strtol(hex.substring(4, 6).c_str(), NULL, 16); // B
     }
-}
-
-// Вспомогательная функция перевода IP-строки (например, "192.168.1.150") в 4 байта
-void parseIPBytes(String ipStr, uint8_t* targetArray) {
-    int parts[4] = {0, 0, 0, 0};
-    int counter = 0;
-    int prevIdx = 0;
-    for (int i = 0; i < ipStr.length(); i++) {
-        if (ipStr[i] == '.' || i == ipStr.length() - 1) {
-            int endIdx = (i == ipStr.length() - 1) ? i + 1 : i;
-            parts[counter++] = ipStr.substring(prevIdx, endIdx).toInt();
-            prevIdx = i + 1;
-            if (counter >= 4) break;
-        }
-    }
-    for(int i = 0; i < 4; i++) targetArray[i] = parts[i];
 }
 
 String rgbToHex(const uint8_t *rgb) {
@@ -318,73 +295,8 @@ void appendZoneMetadataJson(String &json) {
     json += "]";
 }
 
-void generateWsAuthToken() {
-    char token[17];
-    snprintf(token, sizeof(token), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
-    wsAuthToken = token;
-}
-
-bool webSocketClientAuthorized(uint8_t num) {
-    return num < WS_AUTH_CLIENT_LIMIT && wsClientAuthorized[num];
-}
-
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-    if (type == WStype_CONNECTED) {
-        if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = false;
-        webSocket.sendTXT(num, "AUTH_REQUIRED");
-        return;
-    }
-    else if (type == WStype_DISCONNECTED) {
-        if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = false;
-    }
-    else if (type == WStype_TEXT) {
-        String msg;
-        msg.reserve(length);
-        for (size_t i = 0; i < length; i++) msg += (char)payload[i];
-
-        if (msg.startsWith("AUTH:")) {
-            const bool ok = (msg.substring(5) == wsAuthToken);
-            if (num < WS_AUTH_CLIENT_LIMIT) wsClientAuthorized[num] = ok;
-            webSocket.sendTXT(num, ok ? "AUTH_OK" : "AUTH_FAILED");
-            if (ok) {
-                String mapPacket = "MAP:";
-                for (int i = 0; i < NUM_IC_CHIPS; i++) {
-                    mapPacket += String(zoneMap[i]);
-                    if (i < NUM_IC_CHIPS - 1) mapPacket += ",";
-                }
-                webSocket.sendTXT(num, mapPacket);
-            }
-            return;
-        }
-
-        if (!webSocketClientAuthorized(num)) {
-            webSocket.sendTXT(num, "AUTH_REQUIRED");
-            return;
-        }
-        led_feed_heartbeat();
-
-        if (msg == "CLEAR") {
-            led_clear_all_safe();
-        } 
-        else if (msg.startsWith("P:")) {
-            // Быстрый асинхронный WebSocket парсинг координат "P:X:Y:ZONE_ID"
-            int firstColon = msg.indexOf(':', 2);
-            int secondColon = msg.indexOf(':', firstColon + 1);
-            if (firstColon != -1 && secondColon != -1) {
-                int x = msg.substring(2, firstColon).toInt();
-                int y = msg.substring(firstColon + 1, secondColon).toInt();
-                int zoneId = msg.substring(secondColon + 1).toInt();
-                
-                if (zoneId >= 0 && zone_id_is_valid((uint8_t)zoneId)) {
-                    led_set_pixel_zone_safe(x, y, (uint8_t)zoneId);
-                }
-            }
-        }
-    }
-}
-
 void handleRoot() { 
-    if (!requireHttpAuth()) return; //только для тестов (в прошлой версии посмотреть)
+    if (!requireHttpAuth()) return;
     server.send_P(200, "text/html", PAGE_MAIN); 
 }
 
@@ -394,47 +306,6 @@ void handleGetMatrixSize() {
     server.send(200, "text/plain", sizeStr);
 }
 
-void handleSetMode() {
-    if (!requireHttpAuth()) return;
-    if (server.hasArg("val")) {
-        led_feed_heartbeat();
-        led_set_mode_safe(server.arg("val"));
-    }
-    server.send(200, "text/plain", "OK");
-}
-
-// HTTP Ручка комплексного сохранения конфигурации кастомизации
-void handleSaveConfig() {
-    if (!requireHttpAuth()) return;
-    
-    // 1. Считываем и парсим ШИМ-яркость зон
-    if (server.hasArg("b_ports")) cfg.bright_ports = server.arg("b_ports").toInt();
-    if (server.hasArg("b_logo"))  cfg.bright_logo  = server.arg("b_logo").toInt();
-    
-    // 2. Считываем топологию змейки и режим логотипа
-    if (server.hasArg("topo"))    cfg.topology    = server.arg("topo").toInt();
-    if (server.hasArg("l_anim"))  cfg.logo_anim   = server.arg("l_anim").toInt();
-    
-    // 3. Считываем и конвертируем HEX RGB-пипетки в байты
-    if (server.hasArg("c_wait"))   parseHexColor(server.arg("c_wait"),   cfg.color_wait);
-    if (server.hasArg("c_charge")) parseHexColor(server.arg("c_charge"), cfg.color_charge);
-    if (server.hasArg("c_error"))  parseHexColor(server.arg("c_error"),  cfg.color_error);
-    if (server.hasArg("c_logo"))   parseHexColor(server.arg("c_logo"),   cfg.color_logo);
-    
-    // 4. Считываем сетевые настройки (Интерфейсная заглушка под net_manager.cpp)
-    if (server.hasArg("dhcp"))     cfg.is_dhcp = server.arg("dhcp").toInt();
-    if (server.hasArg("ip"))       parseIPBytes(server.arg("ip"),   cfg.static_ip);
-    if (server.hasArg("mask"))     parseIPBytes(server.arg("mask"), cfg.static_mask);
-    if (server.hasArg("gw"))       parseIPBytes(server.arg("gw"),   cfg.static_gw);
-    
-    // Фиксируем всё в Preferences NVS Flash
-    syncLogoFreeZoneFromLegacyConfig();
-    led_save_config_to_flash();
-    
-    server.send(200, "text/plain", "OK");
-}
-
-// HTTP Ручки для выгрузки текущего конфига в форму настроек на сайте
 void handleGetConfig() {
     if (!requireHttpAuth()) return;
 
@@ -473,9 +344,6 @@ void handleGetConfig() {
     json += ",\"topology\":";
     json += String((int)cfg.topology);
     json += "}";
-    json += ",\"ws_token\":\"";
-    json += wsAuthToken;
-    json += "\"";
     appendStatusLayersJson(json);
     appendHardwareMapJson(json);
     appendZoneMetadataJson(json);
@@ -568,23 +436,7 @@ void handleSetBright() {
 
     matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
     matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
-    led_set_mode_safe(ledMode);
-    server.send(200, "text/plain", "OK");
-}
-
-void handleSetLogoAnim() {
-    if (!requireHttpAuth()) return;
-
-    if (!server.hasArg("val")) {
-        server.send(400, "text/plain", "MISSING_ARG");
-        return;
-    }
-
-    cfg.logo_anim = (server.arg("val").toInt() == 0) ? 0 : 1;
-    syncLogoFreeZoneFromLegacyConfig();
-    matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
-    matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
-    led_set_mode_safe(ledMode);
+    led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
 
@@ -675,7 +527,7 @@ void handleSaveFreeZone() {
     }
 
     led_reload_free_zone_layers_safe();
-    led_set_mode_safe(ledMode);
+    led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
 
@@ -874,9 +726,7 @@ void handleDiagnostics() {
     json.reserve(1400);
     json += "{\"activePortCount\":";
     json += String((int)status.activePortCount);
-    json += ",\"runtimeMode\":\"";
-    json += ledMode;
-    json += "\"";
+    json += ",\"runtimeMode\":\"runtime\"";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
     json += String((int)USP1_PRIMARY_LED_PIN);
     json += ",\"index\":";
@@ -933,7 +783,6 @@ void handleDiagnostics() {
 
 void updatePortStatusFromInputs() {
     static unsigned long lastUpdateMs = 0;
-    static PortStatus lastPrimaryStatus = PORT_STATUS_DISABLED;
 
     const unsigned long now = millis();
     if (now - lastUpdateMs < 100) {
@@ -943,22 +792,6 @@ void updatePortStatusFromInputs() {
 
     usp1_inputs_update();
     status_mapper_update(usp1_inputs_get_state());
-
-    const StatusMapperState &status = status_mapper_get_state();
-    const PortStatus primaryStatus = status.statuses[0];
-
-    if (primaryStatus == PORT_STATUS_DISABLED) {
-        lastPrimaryStatus = primaryStatus;
-        return;
-    }
-
-    const char *targetMode = status_mapper_status_to_string(primaryStatus);
-    if (primaryStatus != lastPrimaryStatus || ledMode != targetMode) {
-        lastPrimaryStatus = primaryStatus;
-        if (ledMode != targetMode) {
-            led_set_mode_safe(String(targetMode));
-        }
-    }
 }
 
 void setup() {
@@ -967,22 +800,17 @@ void setup() {
     usp1_inputs_setup();
     status_mapper_setup();
     led_setup();
-    generateWsAuthToken();
     network_setup();
 
-    // Wi-Fi starts in STA mode when configured, otherwise AP fallback.
-    Serial.println("\n=== СЕТЕВОЙ МОДУЛЬ УСП-1 ЗАПУЩЕН ===");
-    Serial.print("Адрес конфигуратора: http://");
+    Serial.println("\n=== LED matrix controller network started ===");
+    Serial.print("Configurator address: http://");
     Serial.println(network_sta_connected() ? network_local_ip_string() : network_ap_ip_string());
 
     server.on("/", handleRoot);
     server.on("/get_size", handleGetMatrixSize);
-    server.on("/set_mode", handleSetMode);
-    server.on("/save_config", handleSaveConfig);
     server.on("/get_config", handleGetConfig);
     server.on("/save_zones", HTTP_POST, handleSaveZones);
     server.on("/set_bright", handleSetBright);
-    server.on("/set_logo_anim", handleSetLogoAnim);
     server.on("/save_status_colors", HTTP_POST, handleSaveStatusColors);
     server.on("/save_free_zone", HTTP_POST, handleSaveFreeZone);
     server.on("/network_status", HTTP_GET, handleNetworkStatus);
@@ -993,7 +821,6 @@ void setup() {
     server.on("/save_auth", HTTP_POST, handleSaveAuth);
     server.on("/diagnostics", handleDiagnostics);
 
-    // ПРОМЫШЛЕННЫЙ ПРИЕМНИК OTA-ОБНОВЛЕНИЯ ПРОШИВКИ (Update.h)
     server.on("/update", HTTP_POST, []() {
         if (!requireHttpAuth()) return;
         server.sendHeader("Connection", "close");
@@ -1058,14 +885,11 @@ void setup() {
         }
     });
     server.begin();
-    webSocket.begin();
-    webSocket.onEvent(webSocketEvent);
 }
 
 void loop() {
     server.handleClient();
     network_loop();
-    webSocket.loop(); 
     updatePortStatusFromInputs();
     if (otaRestartPending && millis() >= otaRestartAt) {
         otaRestartPending = false;

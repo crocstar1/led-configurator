@@ -10,11 +10,9 @@ uint8_t zoneMap[NUM_IC_CHIPS];
 MatrixConfig cfg;
 FreeZoneConfig freeZoneConfigs[FREE_ZONE_COUNT];
 
-String ledMode = "waiting"; 
 float breatheScale = 0.2; 
 bool breatheDirectionUp = true;
 unsigned long lastBreatheTime = 0;
-unsigned long lastWebSocketActivity = 0; 
 
 SemaphoreHandle_t ledMutex = NULL;
 
@@ -34,7 +32,7 @@ struct FreeZoneLayerCache {
 
 FreeZoneLayerCache freeZoneLayers[FREE_ZONE_COUNT];
 
-// УНИВЕРСАЛЬНАЯ МАТЕМАТИКА ЗМЕЙКИ ПОД ЛЮБУЮ ТОПОЛОГИЮ НА ПРОИЗВОДСТВЕ
+// Map logical matrix coordinates to the physical LED chain.
 int getLEDIndex(int x, int virtualY) {
     if (x < 0 || x >= MATRIX_X || virtualY < 0 || virtualY >= VIRTUAL_Y) return -1;
     
@@ -42,21 +40,21 @@ int getLEDIndex(int x, int virtualY) {
     int ty = virtualY;
 
     switch (cfg.topology) {
-        case 0: // Справа-Снизу (Вертикальная змейка, оригинальный стандарт МЗС-2)
+        case 0: // Right-bottom start, vertical snake.
             tx = (MATRIX_X - 1) - x;
             if (tx % 2 == 0) return (tx * VIRTUAL_Y) + ty;
             else return (tx * VIRTUAL_Y) + ((VIRTUAL_Y - 1) - ty);
             
-        case 1: // Слева-Снизу (Вертикальная змейка)
+        case 1: // Left-bottom start, vertical snake.
             if (tx % 2 == 0) return (tx * VIRTUAL_Y) + ty;
             else return (tx * VIRTUAL_Y) + ((VIRTUAL_Y - 1) - ty);
             
-        case 2: // Слева-Сверху (Горизонтальная змейка)
+        case 2: // Left-top start, horizontal snake.
             ty = (VIRTUAL_Y - 1) - virtualY;
             if (ty % 2 == 0) return (ty * MATRIX_X) + tx;
             else return (ty * MATRIX_X) + ((MATRIX_X - 1) - tx);
             
-        case 3: // Справа-Сверху (Горизонтальная змейка)
+        case 3: // Right-top start, horizontal snake.
             tx = (MATRIX_X - 1) - x;
             ty = (VIRTUAL_Y - 1) - virtualY;
             if (ty % 2 == 0) return (ty * MATRIX_X) + tx;
@@ -351,35 +349,17 @@ void ledTaskWorker(void * parameter) {
     while (true) {
         unsigned long now = millis();
         if (xSemaphoreTake(ledMutex, (TickType_t)10) == pdTRUE) {
-            
-            if (ledMode == "custom") {
-                if (now - lastWebSocketActivity > CUSTOM_MODE_TIMEOUT) {
-                    ledMode = "waiting"; 
-                    led_refresh_internal();
-                }
-            }
 
-            // Менеджер синусоиды "дыхания" яркости
-            if (ledMode != "custom") { 
-                if (now - lastBreatheTime > 25) { 
-                    lastBreatheTime = now;
-                    if (breatheDirectionUp) {
-                        breatheScale += 0.012; 
-                        if (breatheScale >= 1.0) breatheDirectionUp = false;
-                    } else {
-                        breatheScale -= 0.012;
-                        if (breatheScale <= 0.15) breatheDirectionUp = true;
-                    }
-                    led_refresh_internal();
+            if (now - lastBreatheTime > 25) {
+                lastBreatheTime = now;
+                if (breatheDirectionUp) {
+                    breatheScale += 0.012;
+                    if (breatheScale >= 1.0) breatheDirectionUp = false;
+                } else {
+                    breatheScale -= 0.012;
+                    if (breatheScale <= 0.15) breatheDirectionUp = true;
                 }
-            }
-            
-            if (ledMode == "error") {
-                static unsigned long lastErrorUpdate = 0;
-                if (now - lastErrorUpdate > 100) {
-                    lastErrorUpdate = now;
-                    led_refresh_internal();
-                }
+                led_refresh_internal();
             }
 
             xSemaphoreGive(ledMutex);
@@ -397,23 +377,9 @@ void led_setup() {
     led_load_config_from_flash();
     led_refresh_internal();
 
-    lastWebSocketActivity = millis(); 
     xTaskCreatePinnedToCore(ledTaskWorker, "LED_Task", 4096, NULL, 1, NULL, 1);
 }
 
-void led_save_config_to_flash() {
-    if (ledMutex == NULL) return;
-    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
-        matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
-        matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
-        led_reload_status_layers_unlocked();
-        led_reload_free_zone_layers_unlocked();
-        ledMode = "waiting";
-        led_refresh_internal();
-
-        xSemaphoreGive(ledMutex);
-    }
-}
 void led_load_config_from_flash() {
     matrix_config_load(cfg, zoneMap, sizeof(zoneMap));
     matrix_config_load_free_zones(cfg, freeZoneConfigs, FREE_ZONE_COUNT);
@@ -423,27 +389,22 @@ void led_load_config_from_flash() {
     for (int i = 0; i < NUM_IC_CHIPS; i++) leds[i] = CRGB::Black;
     FastLED.show();
 }
+
+void led_refresh_safe() {
+    if (ledMutex == NULL) return;
+    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
+        led_refresh_internal();
+        xSemaphoreGive(ledMutex);
+    }
+}
+
 void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId) {
     if (!zone_id_is_valid(zoneId)) return;
     if (ledMutex == NULL) return;
     if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
         int index = getLEDIndex(x, y);
         if (index != -1) {
-            zoneMap[index] = zoneId; 
-
-            // Наглядная цветовая индикация для наладчика при трассировке на столе
-            if (zoneId == 0) leds[index] = CRGB(232, 232, 237);   
-            else if (zoneId == 1) leds[index] = CRGB(0, 85, 255); 
-            else if (zoneId == 2) leds[index] = CRGB(74, 142, 255);  
-            else if (zoneId == 3) leds[index] = CRGB(120, 180, 255); 
-            else if (zoneId == 4) leds[index] = CRGB(180, 210, 255); 
-            else if (zoneId == 5) leds[index] = CRGB(29, 29, 31); 
-            else if (zoneId == 6) leds[index] = CRGB(52, 199, 89);
-            else if (zoneId == 7) leds[index] = CRGB(255, 149, 0);
-            else if (zoneId == 8) leds[index] = CRGB(175, 82, 222);
-            
-            FastLED.setBrightness(150);
-            FastLED.show(); 
+            zoneMap[index] = zoneId;
         }
         xSemaphoreGive(ledMutex);
     }
@@ -457,19 +418,6 @@ void led_clear_all_safe() {
         FastLED.show();
         xSemaphoreGive(ledMutex);
     }
-}
-
-void led_set_mode_safe(String mode) {
-    if (ledMutex == NULL) return;
-    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
-        ledMode = mode;
-        led_refresh_internal();
-        xSemaphoreGive(ledMutex);
-    }
-}
-
-void led_feed_heartbeat() {
-    lastWebSocketActivity = millis(); 
 }
 
 void led_reload_status_layers_safe() {
