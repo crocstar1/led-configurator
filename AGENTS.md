@@ -74,6 +74,10 @@ Do not modify these areas unless the user explicitly opens a task for them:
   - no dark theme;
   - no radical palette change.
 - Visible web UI text should be Russian unless the user requests otherwise.
+- Visible web UI should use neutral product wording such as
+  `контроллер матрицы`, `LED-контроллер`, `матрица`, `входы`, and
+  `выход LED1`; do not mention `УСП-1` in UI copy unless explicitly requested
+  for a hardware-specific screen.
 - Technical identifiers in code may remain English.
 - Keep primary UI focused on engineering actions.
 - Keep verbose diagnostic/technical details in the Diagnostics tab rather than

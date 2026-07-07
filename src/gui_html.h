@@ -9,7 +9,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>УСП-1: настройка LED-матрицы</title>
+    <title>Настройка LED-матрицы</title>
     <style>
         :root {
             --bg: #f5f7fb;
@@ -293,6 +293,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             color: var(--blue);
         }
 
+        .field-hidden {
+            display: none !important;
+        }
+
         .btn:disabled, select option:disabled {
             opacity: 0.45;
             cursor: not-allowed;
@@ -400,7 +404,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 <div class="app">
     <header class="topbar">
         <div class="brand">
-            <h1>УСП-1 LED-матрица</h1>
+            <h1>LED-контроллер матрицы</h1>
             <span>инженерная настройка контроллера</span>
         </div>
         <div class="runtime-pill"><span class="dot" id="runtime_dot"></span><span id="runtime_label">режим: загрузка</span></div>
@@ -416,7 +420,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
     <main class="layout">
         <section class="panel">
             <div class="panel-title">
-                <h2 id="matrix_title">Зоны матрицы</h2>
+                <h2 id="matrix_title">Матрица</h2>
                 <span class="hint" id="matrix_hint">12x8, локальное редактирование</span>
             </div>
             <div class="matrix-shell">
@@ -427,18 +431,23 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         <aside class="side-stack">
             <section class="panel tab-panel active" id="tab_zones">
-                <div class="panel-title"><h2>Зоны матрицы</h2></div>
+                <div class="panel-title"><h2>Настройки</h2></div>
                 <div class="section">
+                    <div class="btn-row" role="group" aria-label="Режим просмотра зон">
+                        <button class="btn active" id="zone_edit_mode_btn">Редактирование</button>
+                        <button class="btn" id="zone_overview_mode_btn">Обзор всех зон</button>
+                    </div>
                     <div>
                         <label for="zone_select">Активная зона</label>
                         <select id="zone_select"></select>
                     </div>
-                    <div class="btn-row">
+                    <div class="btn-row" id="zone_tools_row">
                         <button class="btn active" id="zone_brush_btn">Кисть</button>
                         <button class="btn" id="zone_erase_btn">Ластик</button>
                     </div>
+                    <label>Легенда</label>
                     <div class="legend" id="zone_legend"></div>
-                    <div class="notice">Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.</div>
+                    <div class="notice" id="zones_mode_notice">Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.</div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
@@ -447,7 +456,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_status">
-                <div class="panel-title"><h2>Статусы портов</h2></div>
+                <div class="panel-title"><h2>Настройки</h2></div>
                 <div class="section">
                     <div class="btn-row">
                         <button class="btn active" data-status="waiting">Ожидание</button>
@@ -456,13 +465,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="grid-2">
                         <div>
-                            <label for="status_zone_select">Портовая зона</label>
-                            <select id="status_zone_select"></select>
-                        </div>
-                        <div>
                             <label for="status_color">Цвет кисти</label>
                             <input type="color" id="status_color" value="#0055ff">
                         </div>
+                        <div class="status-line">Глобально для портовых зон</div>
                     </div>
                     <div class="grid-2">
                         <div>
@@ -471,7 +477,6 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                         <div class="status-line" id="ports_brightness_label">120</div>
                     </div>
-                    <div class="notice">Предпросмотр не меняет runtime. Ошибка остаётся приоритетной.</div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
                         <button class="btn danger" id="clear_status_btn">Очистить слой статуса</button>
@@ -480,7 +485,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_free">
-                <div class="panel-title"><h2>Свободные зоны</h2></div>
+                <div class="panel-title"><h2>Настройки</h2></div>
                 <div class="section">
                     <div class="grid-2">
                         <div>
@@ -496,9 +501,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             </select>
                         </div>
                     </div>
+                    <div class="btn-row" role="group" aria-label="Режим просмотра свободных зон">
+                        <button class="btn active" id="free_edit_mode_btn">Выбранная зона</button>
+                        <button class="btn" id="free_overview_mode_btn">Обзор свободных зон</button>
+                    </div>
                     <div class="grid-2">
-                        <div>
-                            <label for="free_color">Цвет зоны</label>
+                        <div id="free_color_field">
+                            <label for="free_color" id="free_color_label">Цвет зоны</label>
                             <input type="color" id="free_color" value="#ffffff">
                         </div>
                         <div>
@@ -506,10 +515,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <input type="range" id="free_brightness" min="1" max="255" value="100">
                         </div>
                     </div>
-                    <div class="notice">Логотип сохраняется сейчас. QR, Сервис и Своя зона пока работают как предпросмотр.</div>
+                    <label>Легенда</label>
+                    <div class="legend" id="free_legend"></div>
                     <div class="btn-row">
-                        <button class="btn active" id="free_brush_btn">Кисть</button>
-                        <button class="btn" id="free_erase_btn">Очистить рисунок</button>
+                        <button class="btn danger" id="free_erase_btn">Очистить рисунок</button>
                         <button class="btn primary" id="apply_free_btn">Применить доступные настройки</button>
                     </div>
                 </div>
@@ -612,10 +621,10 @@ let ROWS = 8;
 let activeTab = 'zones';
 let activeZoneId = '1';
 let activeStatus = 'waiting';
-let activeStatusZone = '1';
 let activeFreeZone = '5';
 let zoneTool = 'brush';
-let freeTool = 'brush';
+let zoneViewMode = 'edit';
+let freeViewMode = 'edit';
 let drawing = false;
 let hardwareZonesMap = {};
 let zoneMeta = [...DEFAULT_ZONES];
@@ -624,6 +633,7 @@ let freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
 let freeCustomLayers = { '5': {}, '6': {}, '7': {}, '8': {} };
 let freeStaticColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrushColors = { ...DEFAULT_FREE_STATIC_COLORS };
+let freeBrightness = { '5': 100, '6': 100, '7': 100, '8': 100 };
 let diagnostics = null;
 let rainbowTick = 0;
 let backendAvailable = false;
@@ -642,6 +652,15 @@ function typeLabel(type) {
 
 function modeLabel(mode) {
     return MODE_LABELS[mode] || mode || 'не задан';
+}
+
+function runtimeModeLabel(mode) {
+    const labels = {
+        runtime: 'рабочий',
+        custom: 'пользовательский',
+        preview: 'предпросмотр',
+    };
+    return labels[mode] || mode || 'неизвестно';
 }
 
 function zoneDisplayName(zoneOrId) {
@@ -667,6 +686,12 @@ function buildMockConfig() {
         hardware_map: {},
         layers: { wait: {}, charge: {}, err: {} },
         zones: [...DEFAULT_ZONES],
+        free_zones: [
+            { zoneId: 5, enabled: true, mode: 'static', staticColor: '#ffffff', brightness: 100, customLayer: {} },
+            { zoneId: 6, enabled: true, mode: 'static', staticColor: '#34c759', brightness: 100, customLayer: {} },
+            { zoneId: 7, enabled: true, mode: 'static', staticColor: '#ff9500', brightness: 100, customLayer: {} },
+            { zoneId: 8, enabled: true, mode: 'custom', staticColor: '#af52de', brightness: 100, customLayer: {} },
+        ],
     };
 }
 
@@ -726,6 +751,35 @@ function syncFreeColorInput() {
         ? (freeBrushColors[activeFreeZone] || '#ffffff')
         : (freeStaticColors[activeFreeZone] || '#ffffff');
     document.getElementById('free_color').value = color;
+    document.getElementById('free_brightness').value = freeBrightness[activeFreeZone] || 100;
+}
+
+function updateFreeModeControls() {
+    const mode = freeModes[activeFreeZone] || 'static';
+    const colorField = document.getElementById('free_color_field');
+    const colorLabel = document.getElementById('free_color_label');
+    const clearBtn = document.getElementById('free_erase_btn');
+    colorField.classList.toggle('field-hidden', mode === 'rainbow');
+    clearBtn.classList.toggle('field-hidden', mode !== 'custom');
+    colorLabel.textContent = mode === 'custom' ? 'Цвет кисти' : 'Цвет зоны';
+}
+
+function updateZoneViewControls() {
+    const isOverview = zoneViewMode === 'overview';
+    document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
+    document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
+    document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
+    document.getElementById('clear_zone_btn').disabled = isOverview;
+    document.getElementById('zones_mode_notice').textContent = isOverview
+        ? 'Обзор: все зоны показаны своими цветами, рисование отключено.'
+        : 'Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.';
+}
+
+function updateFreeViewControls() {
+    const isOverview = freeViewMode === 'overview';
+    document.getElementById('free_edit_mode_btn').classList.toggle('active', !isOverview);
+    document.getElementById('free_overview_mode_btn').classList.toggle('active', isOverview);
+    document.getElementById('free_erase_btn').disabled = isOverview;
 }
 
 function applyConfig(cfg) {
@@ -752,6 +806,20 @@ function applyConfig(cfg) {
     document.getElementById('free_brightness').value = cfg.b_logo || 100;
     freeStaticColors['5'] = cfg.c_logo || freeStaticColors['5'] || '#ffffff';
     zoneMeta.filter(z => z.type === 'free').forEach(z => { freeModes[String(z.id)] = z.mode || freeModes[String(z.id)] || 'static'; });
+
+    if (Array.isArray(cfg.free_zones)) {
+        cfg.free_zones.forEach(fz => {
+            const zoneId = String(fz.zoneId ?? fz.id);
+            if (!isFreeZone(zoneId)) return;
+            freeModes[zoneId] = fz.mode || freeModes[zoneId] || 'static';
+            freeStaticColors[zoneId] = fz.staticColor || freeStaticColors[zoneId] || '#ffffff';
+            freeBrushColors[zoneId] = freeBrushColors[zoneId] || freeStaticColors[zoneId];
+            freeBrightness[zoneId] = Number(fz.brightness) || freeBrightness[zoneId] || 100;
+            freeCustomLayers[zoneId] = sanitizeLayerForSize(fz.customLayer || freeCustomLayers[zoneId] || {});
+        });
+    } else {
+        freeBrightness['5'] = cfg.b_logo || freeBrightness['5'] || 100;
+    }
 }
 
 function zoneById(id) {
@@ -766,6 +834,11 @@ function isEditableZone(id) {
 function isPortZone(id) {
     const z = zoneById(id);
     return z && z.type === 'port';
+}
+
+function isEditablePortZone(id) {
+    const z = zoneById(id);
+    return z && z.type === 'port' && z.enabled && !z.reserved;
 }
 
 function isFreeZone(id) {
@@ -797,10 +870,8 @@ function buildMatrix() {
 
 function buildSelects() {
     const zoneSelect = document.getElementById('zone_select');
-    const statusZoneSelect = document.getElementById('status_zone_select');
     const freeZoneSelect = document.getElementById('free_zone_select');
     zoneSelect.innerHTML = '';
-    statusZoneSelect.innerHTML = '';
     freeZoneSelect.innerHTML = '';
 
     zoneMeta.forEach(z => {
@@ -809,14 +880,6 @@ function buildSelects() {
         opt.textContent = zoneOptionLabel(z);
         opt.disabled = z.reserved || !z.enabled;
         zoneSelect.appendChild(opt);
-
-        if (z.type === 'port') {
-            const po = document.createElement('option');
-            po.value = z.id;
-            po.textContent = zoneOptionLabel(z);
-            po.disabled = z.reserved || !z.enabled;
-            statusZoneSelect.appendChild(po);
-        }
 
         if (z.type === 'free') {
             const fo = document.createElement('option');
@@ -827,7 +890,6 @@ function buildSelects() {
     });
 
     zoneSelect.value = activeZoneId;
-    statusZoneSelect.value = activeStatusZone;
     freeZoneSelect.value = activeFreeZone;
 }
 
@@ -850,10 +912,32 @@ function buildLegend() {
     });
 }
 
+function buildFreeLegend() {
+    const legend = document.getElementById('free_legend');
+    legend.innerHTML = '';
+
+    zoneMeta.filter(z => z.type === 'free').forEach(z => {
+        const zoneId = String(z.id);
+        const item = document.createElement('div');
+        item.className = 'legend-item' + (zoneId === activeFreeZone ? ' selected' : '');
+        const swatch = document.createElement('span');
+        swatch.className = 'swatch';
+        swatch.style.background = freeModes[zoneId] === 'rainbow'
+            ? 'linear-gradient(90deg, #ff3b30, #ff9500, #34c759, #0055ff, #af52de)'
+            : freeZoneColor('0-0', zoneId);
+        const text = document.createElement('span');
+        text.textContent = `${zoneDisplayName(z)} · ${modeLabel(freeModes[zoneId])}`;
+        item.appendChild(swatch);
+        item.appendChild(text);
+        legend.appendChild(item);
+    });
+}
+
 function pixelStatusColor(key, zoneId) {
     const custom = statusColorLayers[activeStatus][key];
-    if (custom && isPortZone(zoneId)) return custom;
-    if (isPortZone(zoneId)) return statusDefaults[activeStatus];
+    if (custom && isEditablePortZone(zoneId)) return custom;
+    if (isEditablePortZone(zoneId)) return statusDefaults[activeStatus];
+    if (isPortZone(zoneId)) return zoneColors[zoneId];
     if (isFreeZone(zoneId)) return zoneColors[zoneId];
     return zoneColors['0'];
 }
@@ -875,13 +959,15 @@ function freeZoneColor(key, zoneId) {
 
 function shouldLockPixel(zoneId) {
     if (activeTab === 'zones') {
+        if (zoneViewMode === 'overview') return false;
         if (!isEditableZone(activeZoneId)) return true;
         return !(zoneId === '0' || zoneId === activeZoneId);
     }
     if (activeTab === 'status') {
-        return zoneId !== activeStatusZone;
+        return !isEditablePortZone(zoneId);
     }
     if (activeTab === 'free') {
+        if (freeViewMode === 'overview') return false;
         return zoneId !== activeFreeZone;
     }
     return false;
@@ -889,15 +975,15 @@ function shouldLockPixel(zoneId) {
 
 function redrawMatrix() {
     document.getElementById('matrix_title').textContent =
-        activeTab === 'zones' ? 'Зоны матрицы' :
-        activeTab === 'status' ? 'Предпросмотр статусов портов' :
-        activeTab === 'free' ? 'Предпросмотр свободных зон' : 'Диагностика';
+        activeTab === 'zones' ? 'Матрица' :
+        activeTab === 'status' ? 'Матрица' :
+        activeTab === 'free' ? 'Матрица' : 'Диагностика';
 
     document.getElementById('matrix_hint').textContent =
-        activeTab === 'zones' ? `${COLS}x${ROWS}, редактирование выбранной зоны` :
+        activeTab === 'zones' ? `${COLS}x${ROWS}, ${zoneViewMode === 'overview' ? 'обзор всей разметки' : 'редактирование выбранной зоны'}` :
         activeTab === 'status' ? `слой "${statusLabel(activeStatus)}", предпросмотр только в UI` :
-        activeTab === 'free' ? `${zoneDisplayName(activeFreeZone)}: ${modeLabel(freeModes[activeFreeZone])}` :
-        'состояние runtime из /diagnostics';
+        activeTab === 'free' ? `${freeViewMode === 'overview' ? 'обзор свободных зон' : `${zoneDisplayName(activeFreeZone)}: ${modeLabel(freeModes[activeFreeZone])}`}` :
+        'состояние контроллера';
 
     grid.querySelectorAll('.pixel').forEach(p => {
         const key = keyOf(p.dataset.x, p.dataset.y);
@@ -905,29 +991,39 @@ function redrawMatrix() {
         p.dataset.zone = zoneId;
         p.classList.toggle('off-zone', zoneId === '0');
         p.classList.toggle('active-zone',
-            (activeTab === 'zones' && zoneId === activeZoneId) ||
-            (activeTab === 'status' && zoneId === activeStatusZone) ||
-            (activeTab === 'free' && zoneId === activeFreeZone));
+            (activeTab === 'zones' && zoneViewMode === 'edit' && zoneId === activeZoneId) ||
+            (activeTab === 'status' && isEditablePortZone(zoneId)) ||
+            (activeTab === 'free' && freeViewMode === 'edit' && zoneId === activeFreeZone));
         p.classList.toggle('locked', shouldLockPixel(zoneId));
 
         if (activeTab === 'status') {
             p.style.background = pixelStatusColor(key, zoneId);
         } else if (activeTab === 'free') {
-            p.style.background = zoneId === activeFreeZone ? freeZoneColor(key, zoneId) : (zoneColors[zoneId] || zoneColors['0']);
+            p.style.background = isFreeZone(zoneId) && (freeViewMode === 'overview' || zoneId === activeFreeZone)
+                ? freeZoneColor(key, zoneId)
+                : (zoneColors[zoneId] || zoneColors['0']);
         } else {
             p.style.background = zoneColors[zoneId] || zoneColors['0'];
         }
     });
 
     buildLegend();
+    buildFreeLegend();
+    updateZoneViewControls();
+    updateFreeViewControls();
+    updateFreeModeControls();
     updateEditState();
 }
 
 function updateEditState() {
     const text =
-        activeTab === 'zones' ? `Редактор: зоны матрицы · зона ${activeZoneId} · ${zoneTool === 'erase' ? 'ластик' : 'кисть'}` :
-        activeTab === 'status' ? `Редактор: статусы портов · ${statusLabel(activeStatus)} · зона ${activeStatusZone}` :
-        activeTab === 'free' ? `Редактор: свободные зоны · зона ${activeFreeZone} · ${modeLabel(freeModes[activeFreeZone])}` :
+        activeTab === 'zones' ? (zoneViewMode === 'overview'
+            ? 'Обзор: все зоны видны, рисование отключено'
+            : `Редактор: зона ${activeZoneId} · ${zoneTool === 'erase' ? 'ластик' : 'кисть'}`) :
+        activeTab === 'status' ? `Редактор: глобальный статус "${statusLabel(activeStatus)}"` :
+        activeTab === 'free' ? (freeViewMode === 'overview'
+            ? 'Обзор: свободные зоны видны, рисование отключено'
+            : `Редактор: ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`) :
         'Диагностика: только просмотр';
     document.getElementById('edit_state_line').textContent = mockMode
         ? `${text}. Контроллер недоступен: работает локальный предпросмотр 12x8.`
@@ -940,6 +1036,7 @@ function paintPixel(pixel) {
     const currentZone = hardwareZonesMap[key] || '0';
 
     if (activeTab === 'zones') {
+        if (zoneViewMode !== 'edit') return;
         if (!isEditableZone(activeZoneId)) return;
         if (zoneTool === 'erase') {
             if (currentZone === activeZoneId) delete hardwareZonesMap[key];
@@ -947,10 +1044,11 @@ function paintPixel(pixel) {
             hardwareZonesMap[key] = activeZoneId;
         }
     } else if (activeTab === 'status') {
-        if (currentZone !== activeStatusZone) return;
+        if (!isEditablePortZone(currentZone)) return;
         const color = document.getElementById('status_color').value;
         statusColorLayers[activeStatus][key] = color;
     } else if (activeTab === 'free') {
+        if (freeViewMode !== 'edit') return;
         if (currentZone !== activeFreeZone || freeModes[activeFreeZone] !== 'custom') return;
         freeCustomLayers[activeFreeZone][key] = freeBrushColors[activeFreeZone] || document.getElementById('free_color').value;
     }
@@ -996,8 +1094,13 @@ document.getElementById('zone_select').addEventListener('change', e => {
     redrawMatrix();
 });
 
-document.getElementById('status_zone_select').addEventListener('change', e => {
-    activeStatusZone = e.target.value;
+document.getElementById('zone_edit_mode_btn').addEventListener('click', () => {
+    zoneViewMode = 'edit';
+    redrawMatrix();
+});
+
+document.getElementById('zone_overview_mode_btn').addEventListener('click', () => {
+    zoneViewMode = 'overview';
     redrawMatrix();
 });
 
@@ -1011,6 +1114,16 @@ document.getElementById('free_zone_select').addEventListener('change', e => {
 document.getElementById('free_mode_select').addEventListener('change', e => {
     freeModes[activeFreeZone] = e.target.value;
     syncFreeColorInput();
+    redrawMatrix();
+});
+
+document.getElementById('free_edit_mode_btn').addEventListener('click', () => {
+    freeViewMode = 'edit';
+    redrawMatrix();
+});
+
+document.getElementById('free_overview_mode_btn').addEventListener('click', () => {
+    freeViewMode = 'overview';
     redrawMatrix();
 });
 
@@ -1038,18 +1151,9 @@ document.getElementById('zone_erase_btn').addEventListener('click', () => {
     updateEditState();
 });
 
-document.getElementById('free_brush_btn').addEventListener('click', () => {
-    freeTool = 'brush';
-    document.getElementById('free_brush_btn').classList.add('active');
-    document.getElementById('free_erase_btn').classList.remove('active');
-});
-
 document.getElementById('free_erase_btn').addEventListener('click', () => {
+    if (freeViewMode !== 'edit' || (freeModes[activeFreeZone] || 'static') !== 'custom') return;
     freeCustomLayers[activeFreeZone] = {};
-    freeTool = 'brush';
-    document.getElementById('free_erase_btn').classList.remove('active');
-    document.getElementById('free_brush_btn').classList.remove('active');
-    document.getElementById('free_brush_btn').classList.add('active');
     redrawMatrix();
 });
 
@@ -1117,23 +1221,34 @@ document.getElementById('ports_brightness').addEventListener('input', async e =>
 });
 
 document.getElementById('free_brightness').addEventListener('input', async e => {
-    if (!backendAvailable) return;
-    await fetch(`/set_bright?type=logo&val=${e.target.value}`).catch(() => {});
+    freeBrightness[activeFreeZone] = Number(e.target.value) || 100;
 });
 
 document.getElementById('apply_free_btn').addEventListener('click', async () => {
     const mode = freeModes[activeFreeZone] || 'static';
     if (!backendAvailable) {
-        alert('Контроллер недоступен: режим свободной зоны изменён только в браузере.');
+        alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
         return;
     }
 
-    if (activeFreeZone === '5') {
-        await fetch(`/set_logo_anim?val=${mode === 'rainbow' ? 1 : 0}`);
-        await fetch(`/save_config?c_logo=${encodeURIComponent(freeStaticColors['5'] || '#ffffff')}`);
-        alert('Настройки зоны “Логотип” применены. Остальные свободные зоны пока работают как предпросмотр MVP.');
-    } else {
-        alert('Эта свободная зона пока работает как предпросмотр до добавления FreeZoneConfig.');
+    const payload = {
+        zoneId: Number(activeFreeZone),
+        enabled: true,
+        mode,
+        staticColor: freeStaticColors[activeFreeZone] || '#ffffff',
+        brightness: freeBrightness[activeFreeZone] || 100,
+        customLayer: freeCustomLayers[activeFreeZone] || {},
+    };
+
+    try {
+        const res = await fetch('/save_free_zone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        alert(await res.text() === 'OK' ? 'Настройки свободной зоны сохранены.' : 'Не удалось сохранить свободную зону.');
+    } catch (err) {
+        alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
     }
 });
 
@@ -1202,13 +1317,13 @@ function renderDiagnostics() {
     if (!diagnostics) return;
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
-    document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${mode} · Порт 1 ${statusLabel(port1)}`;
+    document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
 
     document.getElementById('diag_summary').innerHTML = [
         diagCard('Активных портов', diagnostics.activePortCount ?? 1),
-        diagCard('Режим runtime', mode),
-        diagCard('Состояние редактора', activeTab === 'diagnostics' ? 'только просмотр' : `${activeTab} preview`),
+        diagCard('Рабочий режим', runtimeModeLabel(mode)),
+        diagCard('Состояние редактора', activeTab === 'diagnostics' ? 'только просмотр' : 'предпросмотр в UI'),
         diagCard('Основной LED-выход', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`),
         diagCard('Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'ESP32 контроллер'),
     ].join('');

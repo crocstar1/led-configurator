@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "usp1_board_config.h"
+#include "zone_model.h"
 
 // Физические параметры матрицы 
 #define LED_PIN         USP1_PRIMARY_LED_PIN
@@ -38,8 +39,17 @@ struct MatrixConfig {
     uint8_t static_gw[4];    // Массив байт Шлюза
 };
 
+struct FreeZoneConfig {
+    uint8_t zoneId;
+    uint8_t enabled;
+    FreeZoneMode mode;
+    uint8_t staticColor[3];
+    uint8_t brightness;
+};
+
 // Делаем переменные доступными для main.cpp
 extern MatrixConfig cfg;
+extern FreeZoneConfig freeZoneConfigs[FREE_ZONE_COUNT];
 extern uint8_t zoneMap[NUM_IC_CHIPS];
 extern String ledMode;
 
@@ -54,6 +64,7 @@ void led_load_config_from_flash();
 void led_feed_heartbeat();                 
 void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId);
 void led_reload_status_layers_safe();
+void led_reload_free_zone_layers_safe();
 int getLEDIndex(int x, int virtualY);
 
 #endif

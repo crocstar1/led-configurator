@@ -86,6 +86,20 @@ Edit/preview mode:
 - Save actions should be explicit.
 - If backend is unavailable, UI may run in mock/default preview mode and warn that changes exist only in the browser.
 
+## UI Product Rules
+
+- Visible web UI should use neutral product wording:
+  - `контроллер матрицы`
+  - `LED-контроллер`
+  - `матрица`
+  - `входы`
+  - `выход LED1`
+- Do not mention `УСП-1` in visible web UI unless a future task explicitly
+  requests hardware-specific wording.
+- Existing hardware-specific code names can stay for now. A later rename pass
+  can move names such as `usp1_board_config` and `usp1_inputs` toward
+  `board_config` / `hardware_config` and `discrete_inputs` / `board_inputs`.
+
 ## Already Done
 
 - Board config added for confirmed USP-1 GPIO mapping.
@@ -100,7 +114,9 @@ Edit/preview mode:
   - `/set_bright`
   - `/set_logo_anim`
   - `/save_status_colors`
-- `/get_config` extended with `layers`, `hardware_map`, `zones`, and `matrix`.
+  - `/save_free_zone`
+- `/get_config` extended with `layers`, `hardware_map`, `zones`, `matrix`, and
+  `free_zones`.
 - Status layers are applied in renderer.
 - Fixed zone model added.
 - Runtime/preview split improved so UI preview does not call `/set_mode`.
@@ -110,17 +126,23 @@ Edit/preview mode:
   - Free Zones editor.
   - Diagnostics.
 - UI mock/default mode added for local `index.html` preview without ESP32 backend.
+- FreeZoneConfig storage added for Logo, QR, Service, and Custom:
+  - per-zone mode: static/custom/rainbow;
+  - per-zone static color;
+  - per-zone brightness;
+  - sparse custom pixel layer per free zone.
 
 ## Currently In Work
 
-Current focus: UI review and cleanup before the next implementation step.
+Current focus: verify FreeZoneConfig storage after implementation.
 
 Known active review topics:
 
-- Verify visible UI text is consistently Russian, including backend-provided zone labels localized on the frontend.
-- Verify Free Zones pixel drawing behavior after the frontend fix.
-- Reduce technical/explanatory copy in primary UI panels.
-- Keep detailed technical state mostly in Diagnostics.
+- Verify Logo static/rainbow persistence after reload/reboot.
+- Verify QR, Service, and Custom mode/color persistence after reload/reboot.
+- Verify Custom pixel drawing persistence after reload/reboot.
+- Verify free zone custom layers remain sparse and do not write pixels outside the selected zone.
+- Verify port status rendering still has priority and is not affected by free zone rendering.
 
 ## Known UI Issues
 
@@ -129,14 +151,19 @@ Known active review topics:
   - static mode fills the selected free zone;
   - custom drawing uses the selected color as a brush;
   - clear drawing clears only the selected free zone custom layer.
-- Free zone modes for QR, Service, and Custom are preview-only until FreeZoneConfig storage exists.
+- Matrix Zones now need continued UX testing for overview/edit mode on desktop
+  and touch devices.
 - Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
+- Free zone storage validates current compile-time matrix size. Future runtime matrix resize still needs migration/reset UX.
 - Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
 
 ## Backlog
 
-- FreeZoneConfig storage for Logo, QR, Service, and Custom.
-- Per-free-zone static/custom/rainbow settings.
+- FreeZoneConfig storage follow-up: manual UI/hardware verification and any bug fixes found during reload/reboot testing.
+- Move Diagnostics into a future gear/settings menu together with:
+  - diagnostics;
+  - network settings;
+  - OTA / remote firmware update UX.
 - Brightness schedule by time of day.
 - WiFi manager.
 - DHCP/static network settings.

@@ -8,6 +8,7 @@
 CRGB leds[NUM_IC_CHIPS]; 
 uint8_t zoneMap[NUM_IC_CHIPS]; 
 MatrixConfig cfg;
+FreeZoneConfig freeZoneConfigs[FREE_ZONE_COUNT];
 
 String ledMode = "waiting"; 
 float breatheScale = 0.2; 
@@ -25,6 +26,13 @@ struct StatusLayerCache {
 StatusLayerCache waitLayer;
 StatusLayerCache chargeLayer;
 StatusLayerCache errorLayer;
+
+struct FreeZoneLayerCache {
+    bool hasColor[NUM_IC_CHIPS];
+    CRGB colors[NUM_IC_CHIPS];
+};
+
+FreeZoneLayerCache freeZoneLayers[FREE_ZONE_COUNT];
 
 // УНИВЕРСАЛЬНАЯ МАТЕМАТИКА ЗМЕЙКИ ПОД ЛЮБУЮ ТОПОЛОГИЮ НА ПРОИЗВОДСТВЕ
 int getLEDIndex(int x, int virtualY) {
@@ -92,6 +100,13 @@ void clearStatusLayer(StatusLayerCache &layer) {
     }
 }
 
+void clearFreeZoneLayer(FreeZoneLayerCache &layer) {
+    memset(layer.hasColor, 0, sizeof(layer.hasColor));
+    for (int i = 0; i < NUM_IC_CHIPS; i++) {
+        layer.colors[i] = CRGB::Black;
+    }
+}
+
 void parseStatusLayerJson(const String &json, StatusLayerCache &layer) {
     clearStatusLayer(layer);
 
@@ -134,10 +149,58 @@ void parseStatusLayerJson(const String &json, StatusLayerCache &layer) {
     }
 }
 
+void parseFreeZoneLayerJson(uint8_t zoneId, const String &json, FreeZoneLayerCache &layer) {
+    clearFreeZoneLayer(layer);
+
+    int pos = 0;
+    while (true) {
+        int keyStart = json.indexOf('"', pos);
+        if (keyStart < 0) break;
+
+        int keyEnd = json.indexOf('"', keyStart + 1);
+        if (keyEnd < 0) break;
+
+        String key = json.substring(keyStart + 1, keyEnd);
+        int dashPos = key.indexOf('-');
+        if (dashPos < 0) {
+            pos = keyEnd + 1;
+            continue;
+        }
+
+        int colonPos = json.indexOf(':', keyEnd + 1);
+        if (colonPos < 0) break;
+
+        int valueStart = json.indexOf('"', colonPos + 1);
+        if (valueStart < 0) break;
+
+        int valueEnd = json.indexOf('"', valueStart + 1);
+        if (valueEnd < 0) break;
+
+        String value = json.substring(valueStart + 1, valueEnd);
+        CRGB color;
+        int x = key.substring(0, dashPos).toInt();
+        int y = key.substring(dashPos + 1).toInt();
+        int index = getLEDIndex(x, y);
+
+        if (index >= 0 && zoneMap[index] == zoneId && parseHexColorToCrgb(value, color)) {
+            layer.hasColor[index] = true;
+            layer.colors[index] = color;
+        }
+
+        pos = valueEnd + 1;
+    }
+}
+
 void led_reload_status_layers_unlocked() {
     parseStatusLayerJson(matrix_config_load_status_layer("waiting"), waitLayer);
     parseStatusLayerJson(matrix_config_load_status_layer("charging"), chargeLayer);
     parseStatusLayerJson(matrix_config_load_status_layer("error"), errorLayer);
+}
+
+void led_reload_free_zone_layers_unlocked() {
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
+        parseFreeZoneLayerJson(freeZoneConfigs[i].zoneId, matrix_config_load_free_zone_layer(freeZoneConfigs[i].zoneId), freeZoneLayers[i]);
+    }
 }
 
 bool getStatusLayerColorForStatus(int index, PortStatus status, CRGB &color) {
@@ -156,6 +219,24 @@ bool getStatusLayerColorForStatus(int index, PortStatus status, CRGB &color) {
     }
 
     color = layer->colors[index];
+    return true;
+}
+
+FreeZoneConfig *freeZoneConfigFor(uint8_t zoneId) {
+    const int index = free_zone_index(zoneId);
+    if (index < 0) {
+        return nullptr;
+    }
+    return &freeZoneConfigs[index];
+}
+
+bool getFreeZoneLayerColor(uint8_t zoneId, int index, CRGB &color) {
+    const int zoneIndex = free_zone_index(zoneId);
+    if (zoneIndex < 0 || index < 0 || index >= NUM_IC_CHIPS || !freeZoneLayers[zoneIndex].hasColor[index]) {
+        return false;
+    }
+
+    color = freeZoneLayers[zoneIndex].colors[index];
     return true;
 }
 
@@ -178,13 +259,11 @@ void led_refresh_internal() {
     CRGB customWait   = CRGB(cfg.color_wait[0], cfg.color_wait[1], cfg.color_wait[2]);
     CRGB customCharge = CRGB(cfg.color_charge[0], cfg.color_charge[1], cfg.color_charge[2]);
     CRGB customError  = CRGB(cfg.color_error[0], cfg.color_error[1], cfg.color_error[2]);
-    CRGB customLogo   = CRGB(cfg.color_logo[0], cfg.color_logo[1], cfg.color_logo[2]);
 
     // Применяем индивидуальные лимиты яркости зон (ШИМ-масштабирование FastLED)
     customWait.nscale8_video(cfg.bright_ports);
     customCharge.nscale8_video(cfg.bright_ports);
     customError.nscale8_video(cfg.bright_ports);
-    customLogo.nscale8_video(cfg.bright_logo);
 
     const StatusMapperState &portState = status_mapper_get_state();
 
@@ -245,12 +324,23 @@ void led_refresh_internal() {
         } 
         // Free zones: Logo, QR highlight, Service, Custom.
         else if (zone_is_free(zone)) {
-            if (zone == ZONE_ID_LOGO && cfg.logo_anim == 1) {
-                leds[i] = CHSV(rainbowHue + (i * 4), 255, (uint8_t)(cfg.bright_logo * breatheScale));
+            FreeZoneConfig *freeConfig = freeZoneConfigFor(zone);
+            if (freeConfig == nullptr || freeConfig->enabled == 0) {
+                leds[i] = CRGB::Black;
+            } else if (freeConfig->mode == FREE_ZONE_RAINBOW) {
+                leds[i] = CHSV(rainbowHue + (i * 4), 255, freeConfig->brightness);
+            } else if (freeConfig->mode == FREE_ZONE_CUSTOM) {
+                CRGB layerColor;
+                if (getFreeZoneLayerColor(zone, i, layerColor)) {
+                    layerColor.nscale8_video(freeConfig->brightness);
+                    leds[i] = layerColor;
+                } else {
+                    leds[i] = CRGB::Black;
+                }
             } else {
-                CRGB dynamicLogo = customLogo;
-                dynamicLogo.nscale8_video(pulseBright);
-                leds[i] = dynamicLogo;
+                CRGB staticColor = CRGB(freeConfig->staticColor[0], freeConfig->staticColor[1], freeConfig->staticColor[2]);
+                staticColor.nscale8_video(freeConfig->brightness);
+                leds[i] = staticColor;
             }
         }
     }
@@ -315,7 +405,9 @@ void led_save_config_to_flash() {
     if (ledMutex == NULL) return;
     if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
         matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+        matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
         led_reload_status_layers_unlocked();
+        led_reload_free_zone_layers_unlocked();
         ledMode = "waiting";
         led_refresh_internal();
 
@@ -324,7 +416,9 @@ void led_save_config_to_flash() {
 }
 void led_load_config_from_flash() {
     matrix_config_load(cfg, zoneMap, sizeof(zoneMap));
+    matrix_config_load_free_zones(cfg, freeZoneConfigs, FREE_ZONE_COUNT);
     led_reload_status_layers_unlocked();
+    led_reload_free_zone_layers_unlocked();
 
     for (int i = 0; i < NUM_IC_CHIPS; i++) leds[i] = CRGB::Black;
     FastLED.show();
@@ -386,6 +480,19 @@ void led_reload_status_layers_safe() {
 
     if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
         led_reload_status_layers_unlocked();
+        led_refresh_internal();
+        xSemaphoreGive(ledMutex);
+    }
+}
+
+void led_reload_free_zone_layers_safe() {
+    if (ledMutex == NULL) {
+        led_reload_free_zone_layers_unlocked();
+        return;
+    }
+
+    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
+        led_reload_free_zone_layers_unlocked();
         led_refresh_internal();
         xSemaphoreGive(ledMutex);
     }

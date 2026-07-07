@@ -26,6 +26,8 @@ static constexpr uint8_t ZONE_ID_QR = 6;
 static constexpr uint8_t ZONE_ID_SERVICE = 7;
 static constexpr uint8_t ZONE_ID_CUSTOM = 8;
 static constexpr uint8_t ZONE_ID_MAX = ZONE_ID_CUSTOM;
+static constexpr uint8_t FREE_ZONE_IDS[] = {ZONE_ID_LOGO, ZONE_ID_QR, ZONE_ID_SERVICE, ZONE_ID_CUSTOM};
+static constexpr size_t FREE_ZONE_COUNT = sizeof(FREE_ZONE_IDS) / sizeof(FREE_ZONE_IDS[0]);
 
 struct ZoneMetadata {
     uint8_t id;
@@ -61,6 +63,15 @@ inline bool zone_is_port(uint8_t zoneId) {
 
 inline bool zone_is_free(uint8_t zoneId) {
     return zoneId >= ZONE_ID_LOGO && zoneId <= ZONE_ID_CUSTOM;
+}
+
+inline int free_zone_index(uint8_t zoneId) {
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
+        if (FREE_ZONE_IDS[i] == zoneId) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
 inline const ZoneMetadata *zone_metadata_for(uint8_t zoneId) {

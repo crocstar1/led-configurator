@@ -3,6 +3,7 @@
 #include <WebSocketsServer.h> 
 #include <Update.h> // Встроенная библиотека ESP32 для безопасной OTA-прошивки
 #include <ctype.h>
+#include <string.h>
 #include "gui_html.h"
 #include "led_manager.h"
 #include "matrix_config_storage.h"
@@ -76,6 +77,38 @@ String extractJsonStringField(const String &json, const char *fieldName) {
     return json.substring(quoteStart + 1, quoteEnd);
 }
 
+bool jsonHasField(const String &json, const char *fieldName) {
+    String pattern = "\"";
+    pattern += fieldName;
+    pattern += "\"";
+    return json.indexOf(pattern) >= 0;
+}
+
+int extractJsonIntField(const String &json, const char *fieldName, int fallback) {
+    String pattern = "\"";
+    pattern += fieldName;
+    pattern += "\"";
+
+    int fieldPos = json.indexOf(pattern);
+    if (fieldPos < 0) return fallback;
+
+    int colonPos = json.indexOf(':', fieldPos + pattern.length());
+    if (colonPos < 0) return fallback;
+
+    int valueStart = colonPos + 1;
+    while (valueStart < json.length() && isspace((unsigned char)json[valueStart])) valueStart++;
+
+    if (json.substring(valueStart, valueStart + 4) == "true") return 1;
+    if (json.substring(valueStart, valueStart + 5) == "false") return 0;
+
+    int valueEnd = valueStart;
+    if (valueEnd < json.length() && json[valueEnd] == '-') valueEnd++;
+    while (valueEnd < json.length() && isdigit((unsigned char)json[valueEnd])) valueEnd++;
+
+    if (valueEnd <= valueStart) return fallback;
+    return json.substring(valueStart, valueEnd).toInt();
+}
+
 String extractJsonObjectField(const String &json, const char *fieldName) {
     String pattern = "\"";
     pattern += fieldName;
@@ -127,6 +160,25 @@ bool findFirstHexColor(const String &json, String &hexColor) {
     return false;
 }
 
+FreeZoneMode parseFreeZoneMode(String mode, FreeZoneMode fallback) {
+    mode.toLowerCase();
+    if (mode == "static") return FREE_ZONE_STATIC;
+    if (mode == "custom") return FREE_ZONE_CUSTOM;
+    if (mode == "rainbow") return FREE_ZONE_RAINBOW;
+    return fallback;
+}
+
+void syncLogoFreeZoneFromLegacyConfig() {
+    const int index = free_zone_index(ZONE_ID_LOGO);
+    if (index < 0) return;
+
+    freeZoneConfigs[index].zoneId = ZONE_ID_LOGO;
+    freeZoneConfigs[index].enabled = 1;
+    freeZoneConfigs[index].mode = (cfg.logo_anim == 1) ? FREE_ZONE_RAINBOW : FREE_ZONE_STATIC;
+    freeZoneConfigs[index].brightness = cfg.bright_logo;
+    memcpy(freeZoneConfigs[index].staticColor, cfg.color_logo, 3);
+}
+
 void appendHardwareMapJson(String &json) {
     json += ",\"hardware_map\":{";
     bool first = true;
@@ -166,12 +218,38 @@ void appendStatusLayersJson(String &json) {
 }
 
 FreeZoneMode currentFreeZoneMode(uint8_t zoneId) {
-    if (zoneId == ZONE_ID_LOGO && cfg.logo_anim == 1) {
-        return FREE_ZONE_RAINBOW;
+    const int index = free_zone_index(zoneId);
+    if (index >= 0) {
+        return freeZoneConfigs[index].mode;
     }
 
     const ZoneMetadata *metadata = zone_metadata_for(zoneId);
     return metadata ? metadata->defaultMode : FREE_ZONE_STATIC;
+}
+
+void appendFreeZoneConfigsJson(String &json) {
+    json += ",\"free_zones\":[";
+
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
+        if (i > 0) json += ",";
+
+        const FreeZoneConfig &freeZone = freeZoneConfigs[i];
+        json += "{\"zoneId\":";
+        json += String((int)freeZone.zoneId);
+        json += ",\"enabled\":";
+        json += (freeZone.enabled ? "true" : "false");
+        json += ",\"mode\":\"";
+        json += free_zone_mode_to_string(freeZone.mode);
+        json += "\",\"staticColor\":\"";
+        json += rgbToHex(freeZone.staticColor);
+        json += "\",\"brightness\":";
+        json += String((int)freeZone.brightness);
+        json += ",\"customLayer\":";
+        json += matrix_config_load_free_zone_layer(freeZone.zoneId);
+        json += "}";
+    }
+
+    json += "]";
 }
 
 void appendZoneMetadataJson(String &json) {
@@ -292,6 +370,7 @@ void handleSaveConfig() {
     if (server.hasArg("gw"))       parseIPBytes(server.arg("gw"),   cfg.static_gw);
     
     // Фиксируем всё в Preferences NVS Flash
+    syncLogoFreeZoneFromLegacyConfig();
     led_save_config_to_flash();
     
     server.send(200, "text/plain", "OK");
@@ -302,7 +381,7 @@ void handleGetConfig() {
     if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
 
     String json;
-    json.reserve(5200);
+    json.reserve(7600);
     json += "{\"topo\":";
     json += String((int)cfg.topology);
     json += ",\"l_anim\":";
@@ -339,6 +418,7 @@ void handleGetConfig() {
     appendStatusLayersJson(json);
     appendHardwareMapJson(json);
     appendZoneMetadataJson(json);
+    appendFreeZoneConfigsJson(json);
     json += "}";
 
     server.send(200, "application/json", json);
@@ -400,6 +480,7 @@ void handleSaveZones() {
     }
 
     matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    led_reload_free_zone_layers_safe();
     server.send(200, "text/plain", "OK");
 }
 
@@ -418,12 +499,14 @@ void handleSetBright() {
         cfg.bright_ports = value;
     } else if (type == "logo") {
         cfg.bright_logo = value;
+        syncLogoFreeZoneFromLegacyConfig();
     } else {
         server.send(400, "text/plain", "BAD_TYPE");
         return;
     }
 
     matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
     led_set_mode_safe(ledMode);
     server.send(200, "text/plain", "OK");
 }
@@ -437,7 +520,9 @@ void handleSetLogoAnim() {
     }
 
     cfg.logo_anim = (server.arg("val").toInt() == 0) ? 0 : 1;
+    syncLogoFreeZoneFromLegacyConfig();
     matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
     led_set_mode_safe(ledMode);
     server.send(200, "text/plain", "OK");
 }
@@ -473,6 +558,63 @@ void handleSaveStatusColors() {
     }
 
     led_reload_status_layers_safe();
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSaveFreeZone() {
+    if (!server.authenticate(www_username, www_password)) return server.requestAuthentication();
+
+    String body = server.arg("plain");
+    body.trim();
+    if (!body.startsWith("{") || !body.endsWith("}")) {
+        server.send(400, "text/plain", "BAD_JSON");
+        return;
+    }
+
+    const int zoneIdValue = extractJsonIntField(body, "zoneId", -1);
+    if (zoneIdValue < 0 || zoneIdValue > 255 || !zone_is_free((uint8_t)zoneIdValue)) {
+        server.send(400, "text/plain", "BAD_ZONE");
+        return;
+    }
+
+    const int zoneIndex = free_zone_index((uint8_t)zoneIdValue);
+    if (zoneIndex < 0) {
+        server.send(400, "text/plain", "BAD_ZONE");
+        return;
+    }
+
+    FreeZoneConfig &freeZone = freeZoneConfigs[zoneIndex];
+    freeZone.enabled = extractJsonIntField(body, "enabled", freeZone.enabled ? 1 : 0) ? 1 : 0;
+    freeZone.mode = parseFreeZoneMode(extractJsonStringField(body, "mode"), freeZone.mode);
+    freeZone.brightness = clampByteValue(extractJsonIntField(body, "brightness", freeZone.brightness), freeZone.brightness);
+
+    const String staticColor = extractJsonStringField(body, "staticColor");
+    if (staticColor.length() == 7) {
+        parseHexColor(staticColor, freeZone.staticColor);
+    }
+
+    if (freeZone.zoneId == ZONE_ID_LOGO) {
+        cfg.logo_anim = (freeZone.mode == FREE_ZONE_RAINBOW) ? 1 : 0;
+        cfg.bright_logo = freeZone.brightness;
+        memcpy(cfg.color_logo, freeZone.staticColor, 3);
+        matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    }
+
+    if (!matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT)) {
+        server.send(500, "text/plain", "SAVE_CONFIG_FAILED");
+        return;
+    }
+
+    if (freeZone.mode == FREE_ZONE_CUSTOM && jsonHasField(body, "customLayer")) {
+        const String customLayer = extractJsonObjectField(body, "customLayer");
+        if (!matrix_config_save_free_zone_layer(freeZone.zoneId, customLayer, zoneMap, sizeof(zoneMap))) {
+            server.send(400, "text/plain", "BAD_LAYER");
+            return;
+        }
+    }
+
+    led_reload_free_zone_layers_safe();
+    led_set_mode_safe(ledMode);
     server.send(200, "text/plain", "OK");
 }
 
@@ -597,6 +739,7 @@ void setup() {
     server.on("/set_bright", handleSetBright);
     server.on("/set_logo_anim", handleSetLogoAnim);
     server.on("/save_status_colors", HTTP_POST, handleSaveStatusColors);
+    server.on("/save_free_zone", HTTP_POST, handleSaveFreeZone);
     server.on("/diagnostics", handleDiagnostics);
 
     // ПРОМЫШЛЕННЫЙ ПРИЕМНИК OTA-ОБНОВЛЕНИЯ ПРОШИВКИ (Update.h)
