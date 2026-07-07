@@ -214,8 +214,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             position: fixed;
             inset: 0;
             display: none;
-            align-items: flex-start;
-            justify-content: flex-end;
+            align-items: center;
+            justify-content: center;
             padding: 16px;
             background: rgba(17, 24, 39, 0.24);
             z-index: 20;
@@ -226,7 +226,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         .service-panel {
-            width: min(520px, 100%);
+            width: min(720px, calc(100vw - 32px));
             max-height: calc(100vh - 32px);
             overflow: auto;
             background: var(--panel);
@@ -459,6 +459,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .brand h1 { font-size: 21px; }
             .layout { grid-template-columns: 1fr; }
             .panel { padding: 13px; border-radius: 11px; }
+            .service-backdrop { align-items: stretch; padding: 0; }
+            .service-panel { width: 100%; max-height: 100vh; border-radius: 0; }
             .pixel { width: 28px; height: 28px; border-radius: 7px; }
             .legend { grid-template-columns: 1fr; }
             .diag-grid { grid-template-columns: 1fr; }
@@ -577,6 +579,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             </select>
                         </div>
                     </div>
+                    <div class="notice field-hidden" id="free_zone_notice">Свободная зона не размечена.</div>
                     <div class="btn-row" role="group" aria-label="Режим просмотра свободных зон">
                         <button class="btn active" id="free_edit_mode_btn">Выбранная зона</button>
                         <button class="btn" id="free_overview_mode_btn">Обзор свободных зон</button>
@@ -620,7 +623,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <div class="section">
                     <div class="row">
                         <strong>Диагностика</strong>
-                        <button class="btn" id="refresh_diag_btn" type="button">Обновить</button>
+                        <button class="btn" id="refresh_diag_btn" type="button">Обновить данные</button>
                     </div>
                     <div class="diag-grid" id="diag_summary"></div>
                     <div>
@@ -642,7 +645,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <div class="section">
                     <div class="row">
                         <strong>Сеть</strong>
-                        <button class="btn" id="refresh_network_btn" type="button">Обновить</button>
+                        <button class="btn" id="refresh_network_btn" type="button">Обновить статус сети</button>
                     </div>
                     <div class="diag-grid" id="network_summary"></div>
                     <form id="network_form" class="section">
@@ -687,9 +690,9 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             </div>
                         </div>
                         <div class="btn-row">
-                            <button class="btn" id="scan_network_btn" type="button">Сканировать</button>
-                            <button class="btn primary" type="submit">Сохранить</button>
-                            <button class="btn" id="network_apply_btn" type="button">Применить</button>
+                            <button class="btn" id="scan_network_btn" type="button">Сканировать сети</button>
+                            <button class="btn primary" type="submit">Сохранить настройки</button>
+                            <button class="btn" id="network_apply_btn" type="button">Применить подключение</button>
                         </div>
                     </form>
                     <div class="diag-grid" id="network_scan"></div>
@@ -876,6 +879,16 @@ function zoneOptionLabel(zone) {
     return `${zoneDisplayName(zone)}${zone.reserved ? ' · резерв' : ''}`;
 }
 
+function buildDefaultPortMap(cols = 12, rows = 8) {
+    const map = {};
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            map[`${x}-${y}`] = '1';
+        }
+    }
+    return map;
+}
+
 function buildMockConfig() {
     return {
         topo: 0,
@@ -887,7 +900,7 @@ function buildMockConfig() {
         c_error: '#ff3b30',
         c_logo: '#ffffff',
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
-        hardware_map: {},
+        hardware_map: buildDefaultPortMap(12, 8),
         layers: { wait: {}, charge: {}, err: {} },
         zones: [...DEFAULT_ZONES],
         free_zones: [
@@ -1002,30 +1015,54 @@ function syncFreeColorInput() {
 
 function updateFreeModeControls() {
     const mode = freeModes[activeFreeZone] || 'static';
+    const mapped = activeFreeZoneIsMapped();
     const colorField = document.getElementById('free_color_field');
     const colorLabel = document.getElementById('free_color_label');
     const clearBtn = document.getElementById('free_erase_btn');
+    const modeSelect = document.getElementById('free_mode_select');
+    const colorInput = document.getElementById('free_color');
+    const brightnessInput = document.getElementById('free_brightness');
+    const applyBtn = document.getElementById('apply_free_btn');
+    const notice = document.getElementById('free_zone_notice');
+
     colorField.classList.toggle('field-hidden', mode === 'rainbow');
-    clearBtn.classList.toggle('field-hidden', mode !== 'custom');
+    clearBtn.classList.toggle('field-hidden', mode !== 'custom' || !mapped);
     colorLabel.textContent = mode === 'custom' ? 'Цвет кисти' : 'Цвет зоны';
+    modeSelect.disabled = !mapped;
+    colorInput.disabled = !mapped || mode === 'rainbow';
+    brightnessInput.disabled = !mapped;
+    applyBtn.disabled = !mapped;
+    notice.classList.toggle('field-hidden', mapped);
+    notice.textContent = mapped
+        ? ''
+        : `${zoneDisplayName(activeFreeZone)} не размечена. Сначала назначьте этой зоне пиксели во вкладке «Зоны матрицы».`;
 }
 
 function updateZoneViewControls() {
     const isOverview = zoneViewMode === 'overview';
+    const port1Missing = !zoneHasPixels('1');
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
     document.getElementById('clear_zone_btn').disabled = isOverview;
-    document.getElementById('zones_mode_notice').textContent = isOverview
+    const baseText = isOverview
         ? 'Обзор: все зоны показаны своими цветами, рисование отключено.'
         : 'Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.';
+    document.getElementById('zones_mode_notice').textContent = port1Missing
+        ? `${baseText} Порт 1 не размечен: Data1/Data2 будут читаться, но индикации негде отображаться.`
+        : baseText;
 }
 
 function updateFreeViewControls() {
+    const mapped = activeFreeZoneIsMapped();
+    if (!mapped && freeViewMode === 'edit') {
+        freeViewMode = 'overview';
+    }
     const isOverview = freeViewMode === 'overview';
     document.getElementById('free_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('free_overview_mode_btn').classList.toggle('active', isOverview);
-    document.getElementById('free_erase_btn').disabled = isOverview;
+    document.getElementById('free_edit_mode_btn').disabled = !mapped;
+    document.getElementById('free_erase_btn').disabled = isOverview || !mapped;
 }
 
 function applyConfig(cfg) {
@@ -1096,6 +1133,19 @@ function keyOf(x, y) {
     return `${x}-${y}`;
 }
 
+function zonePixelCount(zoneId) {
+    const target = String(zoneId);
+    return Object.values(hardwareZonesMap || {}).filter(value => String(value) === target).length;
+}
+
+function zoneHasPixels(zoneId) {
+    return zonePixelCount(zoneId) > 0;
+}
+
+function activeFreeZoneIsMapped() {
+    return isFreeZone(activeFreeZone) && zoneHasPixels(activeFreeZone);
+}
+
 function buildMatrix() {
     grid.innerHTML = '';
     grid.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
@@ -1119,6 +1169,8 @@ function buildSelects() {
     const freeZoneSelect = document.getElementById('free_zone_select');
     zoneSelect.innerHTML = '';
     freeZoneSelect.innerHTML = '';
+    let firstMappedFreeZone = null;
+    let activeFreeZoneStillSelectable = false;
 
     zoneMeta.forEach(z => {
         const opt = document.createElement('option');
@@ -1128,15 +1180,24 @@ function buildSelects() {
         zoneSelect.appendChild(opt);
 
         if (z.type === 'free') {
+            const mapped = zoneHasPixels(z.id);
+            if (mapped && firstMappedFreeZone === null) firstMappedFreeZone = String(z.id);
+            if (mapped && String(z.id) === String(activeFreeZone)) activeFreeZoneStillSelectable = true;
             const fo = document.createElement('option');
             fo.value = z.id;
-            fo.textContent = zoneDisplayName(z);
+            fo.textContent = mapped ? zoneDisplayName(z) : `${zoneDisplayName(z)} · не размечена`;
+            fo.disabled = !mapped;
             freeZoneSelect.appendChild(fo);
         }
     });
 
     zoneSelect.value = activeZoneId;
+    if (!activeFreeZoneStillSelectable && firstMappedFreeZone !== null) {
+        activeFreeZone = firstMappedFreeZone;
+    }
     freeZoneSelect.value = activeFreeZone;
+    document.getElementById('free_mode_select').value = freeModes[activeFreeZone] || 'static';
+    syncFreeColorInput();
 }
 
 function buildLegend() {
@@ -1220,6 +1281,8 @@ function shouldLockPixel(zoneId) {
 }
 
 function redrawMatrix() {
+    buildSelects();
+
     document.getElementById('matrix_title').textContent =
         activeTab === 'zones' ? 'Матрица' :
         activeTab === 'status' ? 'Матрица' :
@@ -1344,9 +1407,6 @@ function setServiceOpen(open) {
 
 document.getElementById('service_open_btn').addEventListener('click', () => setServiceOpen(true));
 document.getElementById('service_close_btn').addEventListener('click', () => setServiceOpen(false));
-document.getElementById('service_backdrop').addEventListener('click', e => {
-    if (e.target.id === 'service_backdrop') setServiceOpen(false);
-});
 
 document.querySelectorAll('[data-service]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1476,6 +1536,13 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
 });
 
 document.getElementById('clear_zone_btn').addEventListener('click', () => {
+    if (zonePixelCount(activeZoneId) === 0) return;
+    if (isPortZone(activeZoneId)) {
+        const message = activeZoneId === '1'
+            ? 'Очистить зону Порт 1? Data1/Data2 продолжат работать, но на матрице не останется области для индикации ожидания, зарядки и ошибки.'
+            : `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт сейчас в резерве, но его разметка будет удалена.`;
+        if (!confirm(message)) return;
+    }
     Object.keys(hardwareZonesMap).forEach(key => {
         if (hardwareZonesMap[key] === activeZoneId) delete hardwareZonesMap[key];
     });
@@ -1710,7 +1777,7 @@ async function saveNetworkConfig() {
             body,
         });
         if (!res.ok) throw new Error(await res.text());
-        setNetworkMessage('Настройки сети сохранены. Нажмите «Применить» для переподключения.');
+        setNetworkMessage('Настройки сети сохранены. Нажмите «Применить подключение», чтобы переподключиться.');
         await loadNetworkStatus();
     } catch (err) {
         setNetworkMessage(`Не удалось сохранить сеть: ${err.message}`, true);

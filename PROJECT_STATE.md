@@ -45,6 +45,8 @@ LED outputs:
 - Status priority: `error > charging > waiting`.
 - Port zones must follow real runtime status.
 - Port zone preview/custom UI must not hide runtime error indication.
+- First-boot matrix defaults currently map all pixels to Port1, so Data1/Data2
+  status indication is visible before manual zone setup.
 
 ## Fixed Zone Model
 
@@ -167,15 +169,24 @@ Edit/preview mode:
   - legacy `/set_mode`, `/save_config`, and `/set_logo_anim` endpoints were removed;
   - `ledMode`/hardware custom preview timeout was removed;
   - diagnostics now reports neutral `runtimeMode: "runtime"` and port statuses separately.
+- UI clarity polish added:
+  - unmarked free zones remain visible in the dropdown but are disabled with a
+    `not marked` label;
+  - UI warns when Port1 has no mapped pixels;
+  - clearing Port1 asks for explicit confirmation;
+  - service menu is a centered modal on desktop and full-screen panel on mobile;
+  - service menu closes only through the Close button;
+  - network and diagnostics action labels were clarified.
+  - local build and manual desktop/mobile UI check passed after this stage.
 
 ## Currently In Work
 
-Current focus: verify runtime cleanup build and UI behavior on hardware.
+Current focus: topology model audit before implementation.
 
 Known active review topics:
 
-- Verify that UI no longer depends on removed legacy endpoints.
-- Verify runtime error indication still follows Data inputs through `status_mapper`.
+- Audit current topology mapping and compare with `proj1`.
+- Define a clear topology model and MVP implementation plan.
 
 ## Known UI Issues
 
@@ -184,12 +195,13 @@ Known active review topics:
   - static mode fills the selected free zone;
   - custom drawing uses the selected color as a brush;
   - clear drawing clears only the selected free zone custom layer.
-- Matrix Zones now need continued UX testing for overview/edit mode on desktop
-  and touch devices.
+- Matrix Zones now warn if Port1 is not mapped, because Data1/Data2 can work
+  while no pixels are available for status indication.
 - Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
 - Free zone storage validates current compile-time matrix size. Future runtime matrix resize still needs migration/reset UX.
 - Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
-- Service menu build and manual desktop/mobile UI check passed.
+- Service menu currently uses a centered modal on desktop and a full-screen panel
+  on mobile.
 
 ## Backlog
 
