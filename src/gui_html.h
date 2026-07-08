@@ -239,6 +239,29 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             background: #eaf8ef;
         }
 
+        .advanced-block {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fbfcff;
+            padding: 10px 12px;
+        }
+
+        .advanced-block summary {
+            cursor: pointer;
+            font-weight: 750;
+            color: var(--text);
+            list-style-position: inside;
+        }
+
+        .advanced-block[open] summary {
+            margin-bottom: 10px;
+        }
+
+        .advanced-body {
+            display: grid;
+            gap: 10px;
+        }
+
         .side-stack {
             display: flex;
             flex-direction: column;
@@ -565,17 +588,22 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <label>Легенда</label>
                     <div class="legend" id="zone_legend"></div>
                     <div class="notice" id="zones_mode_notice">Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.</div>
-                    <div>
-                        <label for="topology_select">Топология LED</label>
-                        <select id="topology_select"></select>
-                    </div>
-                    <div class="status-line" id="topology_summary"></div>
-                    <div class="notice">Смена топологии меняет физический порядок вывода zoneMap и слоев. Если матрица светится не в той области, выберите другой вариант.</div>
-                    <div class="topology-preview" id="topology_preview" aria-label="Порядок LED"></div>
-                    <div class="btn-row">
-                        <button class="btn primary" id="save_topology_btn">Сохранить топологию</button>
-                    </div>
-                    <div class="hint" id="topology_message"></div>
+                    <details class="advanced-block" id="matrix_settings_block">
+                        <summary>Настройки матрицы</summary>
+                        <div class="advanced-body">
+                            <div>
+                                <label for="topology_select">Топология LED</label>
+                                <select id="topology_select"></select>
+                            </div>
+                            <div class="status-line" id="topology_summary"></div>
+                            <div class="notice">Смена топологии меняет физический порядок вывода zoneMap и слоев. Если матрица светится не в той области, выберите другой вариант.</div>
+                            <div class="topology-preview" id="topology_preview" aria-label="Порядок LED"></div>
+                            <div class="btn-row">
+                                <button class="btn primary" id="save_topology_btn">Сохранить топологию</button>
+                            </div>
+                            <div class="hint" id="topology_message"></div>
+                        </div>
+                    </details>
                     <div class="btn-row">
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
@@ -640,7 +668,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <input type="color" id="free_color" value="#ffffff">
                         </div>
                         <div>
-                            <label for="free_brightness">Яркость свободных зон</label>
+                            <label for="free_brightness">Яркость выбранной свободной зоны</label>
                             <input type="range" id="free_brightness" min="1" max="255" value="100">
                         </div>
                     </div>

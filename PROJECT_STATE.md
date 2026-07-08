@@ -195,6 +195,11 @@ Edit/preview mode:
   - service menu closes only through the Close button;
   - network and diagnostics action labels were clarified.
   - local build and manual desktop/mobile UI check passed after this stage.
+- UI clarity polish follow-up:
+  - topology controls stay in `Matrix Zones`, but are hidden inside the
+    `Matrix settings` expandable block so the main zone editor stays focused;
+  - free-zone brightness is labeled as brightness for the selected free zone;
+  - hardware live preview remains intentionally disabled; preview is browser-side.
 - Topology selector MVP added:
   - UI exposes the four existing topology codes `0..3`;
   - topology is saved through `/save_topology` in the existing matrix config
