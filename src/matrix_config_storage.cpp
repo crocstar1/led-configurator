@@ -5,24 +5,24 @@
 #include "zone_model.h"
 
 static constexpr const char *NVS_NAMESPACE = "led_settings";
-static constexpr const char *KEY_VERSIONED_CONFIG = "matrix_v1";
+static constexpr const char *KEY_MATRIX_CONFIG = "matrix_cfg";
 static constexpr const char *KEY_FREE_ZONES = "free_zones_v1";
-static constexpr const char *KEY_LEGACY_ZONE_MAP = "zone_map";
-static constexpr const char *KEY_LEGACY_CONFIG = "zone_cfg";
 static constexpr const char *KEY_LAYER_WAIT = "layer_wait";
 static constexpr const char *KEY_LAYER_CHARGE = "layer_chg";
 static constexpr const char *KEY_LAYER_ERROR = "layer_err";
 
-static constexpr uint32_t MATRIX_CONFIG_MAGIC = 0x31505355UL; // "USP1"
+static constexpr uint32_t MATRIX_CONFIG_MAGIC = 0x314D444CUL; // "LDM1"
 static constexpr uint16_t MATRIX_CONFIG_VERSION = 1;
 static constexpr uint32_t FREE_ZONE_CONFIG_MAGIC = 0x315A5246UL; // "FRZ1"
 static constexpr uint16_t FREE_ZONE_CONFIG_VERSION = 1;
 static constexpr uint8_t MAX_ZONE_ID = ZONE_ID_MAX;
 
-struct StoredMatrixConfigV1 {
+struct StoredMatrixConfig {
     uint32_t magic;
     uint16_t version;
     uint16_t size;
+    uint16_t matrixX;
+    uint16_t matrixY;
     MatrixConfig config;
     uint8_t zones[NUM_IC_CHIPS];
 };
@@ -47,23 +47,6 @@ static bool is_valid_hex_color(const String &value) {
         }
     }
     return true;
-}
-
-static void parse_hex_color_bytes(const String &hex, uint8_t *target) {
-    if (target == nullptr || !is_valid_hex_color(hex)) {
-        return;
-    }
-
-    for (int channel = 0; channel < 3; channel++) {
-        char buf[3] = {hex[1 + channel * 2], hex[2 + channel * 2], '\0'};
-        target[channel] = (uint8_t)strtoul(buf, nullptr, 16);
-    }
-}
-
-static String rgb_to_hex_string(const uint8_t *rgb) {
-    char buf[8];
-    snprintf(buf, sizeof(buf), "#%02x%02x%02x", rgb[0], rgb[1], rgb[2]);
-    return String(buf);
 }
 
 static const char *status_layer_key(const char *status) {
@@ -146,9 +129,7 @@ void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zon
     memset(&config, 0, sizeof(config));
 
     config.topology = 0;
-    config.logo_anim = 1;
     config.bright_ports = 120;
-    config.bright_logo = 100;
 
     config.color_wait[0] = 0;
     config.color_wait[1] = 255;
@@ -161,27 +142,9 @@ void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zon
     config.color_error[0] = 255;
     config.color_error[1] = 0;
     config.color_error[2] = 0;
-
-    config.color_logo[0] = 255;
-    config.color_logo[1] = 255;
-    config.color_logo[2] = 255;
-
-    config.is_dhcp = 1;
-    config.static_ip[0] = 192;
-    config.static_ip[1] = 168;
-    config.static_ip[2] = 1;
-    config.static_ip[3] = 150;
-    config.static_mask[0] = 255;
-    config.static_mask[1] = 255;
-    config.static_mask[2] = 255;
-    config.static_mask[3] = 0;
-    config.static_gw[0] = 192;
-    config.static_gw[1] = 168;
-    config.static_gw[2] = 1;
-    config.static_gw[3] = 1;
 }
 
-void matrix_config_set_free_zone_defaults(const MatrixConfig &config, FreeZoneConfig *freeZones, size_t freeZoneCount) {
+void matrix_config_set_free_zone_defaults(FreeZoneConfig *freeZones, size_t freeZoneCount) {
     if (freeZones == nullptr || freeZoneCount != FREE_ZONE_COUNT) {
         return;
     }
@@ -192,14 +155,11 @@ void matrix_config_set_free_zone_defaults(const MatrixConfig &config, FreeZoneCo
         freeZones[i].zoneId = zoneId;
         freeZones[i].enabled = 1;
         freeZones[i].mode = metadata ? metadata->defaultMode : FREE_ZONE_STATIC;
-        freeZones[i].brightness = config.bright_logo > 0 ? config.bright_logo : 100;
+        freeZones[i].brightness = 100;
         freeZones[i].staticColor[0] = 255;
         freeZones[i].staticColor[1] = 255;
         freeZones[i].staticColor[2] = 255;
     }
-
-    freeZones[free_zone_index(ZONE_ID_LOGO)].mode = (config.logo_anim == 1) ? FREE_ZONE_RAINBOW : FREE_ZONE_STATIC;
-    memcpy(freeZones[free_zone_index(ZONE_ID_LOGO)].staticColor, config.color_logo, 3);
 
     freeZones[free_zone_index(ZONE_ID_QR)].staticColor[0] = 52;
     freeZones[free_zone_index(ZONE_ID_QR)].staticColor[1] = 199;
@@ -223,29 +183,23 @@ bool matrix_config_validate(const MatrixConfig &config, const uint8_t *zones, si
         return false;
     }
 
-    if (config.logo_anim > 1) {
-        return false;
-    }
-
-    if (config.bright_ports == 0 || config.bright_logo == 0) {
-        return false;
-    }
-
-    if (config.is_dhcp > 1) {
+    if (config.bright_ports == 0) {
         return false;
     }
 
     return true;
 }
 
-static bool load_versioned_config(Preferences &preferences, MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
-    StoredMatrixConfigV1 stored = {};
-    const size_t bytesRead = preferences.getBytes(KEY_VERSIONED_CONFIG, &stored, sizeof(stored));
+static bool load_current_config(Preferences &preferences, MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
+    StoredMatrixConfig stored = {};
+    const size_t bytesRead = preferences.getBytes(KEY_MATRIX_CONFIG, &stored, sizeof(stored));
 
     if (bytesRead != sizeof(stored) ||
         stored.magic != MATRIX_CONFIG_MAGIC ||
         stored.version != MATRIX_CONFIG_VERSION ||
-        stored.size != sizeof(stored)) {
+        stored.size != sizeof(stored) ||
+        stored.matrixX != MATRIX_X ||
+        stored.matrixY != VIRTUAL_Y) {
         return false;
     }
 
@@ -258,26 +212,6 @@ static bool load_versioned_config(Preferences &preferences, MatrixConfig &config
     return true;
 }
 
-static bool load_legacy_config(Preferences &preferences, MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
-    MatrixConfig legacyConfig = {};
-    uint8_t legacyZones[NUM_IC_CHIPS] = {};
-
-    const size_t mapLen = preferences.getBytes(KEY_LEGACY_ZONE_MAP, legacyZones, sizeof(legacyZones));
-    const size_t cfgLen = preferences.getBytes(KEY_LEGACY_CONFIG, &legacyConfig, sizeof(legacyConfig));
-
-    if (mapLen != sizeof(legacyZones) || cfgLen != sizeof(legacyConfig)) {
-        return false;
-    }
-
-    if (!matrix_config_validate(legacyConfig, legacyZones, sizeof(legacyZones))) {
-        return false;
-    }
-
-    config = legacyConfig;
-    memcpy(zones, legacyZones, zoneCount);
-    return true;
-}
-
 bool matrix_config_load(MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
     if (zones == nullptr || zoneCount != NUM_IC_CHIPS) {
         matrix_config_set_defaults(config, zones, zoneCount);
@@ -286,8 +220,7 @@ bool matrix_config_load(MatrixConfig &config, uint8_t *zones, size_t zoneCount) 
 
     Preferences preferences;
     preferences.begin(NVS_NAMESPACE, true);
-    const bool loaded = load_versioned_config(preferences, config, zones, zoneCount) ||
-                        load_legacy_config(preferences, config, zones, zoneCount);
+    const bool loaded = load_current_config(preferences, config, zones, zoneCount);
     preferences.end();
 
     if (!loaded) {
@@ -302,22 +235,24 @@ bool matrix_config_save(const MatrixConfig &config, const uint8_t *zones, size_t
         return false;
     }
 
-    StoredMatrixConfigV1 stored = {};
+    StoredMatrixConfig stored = {};
     stored.magic = MATRIX_CONFIG_MAGIC;
     stored.version = MATRIX_CONFIG_VERSION;
     stored.size = sizeof(stored);
+    stored.matrixX = MATRIX_X;
+    stored.matrixY = VIRTUAL_Y;
     stored.config = config;
     memcpy(stored.zones, zones, sizeof(stored.zones));
 
     Preferences preferences;
     preferences.begin(NVS_NAMESPACE, false);
-    const size_t bytesWritten = preferences.putBytes(KEY_VERSIONED_CONFIG, &stored, sizeof(stored));
+    const size_t bytesWritten = preferences.putBytes(KEY_MATRIX_CONFIG, &stored, sizeof(stored));
     preferences.end();
 
     return bytesWritten == sizeof(stored);
 }
 
-bool matrix_config_load_free_zones(const MatrixConfig &config, FreeZoneConfig *freeZones, size_t freeZoneCount) {
+bool matrix_config_load_free_zones(FreeZoneConfig *freeZones, size_t freeZoneCount) {
     if (freeZones == nullptr || freeZoneCount != FREE_ZONE_COUNT) {
         return false;
     }
@@ -336,7 +271,7 @@ bool matrix_config_load_free_zones(const MatrixConfig &config, FreeZoneConfig *f
         stored.matrixX != MATRIX_X ||
         stored.matrixY != VIRTUAL_Y ||
         !free_zone_configs_are_valid(stored.zones, FREE_ZONE_COUNT)) {
-        matrix_config_set_free_zone_defaults(config, freeZones, freeZoneCount);
+        matrix_config_set_free_zone_defaults(freeZones, freeZoneCount);
         return false;
     }
 

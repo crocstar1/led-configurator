@@ -382,7 +382,7 @@ void led_setup() {
 
 void led_load_config_from_flash() {
     matrix_config_load(cfg, zoneMap, sizeof(zoneMap));
-    matrix_config_load_free_zones(cfg, freeZoneConfigs, FREE_ZONE_COUNT);
+    matrix_config_load_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
     led_reload_status_layers_unlocked();
     led_reload_free_zone_layers_unlocked();
 
@@ -406,6 +406,21 @@ void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId) {
         if (index != -1) {
             zoneMap[index] = zoneId;
         }
+        xSemaphoreGive(ledMutex);
+    }
+}
+
+void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount) {
+    if (zones == nullptr || zoneCount != NUM_IC_CHIPS) return;
+
+    if (ledMutex == NULL) {
+        memcpy(zoneMap, zones, sizeof(zoneMap));
+        return;
+    }
+
+    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
+        memcpy(zoneMap, zones, sizeof(zoneMap));
+        led_refresh_internal();
         xSemaphoreGive(ledMutex);
     }
 }

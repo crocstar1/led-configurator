@@ -110,10 +110,11 @@ Edit/preview mode:
 - `/diagnostics` endpoint added.
 - LED primary output moved to GPIO22.
 - Legacy EVSE/integration code removed from this project scope.
-- NVS `matrix_v1` storage added.
+- Clean NVS matrix storage added in `led_settings` / `matrix_cfg`.
 - Backend endpoints synchronized with the UI:
   - `/save_zones`
   - `/set_bright`
+  - `/save_topology`
   - `/save_status_colors`
   - `/save_free_zone`
 - `/get_config` extended with `layers`, `hardware_map`, `zones`, `matrix`, and
@@ -178,15 +179,38 @@ Edit/preview mode:
   - service menu closes only through the Close button;
   - network and diagnostics action labels were clarified.
   - local build and manual desktop/mobile UI check passed after this stage.
+- Topology selector MVP added:
+  - UI exposes the four existing topology codes `0..3`;
+  - topology is saved through `/save_topology` in the existing matrix config
+    storage;
+  - the renderer continues to use `getLEDIndex()` and the selected topology;
+  - browser-only numbering preview shows physical LED order for the selected
+    topology;
+  - no hardware test pattern or hardware preview endpoint was added.
+  - local build passed, save/reload topology works, and all four browser
+    preview variants were checked.
+- Matrix storage cleanup added:
+  - legacy matrix fields were removed from `MatrixConfig`;
+  - old `zone_map` / `zone_cfg` fallback loaders were removed;
+  - current matrix storage uses one clean blob with magic/version/size and
+    matrix dimension validation;
+  - old, missing, or invalid matrix config now falls back to defaults.
+- Runtime indication safety added:
+  - active port zones cannot be saved with zero pixels;
+  - UI blocks clearing the last required Port1 pixel;
+  - backend `/save_zones` validates active port zone presence before applying
+    a new zone map.
 
 ## Currently In Work
 
-Current focus: topology model audit before implementation.
+Current focus: build/manual verification of clean matrix storage cleanup and
+active Port1 zone safety.
 
 Known active review topics:
 
-- Audit current topology mapping and compare with `proj1`.
-- Define a clear topology model and MVP implementation plan.
+- Verify first-boot defaults after incompatible old matrix config is ignored.
+- Verify save/reload for zones, topology, status colors, and free zones.
+- Verify Port1 cannot be fully cleared while `activePortCount = 1`.
 
 ## Known UI Issues
 
@@ -202,6 +226,8 @@ Known active review topics:
 - Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
 - Service menu currently uses a centered modal on desktop and a full-screen panel
   on mobile.
+- Old matrix NVS keys are intentionally not migrated. During development,
+  incompatible matrix config is reset to defaults.
 
 ## Backlog
 
@@ -220,7 +246,11 @@ Known active review topics:
 - Full WiFi manager polish beyond current MVP.
 - Multi-matrix outputs on LED1..LED4.
 - Runtime configurable matrix dimensions.
-- Topology selector UX and validation.
+- Topology follow-up:
+  - hardware-safe test pattern after real matrix hardware is available;
+  - clearer future topology model with start corner, direction, serpentine,
+    horizontal/vertical orientation, and color order separated from topology;
+  - optional remap/reset UX if topology or matrix size changes.
 - Optional per-port status color override.
 - Auth follow-up:
   - replace plaintext NVS password storage with stronger hashing or another

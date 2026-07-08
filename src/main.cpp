@@ -172,17 +172,6 @@ FreeZoneMode parseFreeZoneMode(String mode, FreeZoneMode fallback) {
     return fallback;
 }
 
-void syncLogoFreeZoneFromLegacyConfig() {
-    const int index = free_zone_index(ZONE_ID_LOGO);
-    if (index < 0) return;
-
-    freeZoneConfigs[index].zoneId = ZONE_ID_LOGO;
-    freeZoneConfigs[index].enabled = 1;
-    freeZoneConfigs[index].mode = (cfg.logo_anim == 1) ? FREE_ZONE_RAINBOW : FREE_ZONE_STATIC;
-    freeZoneConfigs[index].brightness = cfg.bright_logo;
-    memcpy(freeZoneConfigs[index].staticColor, cfg.color_logo, 3);
-}
-
 void appendHardwareMapJson(String &json) {
     json += ",\"hardware_map\":{";
     bool first = true;
@@ -295,7 +284,36 @@ void appendZoneMetadataJson(String &json) {
     json += "]";
 }
 
-void handleRoot() { 
+bool zoneMapHasRequiredActivePortZones(const uint8_t *zones, size_t zoneCount) {
+    if (zones == nullptr || zoneCount != NUM_IC_CHIPS) {
+        return false;
+    }
+
+    const StatusMapperState &status = status_mapper_get_state();
+    const uint8_t activePortCount = status.activePortCount > USP1_MAX_PORT_COUNT
+        ? USP1_MAX_PORT_COUNT
+        : status.activePortCount;
+
+    for (uint8_t portIndex = 0; portIndex < activePortCount; portIndex++) {
+        const uint8_t requiredZoneId = (uint8_t)(ZONE_ID_PORT1 + portIndex);
+        bool found = false;
+
+        for (size_t i = 0; i < zoneCount; i++) {
+            if (zones[i] == requiredZoneId) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void handleRoot() {
     if (!requireHttpAuth()) return;
     server.send_P(200, "text/html", PAGE_MAIN); 
 }
@@ -313,28 +331,14 @@ void handleGetConfig() {
     json.reserve(7600);
     json += "{\"topo\":";
     json += String((int)cfg.topology);
-    json += ",\"l_anim\":";
-    json += String((int)cfg.logo_anim);
     json += ",\"b_ports\":";
     json += String((int)cfg.bright_ports);
-    json += ",\"b_logo\":";
-    json += String((int)cfg.bright_logo);
     json += ",\"c_wait\":\"";
     json += rgbToHex(cfg.color_wait);
     json += "\",\"c_charge\":\"";
     json += rgbToHex(cfg.color_charge);
     json += "\",\"c_error\":\"";
     json += rgbToHex(cfg.color_error);
-    json += "\",\"c_logo\":\"";
-    json += rgbToHex(cfg.color_logo);
-    json += "\",\"dhcp\":";
-    json += String((int)cfg.is_dhcp);
-    json += ",\"ip\":\"";
-    json += String((int)cfg.static_ip[0]) + "." + String((int)cfg.static_ip[1]) + "." + String((int)cfg.static_ip[2]) + "." + String((int)cfg.static_ip[3]);
-    json += "\",\"mask\":\"";
-    json += String((int)cfg.static_mask[0]) + "." + String((int)cfg.static_mask[1]) + "." + String((int)cfg.static_mask[2]) + "." + String((int)cfg.static_mask[3]);
-    json += "\",\"gw\":\"";
-    json += String((int)cfg.static_gw[0]) + "." + String((int)cfg.static_gw[1]) + "." + String((int)cfg.static_gw[2]) + "." + String((int)cfg.static_gw[3]);
     json += "\",\"matrix\":{\"cols\":";
     json += String((int)MATRIX_X);
     json += ",\"rows\":";
@@ -363,7 +367,7 @@ void handleSaveZones() {
         return;
     }
 
-    led_clear_all_safe();
+    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
 
     int pos = 0;
     while (true) {
@@ -404,12 +408,53 @@ void handleSaveZones() {
         int zoneId = value.toInt();
 
         if (x >= 0 && x < MATRIX_X && y >= 0 && y < VIRTUAL_Y && zoneId >= 0 && zone_id_is_valid((uint8_t)zoneId)) {
-            led_set_pixel_zone_safe(x, y, (uint8_t)zoneId);
+            const int index = getLEDIndex(x, y);
+            if (index >= 0 && index < NUM_IC_CHIPS) {
+                nextZoneMap[index] = (uint8_t)zoneId;
+            }
         }
     }
 
-    matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    if (!zoneMapHasRequiredActivePortZones(nextZoneMap, sizeof(nextZoneMap))) {
+        server.send(400, "text/plain", "ACTIVE_PORT_ZONE_EMPTY");
+        return;
+    }
+
+    if (!matrix_config_save(cfg, nextZoneMap, sizeof(nextZoneMap))) {
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+
+    led_replace_zone_map_safe(nextZoneMap, sizeof(nextZoneMap));
     led_reload_free_zone_layers_safe();
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSaveTopology() {
+    if (!requireHttpAuth()) return;
+
+    int topology = -1;
+    if (server.hasArg("topology")) {
+        topology = server.arg("topology").toInt();
+    } else {
+        const String body = server.arg("plain");
+        topology = extractJsonIntField(body, "topology", -1);
+    }
+
+    if (topology < 0 || topology > 3) {
+        server.send(400, "text/plain", "BAD_TOPOLOGY");
+        return;
+    }
+
+    cfg.topology = (uint8_t)topology;
+    if (!matrix_config_save(cfg, zoneMap, sizeof(zoneMap))) {
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+
+    led_reload_status_layers_safe();
+    led_reload_free_zone_layers_safe();
+    led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
 
@@ -426,16 +471,12 @@ void handleSetBright() {
 
     if (type == "ports") {
         cfg.bright_ports = value;
-    } else if (type == "logo") {
-        cfg.bright_logo = value;
-        syncLogoFreeZoneFromLegacyConfig();
     } else {
         server.send(400, "text/plain", "BAD_TYPE");
         return;
     }
 
     matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
-    matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
     led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
@@ -504,13 +545,6 @@ void handleSaveFreeZone() {
     const String staticColor = extractJsonStringField(body, "staticColor");
     if (staticColor.length() == 7) {
         parseHexColor(staticColor, freeZone.staticColor);
-    }
-
-    if (freeZone.zoneId == ZONE_ID_LOGO) {
-        cfg.logo_anim = (freeZone.mode == FREE_ZONE_RAINBOW) ? 1 : 0;
-        cfg.bright_logo = freeZone.brightness;
-        memcpy(cfg.color_logo, freeZone.staticColor, 3);
-        matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
     }
 
     if (!matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT)) {
@@ -810,6 +844,7 @@ void setup() {
     server.on("/get_size", handleGetMatrixSize);
     server.on("/get_config", handleGetConfig);
     server.on("/save_zones", HTTP_POST, handleSaveZones);
+    server.on("/save_topology", HTTP_POST, handleSaveTopology);
     server.on("/set_bright", handleSetBright);
     server.on("/save_status_colors", HTTP_POST, handleSaveStatusColors);
     server.on("/save_free_zone", HTTP_POST, handleSaveFreeZone);

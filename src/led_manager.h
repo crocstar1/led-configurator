@@ -18,22 +18,12 @@
 // Stored matrix rendering configuration.
 struct MatrixConfig {
     uint8_t topology;        // 0 - Справа-Снизу, 1 - Слева-Снизу, 2 - Слева-Сверху, 3 - Справа-Сверху
-    uint8_t logo_anim;       // 0 - Статичный цвет, 1 - Бегущая радуга FastLED
-    
     uint8_t bright_ports;    // Яркость зон зарядок (1-255)
-    uint8_t bright_logo;     // Яркость зоны логотипа (1-255)
     
     // Global RGB colors for port statuses.
     uint8_t color_wait[3];   // RGB для статуса "Ожидание"
     uint8_t color_charge[3]; // RGB для статуса "Зарядка"
     uint8_t color_error[3];  // RGB для статуса "Авария"
-    uint8_t color_logo[3];   // RGB для статичного цвета Логотипа
-    
-    // Legacy matrix config fields kept until MatrixConfigV2 migration.
-    uint8_t is_dhcp;         // 1 - DHCP, 0 - Static IP
-    uint8_t static_ip[4];    // Массив байт IP
-    uint8_t static_mask[4];  // Массив байт Маски
-    uint8_t static_gw[4];    // Массив байт Шлюза
 };
 
 struct FreeZoneConfig {
@@ -57,6 +47,7 @@ void led_clear_all_safe();
 void led_load_config_from_flash(); 
 void led_refresh_safe();
 void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId);
+void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount);
 void led_reload_status_layers_safe();
 void led_reload_free_zone_layers_safe();
 int getLEDIndex(int x, int virtualY);

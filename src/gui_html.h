@@ -201,6 +201,44 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             background-size: 10px 10px;
         }
 
+        .topology-preview {
+            display: grid;
+            gap: 4px;
+            width: max-content;
+            max-width: 100%;
+            overflow: auto;
+            padding: 8px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #fbfcff;
+        }
+
+        .topology-cell {
+            width: 30px;
+            height: 26px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #ffffff;
+            color: var(--text);
+            font-size: 10px;
+            font-weight: 750;
+            line-height: 1;
+        }
+
+        .topology-cell.first {
+            border-color: var(--blue);
+            background: var(--blue);
+            color: #ffffff;
+        }
+
+        .topology-cell.last {
+            border-color: var(--green);
+            background: #eaf8ef;
+        }
+
         .side-stack {
             display: flex;
             flex-direction: column;
@@ -468,6 +506,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         @media (max-width: 420px) {
             .pixel { width: 24px; height: 24px; border-radius: 6px; }
+            .topology-cell { width: 24px; height: 22px; font-size: 9px; }
             .matrix { gap: 4px; }
             .grid-2 { grid-template-columns: 1fr; }
             .runtime-pill { display: none; }
@@ -526,6 +565,17 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <label>Легенда</label>
                     <div class="legend" id="zone_legend"></div>
                     <div class="notice" id="zones_mode_notice">Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.</div>
+                    <div>
+                        <label for="topology_select">Топология LED</label>
+                        <select id="topology_select"></select>
+                    </div>
+                    <div class="status-line" id="topology_summary"></div>
+                    <div class="notice">Смена топологии меняет физический порядок вывода zoneMap и слоев. Если матрица светится не в той области, выберите другой вариант.</div>
+                    <div class="topology-preview" id="topology_preview" aria-label="Порядок LED"></div>
+                    <div class="btn-row">
+                        <button class="btn primary" id="save_topology_btn">Сохранить топологию</button>
+                    </div>
+                    <div class="hint" id="topology_message"></div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
@@ -821,6 +871,13 @@ const DEFAULT_FREE_STATIC_COLORS = {
     '8': '#af52de',
 };
 
+const TOPOLOGY_OPTIONS = [
+    { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'LED0 справа снизу, далее змейкой по столбцам.' },
+    { value: 1, key: 'vert_up', label: 'Вертикальная · старт слева снизу', hint: 'LED0 слева снизу, далее змейкой по столбцам.' },
+    { value: 2, key: 'horiz_right', label: 'Горизонтальная · старт слева сверху', hint: 'LED0 слева сверху, далее змейкой по строкам.' },
+    { value: 3, key: 'horiz_left', label: 'Горизонтальная · старт справа сверху', hint: 'LED0 справа сверху, далее змейкой по строкам.' },
+];
+
 let COLS = 12;
 let ROWS = 8;
 let activeTab = 'zones';
@@ -846,6 +903,8 @@ let rainbowTick = 0;
 let backendAvailable = false;
 let mockMode = false;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
+let pendingTopology = 0;
+let activePortCount = 1;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -892,13 +951,10 @@ function buildDefaultPortMap(cols = 12, rows = 8) {
 function buildMockConfig() {
     return {
         topo: 0,
-        l_anim: 0,
         b_ports: 120,
-        b_logo: 100,
         c_wait: '#34c759',
         c_charge: '#0055ff',
         c_error: '#ff3b30',
-        c_logo: '#ffffff',
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
         hardware_map: buildDefaultPortMap(12, 8),
         layers: { wait: {}, charge: {}, err: {} },
@@ -1075,6 +1131,7 @@ function applyConfig(cfg) {
         total: Number(matrix.total) || COLS * ROWS,
         topology: Number(matrix.topology ?? cfg.topo ?? 0),
     };
+    pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
@@ -1086,8 +1143,6 @@ function applyConfig(cfg) {
     zoneMeta = Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : [...DEFAULT_ZONES];
     document.getElementById('ports_brightness').value = cfg.b_ports || 120;
     document.getElementById('ports_brightness_label').textContent = cfg.b_ports || 120;
-    document.getElementById('free_brightness').value = cfg.b_logo || 100;
-    freeStaticColors['5'] = cfg.c_logo || freeStaticColors['5'] || '#ffffff';
     zoneMeta.filter(z => z.type === 'free').forEach(z => { freeModes[String(z.id)] = z.mode || freeModes[String(z.id)] || 'static'; });
 
     if (Array.isArray(cfg.free_zones)) {
@@ -1100,8 +1155,6 @@ function applyConfig(cfg) {
             freeBrightness[zoneId] = Number(fz.brightness) || freeBrightness[zoneId] || 100;
             freeCustomLayers[zoneId] = sanitizeLayerForSize(fz.customLayer || freeCustomLayers[zoneId] || {});
         });
-    } else {
-        freeBrightness['5'] = cfg.b_logo || freeBrightness['5'] || 100;
     }
 }
 
@@ -1142,8 +1195,110 @@ function zoneHasPixels(zoneId) {
     return zonePixelCount(zoneId) > 0;
 }
 
+function isRequiredActivePortZone(zoneId) {
+    const z = zoneById(zoneId);
+    if (!z || z.type !== 'port' || z.reserved || !z.enabled) return false;
+    const portNumber = Number(z.linked_port || z.linkedPort || z.id);
+    const count = Number.isFinite(Number(activePortCount)) ? Number(activePortCount) : 1;
+    return portNumber >= 1 && portNumber <= count;
+}
+
+function activePortZoneErrorMessage(zoneId) {
+    return `${zoneDisplayName(zoneId)} должен иметь хотя бы один пиксель для отображения статуса.`;
+}
+
+function validateActivePortZones(map = hardwareZonesMap) {
+    const count = Number.isFinite(Number(activePortCount)) ? Number(activePortCount) : 1;
+    for (let port = 1; port <= count; port++) {
+        const zoneId = String(port);
+        if (zonePixelCountInMap(map, zoneId) === 0) {
+            return activePortZoneErrorMessage(zoneId);
+        }
+    }
+    return '';
+}
+
+function zonePixelCountInMap(map, zoneId) {
+    const target = String(zoneId);
+    return Object.values(map || {}).filter(value => String(value) === target).length;
+}
+
+function showEditSafetyMessage(message) {
+    document.getElementById('edit_state_line').textContent = message;
+}
+
 function activeFreeZoneIsMapped() {
     return isFreeZone(activeFreeZone) && zoneHasPixels(activeFreeZone);
+}
+
+function topologyOption(value) {
+    return TOPOLOGY_OPTIONS.find(item => item.value === Number(value)) || TOPOLOGY_OPTIONS[0];
+}
+
+function ledIndexForTopology(x, y, topology) {
+    let tx = x;
+    let ty = y;
+
+    switch (Number(topology)) {
+        case 0:
+            tx = (COLS - 1) - x;
+            return (tx % 2 === 0) ? (tx * ROWS) + ty : (tx * ROWS) + ((ROWS - 1) - ty);
+        case 1:
+            return (tx % 2 === 0) ? (tx * ROWS) + ty : (tx * ROWS) + ((ROWS - 1) - ty);
+        case 2:
+            ty = (ROWS - 1) - y;
+            return (ty % 2 === 0) ? (ty * COLS) + tx : (ty * COLS) + ((COLS - 1) - tx);
+        case 3:
+            tx = (COLS - 1) - x;
+            ty = (ROWS - 1) - y;
+            return (ty % 2 === 0) ? (ty * COLS) + tx : (ty * COLS) + ((COLS - 1) - tx);
+        default:
+            return -1;
+    }
+}
+
+function setTopologyMessage(text, isError = false) {
+    const el = document.getElementById('topology_message');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+function renderTopologyControls() {
+    const select = document.getElementById('topology_select');
+    const preview = document.getElementById('topology_preview');
+    const summary = document.getElementById('topology_summary');
+    if (!select || !preview || !summary) return;
+
+    if (!select.options.length) {
+        TOPOLOGY_OPTIONS.forEach(item => {
+            const option = document.createElement('option');
+            option.value = String(item.value);
+            option.textContent = item.label;
+            select.appendChild(option);
+        });
+    }
+
+    const normalized = Math.max(0, Math.min(3, Number(pendingTopology) || 0));
+    pendingTopology = normalized;
+    select.value = String(normalized);
+    summary.textContent = topologyOption(normalized).hint;
+
+    preview.innerHTML = '';
+    preview.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
+    const total = COLS * ROWS;
+    for (let y = ROWS - 1; y >= 0; y--) {
+        for (let x = 0; x < COLS; x++) {
+            const index = ledIndexForTopology(x, y, normalized);
+            const cell = document.createElement('div');
+            cell.className = 'topology-cell';
+            if (index === 0) cell.classList.add('first');
+            if (index === total - 1) cell.classList.add('last');
+            cell.textContent = String(index);
+            cell.title = `x=${x}, y=${y}, LED=${index}`;
+            preview.appendChild(cell);
+        }
+    }
 }
 
 function buildMatrix() {
@@ -1162,6 +1317,7 @@ function buildMatrix() {
     }
 
     redrawMatrix();
+    renderTopologyControls();
 }
 
 function buildSelects() {
@@ -1346,7 +1502,13 @@ function paintPixel(pixel) {
         if (zoneViewMode !== 'edit') return;
         if (!isEditableZone(activeZoneId)) return;
         if (zoneTool === 'erase') {
-            if (currentZone === activeZoneId) delete hardwareZonesMap[key];
+            if (currentZone === activeZoneId) {
+                if (isRequiredActivePortZone(activeZoneId) && zonePixelCount(activeZoneId) <= 1) {
+                    showEditSafetyMessage(activePortZoneErrorMessage(activeZoneId));
+                    return;
+                }
+                delete hardwareZonesMap[key];
+            }
         } else if (currentZone === '0' || currentZone === activeZoneId) {
             hardwareZonesMap[key] = activeZoneId;
         }
@@ -1517,7 +1679,44 @@ document.querySelectorAll('[data-status]').forEach(btn => {
     });
 });
 
+document.getElementById('topology_select').addEventListener('change', e => {
+    pendingTopology = Number(e.target.value);
+    renderTopologyControls();
+    setTopologyMessage('');
+});
+
+document.getElementById('save_topology_btn').addEventListener('click', async () => {
+    if (!backendAvailable) {
+        matrixConfig.topology = pendingTopology;
+        setTopologyMessage('Контроллер недоступен: топология изменена только в браузере.');
+        return;
+    }
+
+    const body = new URLSearchParams();
+    body.set('topology', String(pendingTopology));
+
+    try {
+        const res = await fetch('/save_topology', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+        });
+        if (!res.ok || (await res.text()) !== 'OK') throw new Error('SAVE_FAILED');
+        matrixConfig.topology = pendingTopology;
+        await loadConfig();
+        setTopologyMessage('Топология сохранена.');
+    } catch (err) {
+        setTopologyMessage('Не удалось сохранить топологию.', true);
+    }
+});
+
 document.getElementById('save_zones_btn').addEventListener('click', async () => {
+    const validationError = validateActivePortZones();
+    if (validationError) {
+        alert(validationError);
+        return;
+    }
+
     if (!backendAvailable) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
         return;
@@ -1529,7 +1728,12 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(hardwareZonesMap)
         });
-        alert(await res.text() === 'OK' ? 'Зоны сохранены во Flash.' : 'Не удалось сохранить зоны.');
+        const text = await res.text();
+        alert(text === 'OK'
+            ? 'Зоны сохранены во Flash.'
+            : text === 'ACTIVE_PORT_ZONE_EMPTY'
+                ? 'Port1 должен иметь хотя бы один пиксель для отображения статуса.'
+                : 'Не удалось сохранить зоны.');
     } catch (err) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
     }
@@ -1537,6 +1741,10 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
 
 document.getElementById('clear_zone_btn').addEventListener('click', () => {
     if (zonePixelCount(activeZoneId) === 0) return;
+    if (isRequiredActivePortZone(activeZoneId)) {
+        alert(activePortZoneErrorMessage(activeZoneId));
+        return;
+    }
     if (isPortZone(activeZoneId)) {
         const message = activeZoneId === '1'
             ? 'Очистить зону Порт 1? Data1/Data2 продолжат работать, но на матрице не останется области для индикации ожидания, зарядки и ошибки.'
@@ -1996,6 +2204,8 @@ function uploadFirmware() {
 
 function renderDiagnostics() {
     if (!diagnostics) return;
+    const reportedActivePorts = Number(diagnostics.activePortCount);
+    activePortCount = Number.isFinite(reportedActivePorts) ? Math.max(0, reportedActivePorts) : 1;
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
