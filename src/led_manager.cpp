@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include "matrix_config_storage.h"
 #include "status_mapper.h"
+#include "usp1_inputs.h"
 #include "zone_model.h"
 
 CRGB leds[NUM_IC_CHIPS]; 
@@ -31,6 +32,51 @@ struct FreeZoneLayerCache {
 };
 
 FreeZoneLayerCache freeZoneLayers[FREE_ZONE_COUNT];
+
+static constexpr uint16_t STARTUP_COLOR_MS = 180;
+static constexpr uint16_t STARTUP_ERROR_POLL_MS = 20;
+
+static bool startup_error_active() {
+    usp1_inputs_update();
+    status_mapper_update(usp1_inputs_get_state());
+
+    const StatusMapperState &state = status_mapper_get_state();
+    const uint8_t activePortCount = state.activePortCount > USP1_MAX_PORT_COUNT
+        ? USP1_MAX_PORT_COUNT
+        : state.activePortCount;
+
+    for (uint8_t i = 0; i < activePortCount; i++) {
+        if (state.statuses[i] == PORT_STATUS_ERROR) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool startup_show_color(const CRGB &color) {
+    if (startup_error_active()) {
+        return false;
+    }
+
+    fill_solid(leds, NUM_IC_CHIPS, color);
+    FastLED.show();
+
+    const unsigned long startedAt = millis();
+    while (millis() - startedAt < STARTUP_COLOR_MS) {
+        delay(STARTUP_ERROR_POLL_MS);
+        if (startup_error_active()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void led_run_startup_animation() {
+    if (!startup_show_color(CRGB::Red)) return;
+    if (!startup_show_color(CRGB::Blue)) return;
+    if (!startup_show_color(CRGB::Green)) return;
+}
 
 // Map logical matrix coordinates to the physical LED chain.
 int getLEDIndex(int x, int virtualY) {
@@ -375,6 +421,7 @@ void led_setup() {
     FastLED.setMaxPowerInVoltsAndMilliamps(MAX_LED_VOLTS, MAX_LED_MILLIAMPS);
     
     led_load_config_from_flash();
+    led_run_startup_animation();
     led_refresh_internal();
 
     xTaskCreatePinnedToCore(ledTaskWorker, "LED_Task", 4096, NULL, 1, NULL, 1);

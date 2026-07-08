@@ -180,6 +180,12 @@ Edit/preview mode:
   - legacy `/set_mode`, `/save_config`, and `/set_logo_anim` endpoints were removed;
   - `ledMode`/hardware custom preview timeout was removed;
   - diagnostics now reports neutral `runtimeMode: "runtime"` and port statuses separately.
+- Startup animation added:
+  - on boot the matrix briefly flashes red, blue, then green;
+  - the animation is skipped or interrupted if any active port has an error
+    input active, then runtime rendering resumes immediately;
+  - the animation does not change saved zones, colors, free zones, topology, or
+    storage.
 - UI clarity polish added:
   - unmarked free zones remain visible in the dropdown but are disabled with a
     `not marked` label;
