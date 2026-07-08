@@ -425,16 +425,6 @@ void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount) {
     }
 }
 
-void led_clear_all_safe() {
-    if (ledMutex == NULL) return;
-    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
-        memset(zoneMap, 0, sizeof(zoneMap));
-        for (int i = 0; i < NUM_IC_CHIPS; i++) leds[i] = CRGB::Black;
-        FastLED.show();
-        xSemaphoreGive(ledMutex);
-    }
-}
-
 void led_reload_status_layers_safe() {
     if (ledMutex == NULL) {
         led_reload_status_layers_unlocked();

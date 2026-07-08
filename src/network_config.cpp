@@ -3,7 +3,7 @@
 #include <Preferences.h>
 
 static constexpr const char *NVS_NAMESPACE = "net_cfg";
-static constexpr const char *DEFAULT_AP_SSID = "NEK_EVSE_LAB";
+static constexpr const char *DEFAULT_AP_SSID = "LED_MATRIX_SETUP";
 static constexpr const char *DEFAULT_AP_PASSWORD = "12345678";
 static constexpr unsigned long STA_CONNECT_TIMEOUT_MS = 12000;
 

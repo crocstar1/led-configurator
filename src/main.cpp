@@ -246,12 +246,26 @@ void appendFreeZoneConfigsJson(String &json) {
 }
 
 void appendZoneMetadataJson(String &json) {
+    const StatusMapperState &status = status_mapper_get_state();
+    const uint8_t activePortCount = status.activePortCount > USP1_MAX_PORT_COUNT
+        ? USP1_MAX_PORT_COUNT
+        : status.activePortCount;
+
     json += ",\"zones\":[";
 
     for (size_t i = 0; i < ZONE_METADATA_COUNT; i++) {
         if (i > 0) json += ",";
 
         const ZoneMetadata &zone = ZONE_METADATA[i];
+        bool enabled = zone.enabled;
+        bool reserved = zone.reserved;
+
+        if (zone.type == ZONE_TYPE_PORT) {
+            const bool activePort = zone.linkedPort >= 0 && zone.linkedPort < activePortCount;
+            enabled = activePort;
+            reserved = !activePort;
+        }
+
         json += "{\"id\":";
         json += String((int)zone.id);
         json += ",\"name\":\"";
@@ -259,9 +273,9 @@ void appendZoneMetadataJson(String &json) {
         json += "\",\"type\":\"";
         json += zone_type_to_string(zone.type);
         json += "\",\"enabled\":";
-        json += (zone.enabled ? "true" : "false");
+        json += (enabled ? "true" : "false");
         json += ",\"reserved\":";
-        json += (zone.reserved ? "true" : "false");
+        json += (reserved ? "true" : "false");
 
         if (zone.type == ZONE_TYPE_PORT) {
             json += ",\"linked_port\":";
@@ -339,7 +353,9 @@ void handleGetConfig() {
     json += rgbToHex(cfg.color_charge);
     json += "\",\"c_error\":\"";
     json += rgbToHex(cfg.color_error);
-    json += "\",\"matrix\":{\"cols\":";
+    json += "\",\"activePortCount\":";
+    json += String((int)status_mapper_get_state().activePortCount);
+    json += ",\"matrix\":{\"cols\":";
     json += String((int)MATRIX_X);
     json += ",\"rows\":";
     json += String((int)VIRTUAL_Y);

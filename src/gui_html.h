@@ -948,6 +948,25 @@ function buildDefaultPortMap(cols = 12, rows = 8) {
     return map;
 }
 
+function clampActivePortCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) ? Math.max(1, Math.min(4, Math.trunc(count))) : 1;
+}
+
+function zonesForActivePortCount(zones, count) {
+    const activeCount = clampActivePortCount(count);
+    return (zones || DEFAULT_ZONES).map(zone => {
+        const copy = { ...zone };
+        if (copy.type !== 'port') return copy;
+
+        const portNumber = Number(copy.linked_port ?? copy.linkedPort ?? copy.id);
+        const active = Number.isFinite(portNumber) && portNumber >= 1 && portNumber <= activeCount;
+        copy.enabled = active;
+        copy.reserved = !active;
+        return copy;
+    });
+}
+
 function buildMockConfig() {
     return {
         topo: 0,
@@ -955,10 +974,11 @@ function buildMockConfig() {
         c_wait: '#34c759',
         c_charge: '#0055ff',
         c_error: '#ff3b30',
+        activePortCount: 1,
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
         hardware_map: buildDefaultPortMap(12, 8),
         layers: { wait: {}, charge: {}, err: {} },
-        zones: [...DEFAULT_ZONES],
+        zones: zonesForActivePortCount(DEFAULT_ZONES, 1),
         free_zones: [
             { zoneId: 5, enabled: true, mode: 'static', staticColor: '#ffffff', brightness: 100, customLayer: {} },
             { zoneId: 6, enabled: true, mode: 'static', staticColor: '#34c759', brightness: 100, customLayer: {} },
@@ -1011,7 +1031,7 @@ function buildMockNetworkStatus() {
         gateway: '192.168.1.1',
         subnet: '255.255.255.0',
         dns: '8.8.8.8',
-        apSsid: 'NEK_EVSE_LAB',
+        apSsid: 'LED_MATRIX_SETUP',
         apIp: '192.168.4.1',
         apClients: 1,
     };
@@ -1096,7 +1116,7 @@ function updateFreeModeControls() {
 
 function updateZoneViewControls() {
     const isOverview = zoneViewMode === 'overview';
-    const port1Missing = !zoneHasPixels('1');
+    const missingActivePortNotice = missingActivePortZoneNotice();
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
@@ -1104,8 +1124,8 @@ function updateZoneViewControls() {
     const baseText = isOverview
         ? 'Обзор: все зоны показаны своими цветами, рисование отключено.'
         : 'Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.';
-    document.getElementById('zones_mode_notice').textContent = port1Missing
-        ? `${baseText} Порт 1 не размечен: Data1/Data2 будут читаться, но индикации негде отображаться.`
+    document.getElementById('zones_mode_notice').textContent = missingActivePortNotice
+        ? `${baseText} ${missingActivePortNotice}`
         : baseText;
 }
 
@@ -1132,6 +1152,7 @@ function applyConfig(cfg) {
         topology: Number(matrix.topology ?? cfg.topo ?? 0),
     };
     pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
+    activePortCount = clampActivePortCount(cfg.activePortCount ?? cfg.active_port_count ?? activePortCount);
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
@@ -1140,7 +1161,10 @@ function applyConfig(cfg) {
     Object.keys(freeCustomLayers).forEach(zoneId => {
         freeCustomLayers[zoneId] = sanitizeLayerForSize(freeCustomLayers[zoneId]);
     });
-    zoneMeta = Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : [...DEFAULT_ZONES];
+    zoneMeta = zonesForActivePortCount(
+        Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
+        activePortCount
+    );
     document.getElementById('ports_brightness').value = cfg.b_ports || 120;
     document.getElementById('ports_brightness_label').textContent = cfg.b_ports || 120;
     zoneMeta.filter(z => z.type === 'free').forEach(z => { freeModes[String(z.id)] = z.mode || freeModes[String(z.id)] || 'static'; });
@@ -1216,6 +1240,22 @@ function validateActivePortZones(map = hardwareZonesMap) {
         }
     }
     return '';
+}
+
+function missingActivePortZoneNotice(map = hardwareZonesMap) {
+    const count = clampActivePortCount(activePortCount);
+    const missing = [];
+
+    for (let port = 1; port <= count; port++) {
+        const zoneId = String(port);
+        if (zonePixelCountInMap(map, zoneId) === 0) {
+            missing.push(zoneDisplayName(zoneId));
+        }
+    }
+
+    return missing.length
+        ? `Не размечены активные зоны: ${missing.join(', ')}. Сигналы портов будут читаться, но индикации негде отображаться.`
+        : '';
 }
 
 function zonePixelCountInMap(map, zoneId) {
@@ -1732,7 +1772,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         alert(text === 'OK'
             ? 'Зоны сохранены во Flash.'
             : text === 'ACTIVE_PORT_ZONE_EMPTY'
-                ? 'Port1 должен иметь хотя бы один пиксель для отображения статуса.'
+                ? 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.'
                 : 'Не удалось сохранить зоны.');
     } catch (err) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
@@ -1893,7 +1933,7 @@ function fillNetworkForm(status) {
     document.getElementById('network_gateway').value = status.gateway || '192.168.1.1';
     document.getElementById('network_subnet').value = status.subnet || '255.255.255.0';
     document.getElementById('network_dns').value = status.dns || '8.8.8.8';
-    document.getElementById('network_ap_ssid').value = status.apSsid || 'NEK_EVSE_LAB';
+    document.getElementById('network_ap_ssid').value = status.apSsid || 'LED_MATRIX_SETUP';
     document.getElementById('network_ap_password').value = '';
     updateNetworkStaticFields();
 }
@@ -1940,7 +1980,7 @@ function renderNetworkStatus() {
 async function scanNetworks() {
     if (!backendAvailable) {
         document.getElementById('network_scan').innerHTML = [
-            diagCard('NEK_EVSE_LAB', 'mock · -45 dBm'),
+            diagCard('LED_MATRIX_SETUP', 'mock · -45 dBm'),
             diagCard('Office Wi-Fi', 'mock · -62 dBm'),
         ].join('');
         setNetworkMessage('Сканирование работает только через контроллер.');
@@ -2205,7 +2245,7 @@ function uploadFirmware() {
 function renderDiagnostics() {
     if (!diagnostics) return;
     const reportedActivePorts = Number(diagnostics.activePortCount);
-    activePortCount = Number.isFinite(reportedActivePorts) ? Math.max(0, reportedActivePorts) : 1;
+    activePortCount = clampActivePortCount(reportedActivePorts);
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;

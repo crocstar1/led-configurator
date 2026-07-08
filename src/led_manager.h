@@ -11,7 +11,7 @@
 #define VIRTUAL_Y       8       
 #define NUM_IC_CHIPS    (MATRIX_X * VIRTUAL_Y) 
 
-// Электрические лимиты для защиты DC-DC платы УСП-1
+// LED matrix power budget used by FastLED brightness scaling.
 #define MAX_LED_VOLTS   12      
 #define MAX_LED_MILLIAMPS 3000  
 
@@ -43,7 +43,6 @@ extern uint8_t zoneMap[NUM_IC_CHIPS];
 void led_setup();
 
 // Thread-safe LED and zone update helpers.
-void led_clear_all_safe();
 void led_load_config_from_flash(); 
 void led_refresh_safe();
 void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId);

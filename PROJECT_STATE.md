@@ -36,9 +36,14 @@ LED outputs:
 
 ## Port Logic
 
-- Current active port count: 1.
-- Port1 is active.
-- Port2, Port3, and Port4 are reserved/disabled.
+- Current active port count default: 1 (`USP1_DEFAULT_ACTIVE_PORT_COUNT`).
+- `status_mapper` is the runtime source of truth for active/reserved ports.
+- `/get_config` and `/diagnostics` expose `activePortCount`.
+- Port zone metadata is generated from `activePortCount`:
+  - count 1: Port1 active, Port2..4 reserved;
+  - count 2: Port1/Port2 active, Port3..4 reserved;
+  - count 3: Port1/Port2/Port3 active, Port4 reserved;
+  - count 4: Port1..Port4 active.
 - Port1 input mapping:
   - Data1 = charging.
   - Data2 = error.
@@ -56,9 +61,9 @@ Fixed zone IDs:
 | ---: | --- |
 | 0 | Off |
 | 1 | Port1 |
-| 2 | Port2 reserved |
-| 3 | Port3 reserved |
-| 4 | Port4 reserved |
+| 2 | Port2, active/reserved from `activePortCount` |
+| 3 | Port3, active/reserved from `activePortCount` |
+| 4 | Port4, active/reserved from `activePortCount` |
 | 5 | Logo |
 | 6 | QR |
 | 7 | Service |
@@ -153,7 +158,7 @@ Edit/preview mode:
   - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
   - network settings are stored separately in NVS namespace `net_cfg`;
   - DHCP and static IP fields are supported;
-  - AP fallback defaults are `NEK_EVSE_LAB` / `12345678`;
+  - AP fallback defaults are `LED_MATRIX_SETUP` / `12345678`;
   - service menu Network section shows mode/status/IP/RSSI/DHCP and has a
     settings form;
   - endpoints added: `/network_status`, `/scan_networks`, `/save_network`,
@@ -210,7 +215,8 @@ Known active review topics:
 
 - Verify first-boot defaults after incompatible old matrix config is ignored.
 - Verify save/reload for zones, topology, status colors, and free zones.
-- Verify Port1 cannot be fully cleared while `activePortCount = 1`.
+- Verify active port zones cannot be fully cleared while they are within
+  `activePortCount`.
 
 ## Known UI Issues
 
