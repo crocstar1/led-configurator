@@ -65,6 +65,10 @@ String auth_config_username_string() {
     return currentUsername;
 }
 
+bool auth_config_uses_default_credentials() {
+    return currentUsername == DEFAULT_USERNAME && currentPassword == DEFAULT_PASSWORD;
+}
+
 bool auth_config_save_credentials(const String &username, const String &password, String &error) {
     String cleanUsername = username;
     cleanUsername.trim();

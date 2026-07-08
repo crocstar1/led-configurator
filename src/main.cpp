@@ -729,7 +729,9 @@ void handleAuthStatus() {
 
     String json = "{\"username\":\"";
     json += jsonEscape(auth_config_username_string());
-    json += "\"}";
+    json += "\",\"defaultCredentials\":";
+    json += auth_config_uses_default_credentials() ? "true" : "false";
+    json += "}";
     server.send(200, "application/json", json);
 }
 

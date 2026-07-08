@@ -741,8 +741,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                         <div class="btn-row">
                             <button class="btn" id="scan_network_btn" type="button">Сканировать сети</button>
-                            <button class="btn primary" type="submit">Сохранить настройки</button>
-                            <button class="btn" id="network_apply_btn" type="button">Применить подключение</button>
+                            <button class="btn primary" id="network_save_connect_btn" type="submit">Сохранить и подключиться</button>
                         </div>
                     </form>
                     <div class="diag-grid" id="network_scan"></div>
@@ -1031,7 +1030,7 @@ function buildMockNetworkStatus() {
         gateway: '192.168.1.1',
         subnet: '255.255.255.0',
         dns: '8.8.8.8',
-        apSsid: 'LED_MATRIX_SETUP',
+        apSsid: 'LED_MATRIX_A1B2C3',
         apIp: '192.168.4.1',
         apClients: 1,
     };
@@ -1040,20 +1039,20 @@ function buildMockNetworkStatus() {
 function networkModeLabel(mode) {
     const labels = {
         sta: 'STA',
-        ap_fallback: 'AP fallback',
-        connecting: 'подключение',
+        ap_fallback: 'Fallback AP',
+        connecting: 'Подключение',
     };
     return labels[mode] || mode || 'неизвестно';
 }
 
 function networkStatusLabel(status) {
     const labels = {
-        connected: 'подключено',
-        connecting: 'подключение',
-        not_configured: 'SSID не сохранен',
-        connect_failed: 'подключение не удалось',
-        connect_timeout: 'таймаут подключения',
-        mock: 'локальный preview',
+        connected: 'Подключено',
+        connecting: 'Подключается',
+        not_configured: 'Не настроено',
+        connect_failed: 'Fallback AP: сеть недоступна',
+        connect_timeout: 'Fallback AP: таймаут подключения',
+        mock: 'Локальный preview',
     };
     return labels[status] || status || 'неизвестно';
 }
@@ -1626,7 +1625,6 @@ document.querySelectorAll('[data-service]').forEach(btn => {
 
 document.getElementById('refresh_network_btn').addEventListener('click', loadNetworkStatus);
 document.getElementById('scan_network_btn').addEventListener('click', scanNetworks);
-document.getElementById('network_apply_btn').addEventListener('click', applyNetworkConfig);
 document.getElementById('network_dhcp').addEventListener('change', updateNetworkStaticFields);
 document.getElementById('network_form').addEventListener('submit', e => {
     e.preventDefault();
@@ -1933,7 +1931,7 @@ function fillNetworkForm(status) {
     document.getElementById('network_gateway').value = status.gateway || '192.168.1.1';
     document.getElementById('network_subnet').value = status.subnet || '255.255.255.0';
     document.getElementById('network_dns').value = status.dns || '8.8.8.8';
-    document.getElementById('network_ap_ssid').value = status.apSsid || 'LED_MATRIX_SETUP';
+    document.getElementById('network_ap_ssid').value = status.apSsid || 'LED_MATRIX_A1B2C3';
     document.getElementById('network_ap_password').value = '';
     updateNetworkStaticFields();
 }
@@ -1968,9 +1966,11 @@ function renderNetworkStatus() {
     if (!networkStatus) return;
     document.getElementById('network_summary').innerHTML = [
         diagCard('Режим', networkModeLabel(networkStatus.mode)),
-        diagCard('Состояние', networkStatus.connected ? 'подключено' : networkStatusLabel(networkStatus.status)),
-        diagCard('SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'),
-        diagCard('IP', networkStatus.ip || networkStatus.apIp || 'нет'),
+        diagCard('Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)),
+        diagCard('Wi-Fi SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'),
+        diagCard('Wi-Fi IP', networkStatus.ip || 'нет'),
+        diagCard('AP fallback', networkStatus.apSsid || 'не задан'),
+        diagCard('AP IP', networkStatus.apIp || 'нет'),
         diagCard('RSSI', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'),
         diagCard('Адресация', networkStatus.dhcp ? 'DHCP' : 'Static'),
     ].join('');
@@ -1980,7 +1980,7 @@ function renderNetworkStatus() {
 async function scanNetworks() {
     if (!backendAvailable) {
         document.getElementById('network_scan').innerHTML = [
-            diagCard('LED_MATRIX_SETUP', 'mock · -45 dBm'),
+            diagCard('LED_MATRIX_A1B2C3', 'mock · -45 dBm'),
             diagCard('Office Wi-Fi', 'mock · -62 dBm'),
         ].join('');
         setNetworkMessage('Сканирование работает только через контроллер.');
@@ -2007,6 +2007,7 @@ async function saveNetworkConfig() {
         return;
     }
 
+    const button = document.getElementById('network_save_connect_btn');
     const body = new URLSearchParams();
     body.set('ssid', document.getElementById('network_ssid').value.trim());
     body.set('password', document.getElementById('network_password').value);
@@ -2019,32 +2020,24 @@ async function saveNetworkConfig() {
     body.set('ap_password', document.getElementById('network_ap_password').value);
 
     try {
+        button.disabled = true;
+        setNetworkMessage('Сохранение настроек сети...');
         const res = await fetch('/save_network', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
         });
         if (!res.ok) throw new Error(await res.text());
-        setNetworkMessage('Настройки сети сохранены. Нажмите «Применить подключение», чтобы переподключиться.');
-        await loadNetworkStatus();
-    } catch (err) {
-        setNetworkMessage(`Не удалось сохранить сеть: ${err.message}`, true);
-    }
-}
 
-async function applyNetworkConfig() {
-    if (!backendAvailable) {
-        setNetworkMessage('Backend недоступен, применить настройки нельзя.', true);
-        return;
-    }
+        const reconnect = await fetch('/network_reconnect', { method: 'POST' });
+        if (!reconnect.ok) throw new Error(await reconnect.text());
 
-    try {
-        const res = await fetch('/network_reconnect', { method: 'POST' });
-        if (!res.ok) throw new Error(await res.text());
-        setNetworkMessage('Переподключение запущено. Интерфейс может временно пропасть.');
+        setNetworkMessage('Настройки сохранены. Переподключение запущено, интерфейс может временно пропасть.');
         setTimeout(loadNetworkStatus, 4000);
     } catch (err) {
-        setNetworkMessage(`Не удалось применить настройки: ${err.message}`, true);
+        setNetworkMessage(`Не удалось сохранить или применить сеть: ${err.message}`, true);
+    } finally {
+        button.disabled = false;
     }
 }
 
@@ -2069,7 +2062,9 @@ async function loadAuthStatus() {
         if (!res.ok) throw new Error(`auth_status ${res.status}`);
         const data = await res.json();
         document.getElementById('auth_username').value = data.username || 'admin';
-        setAuthMessage('');
+        setAuthMessage(data.defaultCredentials
+            ? 'Используется стандартный пароль admin/admin. Смените пароль перед эксплуатацией.'
+            : '');
     } catch (err) {
         setAuthMessage('Не удалось загрузить настройки безопасности.', true);
     }

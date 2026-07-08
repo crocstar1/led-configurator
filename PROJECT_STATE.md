@@ -152,15 +152,20 @@ Edit/preview mode:
   - first boot or invalid auth config writes default `admin/admin`;
   - credentials are currently stored as plaintext in NVS for the MVP;
   - service menu has a Security section for changing username/password;
+  - `/auth_status` reports whether default `admin/admin` credentials are still
+    in use;
   - endpoints added: `/auth_status`, `/save_auth`.
   - local build passed after this stage.
 - Network config MVP added:
   - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
   - network settings are stored separately in NVS namespace `net_cfg`;
   - DHCP and static IP fields are supported;
-  - AP fallback defaults are `LED_MATRIX_SETUP` / `12345678`;
+  - default AP fallback SSID is unique (`LED_MATRIX_XXXXXX`) using the ESP32
+    chip suffix, while a saved custom AP SSID is preserved;
+  - AP fallback password default is `12345678`;
   - service menu Network section shows mode/status/IP/RSSI/DHCP and has a
     settings form;
+  - Network form uses one primary action: "Save and connect";
   - endpoints added: `/network_status`, `/scan_networks`, `/save_network`,
     `/network_reconnect`;
   - network endpoints are protected with Basic Auth.
@@ -241,8 +246,11 @@ Known active review topics:
 - Network MVP follow-up:
   - validate STA connect/reconnect behavior on hardware;
   - decide whether AP fallback default password is acceptable for production;
-  - add safer reset/clear-network flow;
+  - consider reset/clear-network flow only if field testing shows it is needed;
   - consider async/non-blocking startup connection after hardware testing.
+- Auth hardening follow-up:
+  - password hashing, captive portal, HTTPS, signed OTA, physical factory reset,
+    and auth reset are intentionally deferred.
 - OTA follow-up:
   - add firmware version display;
   - consider signed firmware validation;

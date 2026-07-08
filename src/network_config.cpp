@@ -3,7 +3,7 @@
 #include <Preferences.h>
 
 static constexpr const char *NVS_NAMESPACE = "net_cfg";
-static constexpr const char *DEFAULT_AP_SSID = "LED_MATRIX_SETUP";
+static constexpr const char *DEFAULT_AP_SSID_PREFIX = "LED_MATRIX";
 static constexpr const char *DEFAULT_AP_PASSWORD = "12345678";
 static constexpr unsigned long STA_CONNECT_TIMEOUT_MS = 12000;
 
@@ -33,6 +33,14 @@ static String loadString(Preferences &preferences, const char *key, const String
     return preferences.getString(key, fallback);
 }
 
+static String defaultApSsid() {
+    const uint64_t chipId = ESP.getEfuseMac();
+    const uint32_t suffix = (uint32_t)(chipId & 0xFFFFFF);
+    char ssid[24];
+    snprintf(ssid, sizeof(ssid), "%s_%06X", DEFAULT_AP_SSID_PREFIX, suffix);
+    return String(ssid);
+}
+
 static void setDefaults(NetworkConfig &config) {
     config.ssid = "";
     config.password = "";
@@ -41,7 +49,7 @@ static void setDefaults(NetworkConfig &config) {
     config.gateway = defaultGateway;
     config.subnet = defaultSubnet;
     config.dns = defaultDns;
-    config.apSsid = DEFAULT_AP_SSID;
+    config.apSsid = defaultApSsid();
     config.apPassword = DEFAULT_AP_PASSWORD;
 }
 
@@ -86,7 +94,10 @@ static void loadConfig() {
     networkConfig.gateway.fromString(loadString(preferences, "gw", network_ip_to_string(defaultGateway)));
     networkConfig.subnet.fromString(loadString(preferences, "mask", network_ip_to_string(defaultSubnet)));
     networkConfig.dns.fromString(loadString(preferences, "dns", network_ip_to_string(defaultDns)));
-    networkConfig.apSsid = loadString(preferences, "ap_ssid", DEFAULT_AP_SSID);
+    const bool hasCustomApSsid = preferences.isKey("ap_ssid");
+    networkConfig.apSsid = hasCustomApSsid
+        ? loadString(preferences, "ap_ssid", "")
+        : defaultApSsid();
     networkConfig.apPassword = loadString(preferences, "ap_pass", DEFAULT_AP_PASSWORD);
     preferences.end();
 
