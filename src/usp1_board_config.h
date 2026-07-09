@@ -6,7 +6,7 @@
 static constexpr uint8_t USP1_DATA_INPUT_COUNT = 8;
 static constexpr uint8_t USP1_LED_OUTPUT_COUNT = 4;
 static constexpr uint8_t USP1_MAX_PORT_COUNT = 4;
-static constexpr uint8_t USP1_DEFAULT_ACTIVE_PORT_COUNT = 1;
+static constexpr uint8_t USP1_DEFAULT_ACTIVE_PORT_COUNT = 2;
 
 // Usp-1 optocoupler outputs are active-low at the ESP32 GPIO.
 static constexpr bool USP1_INPUT_ACTIVE_LOW = true;

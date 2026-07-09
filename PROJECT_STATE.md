@@ -18,8 +18,8 @@ Inputs are active-low: `LOW = active`.
 | --- | ---: | --- |
 | Data1 | GPIO16 | Port1 charging |
 | Data2 | GPIO17 | Port1 error |
-| Data3 | GPIO18 | Port2 charging, reserved |
-| Data4 | GPIO19 | Port2 error, reserved |
+| Data3 | GPIO18 | Port2 charging |
+| Data4 | GPIO19 | Port2 error |
 | Data5 | GPIO21 | Port3 charging, reserved |
 | Data6 | GPIO25 | Port3 error, reserved |
 | Data7 | GPIO26 | Port4 charging, reserved |
@@ -36,7 +36,7 @@ LED outputs:
 
 ## Port Logic
 
-- Current active port count default: 1 (`USP1_DEFAULT_ACTIVE_PORT_COUNT`).
+- Current active port count default: 2 (`USP1_DEFAULT_ACTIVE_PORT_COUNT`).
 - `status_mapper` is the runtime source of truth for active/reserved ports.
 - `/get_config` and `/diagnostics` expose `activePortCount`.
 - Port zone metadata is generated from `activePortCount`:
@@ -47,11 +47,14 @@ LED outputs:
 - Port1 input mapping:
   - Data1 = charging.
   - Data2 = error.
+- Port2 input mapping:
+  - Data3 = charging.
+  - Data4 = error.
 - Status priority: `error > charging > waiting`.
 - Port zones must follow real runtime status.
 - Port zone preview/custom UI must not hide runtime error indication.
-- First-boot matrix defaults currently map all pixels to Port1, so Data1/Data2
-  status indication is visible before manual zone setup.
+- First-boot matrix defaults split pixels across currently active port zones, so
+  Port1/Port2 status indication is visible before manual zone setup.
 
 ## Fixed Zone Model
 
@@ -189,8 +192,8 @@ Edit/preview mode:
 - UI clarity polish added:
   - unmarked free zones remain visible in the dropdown but are disabled with a
     `not marked` label;
-  - UI warns when Port1 has no mapped pixels;
-  - clearing Port1 asks for explicit confirmation;
+  - UI warns when an active port has no mapped pixels;
+  - clearing an active port zone asks for explicit confirmation;
   - service menu is a centered modal on desktop and full-screen panel on mobile;
   - service menu closes only through the Close button;
   - network and diagnostics action labels were clarified.
@@ -218,14 +221,14 @@ Edit/preview mode:
   - old, missing, or invalid matrix config now falls back to defaults.
 - Runtime indication safety added:
   - active port zones cannot be saved with zero pixels;
-  - UI blocks clearing the last required Port1 pixel;
+  - UI blocks clearing the last required active-port pixel;
   - backend `/save_zones` validates active port zone presence before applying
     a new zone map.
 
 ## Currently In Work
 
 Current focus: build/manual verification of clean matrix storage cleanup and
-active Port1 zone safety.
+active port zone safety.
 
 Known active review topics:
 
@@ -241,7 +244,7 @@ Known active review topics:
   - static mode fills the selected free zone;
   - custom drawing uses the selected color as a brush;
   - clear drawing clears only the selected free zone custom layer.
-- Matrix Zones now warn if Port1 is not mapped, because Data1/Data2 can work
+- Matrix Zones now warn if an active port is not mapped, because inputs can work
   while no pixels are available for status indication.
 - Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
 - Free zone storage validates current compile-time matrix size. Future runtime matrix resize still needs migration/reset UX.

@@ -122,14 +122,23 @@ static bool free_zone_configs_are_valid(const FreeZoneConfig *freeZones, size_t 
 }
 
 void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
-    if (zones != nullptr) {
-        memset(zones, 1, zoneCount);
-    }
-
     memset(&config, 0, sizeof(config));
 
     config.topology = 0;
     config.bright_ports = 120;
+
+    if (zones != nullptr && zoneCount > 0) {
+        const uint8_t activePorts = USP1_DEFAULT_ACTIVE_PORT_COUNT == 0
+            ? 1
+            : (USP1_DEFAULT_ACTIVE_PORT_COUNT > USP1_MAX_PORT_COUNT
+                ? USP1_MAX_PORT_COUNT
+                : USP1_DEFAULT_ACTIVE_PORT_COUNT);
+
+        for (size_t i = 0; i < zoneCount; i++) {
+            const uint8_t portOffset = (uint8_t)((i * activePorts) / zoneCount);
+            zones[i] = (uint8_t)(ZONE_ID_PORT1 + portOffset);
+        }
+    }
 
     config.color_wait[0] = 0;
     config.color_wait[1] = 255;

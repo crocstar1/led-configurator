@@ -49,6 +49,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             justify-content: space-between;
             gap: 14px;
             margin-bottom: 14px;
+            flex-wrap: wrap;
         }
 
         .brand {
@@ -56,6 +57,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             align-items: center;
             gap: 10px;
             min-width: 0;
+            flex: 1 1 280px;
         }
 
         .brand-logo {
@@ -78,6 +80,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             line-height: 1.05;
             letter-spacing: 0;
             font-weight: 750;
+            overflow-wrap: anywhere;
         }
 
         .brand span {
@@ -106,6 +109,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             display: flex;
             align-items: center;
             gap: 8px;
+            flex: 0 0 auto;
+            margin-left: auto;
         }
 
         .dot {
@@ -131,6 +136,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             font-size: 12px;
             font-weight: 750;
             cursor: pointer;
+            min-height: 44px;
         }
 
         .tab-btn.active {
@@ -149,7 +155,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         .panel {
             background: var(--panel);
             border: 1px solid var(--line);
-            border-radius: 12px;
+            border-radius: 10px;
             box-shadow: var(--shadow);
             padding: 16px;
         }
@@ -178,9 +184,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             overflow: auto;
             padding: 12px;
             border: 1px solid var(--line);
-            border-radius: 12px;
+            border-radius: 10px;
             background: #fbfcff;
             max-height: 68vh;
+            -webkit-overflow-scrolling: touch;
         }
 
         .matrix {
@@ -302,14 +309,15 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         .service-panel {
-            width: min(720px, calc(100vw - 32px));
+            width: min(760px, calc(100vw - 32px));
             max-height: calc(100vh - 32px);
             overflow: auto;
             background: var(--panel);
             border: 1px solid var(--line);
-            border-radius: 12px;
+            border-radius: 10px;
             box-shadow: 0 18px 46px rgba(25, 39, 65, 0.18);
             padding: 16px;
+            -webkit-overflow-scrolling: touch;
         }
 
         .service-tabs {
@@ -325,7 +333,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         .section {
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 11px;
         }
 
         .row {
@@ -352,10 +360,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             border-radius: 9px;
             background: #ffffff;
             color: var(--text);
-            padding: 9px 10px;
+            padding: 10px 11px;
             font: inherit;
             font-size: 13px;
             font-weight: 650;
+            min-height: 44px;
         }
 
         input[type="checkbox"] {
@@ -401,11 +410,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             border-radius: 10px;
             background: #ffffff;
             color: var(--text);
-            padding: 11px 12px;
+            padding: 11px 13px;
             font-size: 12px;
             font-weight: 750;
             cursor: pointer;
-            min-height: 40px;
+            min-height: 44px;
         }
 
         .btn.primary {
@@ -531,7 +540,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         @media (max-width: 860px) {
             body { padding: 12px 10px 24px; }
-            .topbar { align-items: flex-start; }
+            .topbar { align-items: flex-start; gap: 10px; }
             .brand { gap: 9px; }
             .brand-logo { width: 34px; height: 34px; }
             .brand h1 { font-size: 21px; }
@@ -542,17 +551,22 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .pixel { width: 28px; height: 28px; border-radius: 7px; }
             .legend { grid-template-columns: 1fr; }
             .diag-grid { grid-template-columns: 1fr; }
+            .service-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
 
         @media (max-width: 420px) {
+            .brand { flex-basis: 220px; }
+            .brand span { font-size: 10px; letter-spacing: 0.04em; }
             .pixel { width: 24px; height: 24px; border-radius: 6px; }
             .topology-cell { width: 24px; height: 22px; font-size: 9px; }
             .matrix { gap: 4px; }
             .grid-2 { grid-template-columns: 1fr; }
             .runtime-pill { display: none; }
-            .topbar { gap: 10px; }
+            .topbar { gap: 10px; align-items: center; }
             .brand-logo { width: 32px; height: 32px; }
-            .service-tabs, .tabs { grid-template-columns: 1fr; }
+            .tabs { grid-template-columns: 1fr; }
+            .service-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .btn-row .btn { flex: 1 1 auto; }
         }
     </style>
 </head>
@@ -599,7 +613,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         <aside class="side-stack">
             <section class="panel tab-panel active" id="tab_zones">
-                <div class="panel-title"><h2>Настройки</h2></div>
+                <div class="panel-title"><h2>Разметка</h2></div>
                 <div class="section">
                     <div class="btn-row" role="group" aria-label="Режим просмотра зон">
                         <button class="btn active" id="zone_edit_mode_btn">Редактирование</button>
@@ -640,7 +654,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_status">
-                <div class="panel-title"><h2>Настройки</h2></div>
+                <div class="panel-title"><h2>Слои статусов</h2></div>
                 <div class="section">
                     <div class="btn-row">
                         <button class="btn active" data-status="waiting">Ожидание</button>
@@ -669,7 +683,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_free">
-                <div class="panel-title"><h2>Настройки</h2></div>
+                <div class="panel-title"><h2>Настройка зоны</h2></div>
                 <div class="section">
                     <div class="grid-2">
                         <div>
@@ -704,7 +718,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <div class="legend" id="free_legend"></div>
                     <div class="btn-row">
                         <button class="btn danger" id="free_erase_btn">Очистить рисунок</button>
-                        <button class="btn primary" id="apply_free_btn">Применить доступные настройки</button>
+                        <button class="btn primary" id="apply_free_btn">Сохранить настройки зоны</button>
                     </div>
                 </div>
             </section>
@@ -959,7 +973,7 @@ let backendAvailable = false;
 let mockMode = false;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
-let activePortCount = 1;
+let activePortCount = 2;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -993,11 +1007,13 @@ function zoneOptionLabel(zone) {
     return `${zoneDisplayName(zone)}${zone.reserved ? ' · резерв' : ''}`;
 }
 
-function buildDefaultPortMap(cols = 12, rows = 8) {
+function buildDefaultPortMap(cols = 12, rows = 8, portCount = 2) {
     const map = {};
+    const activeCount = clampActivePortCount(portCount);
     for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-            map[`${x}-${y}`] = '1';
+            const portIndex = Math.min(activeCount - 1, Math.floor((x * activeCount) / cols));
+            map[`${x}-${y}`] = String(1 + portIndex);
         }
     }
     return map;
@@ -1023,17 +1039,18 @@ function zonesForActivePortCount(zones, count) {
 }
 
 function buildMockConfig() {
+    const mockActivePortCount = 2;
     return {
         topo: 0,
         b_ports: 120,
         c_wait: '#34c759',
         c_charge: '#0055ff',
         c_error: '#ff3b30',
-        activePortCount: 1,
+        activePortCount: mockActivePortCount,
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
-        hardware_map: buildDefaultPortMap(12, 8),
+        hardware_map: buildDefaultPortMap(12, 8, mockActivePortCount),
         layers: { wait: {}, charge: {}, err: {} },
-        zones: zonesForActivePortCount(DEFAULT_ZONES, 1),
+        zones: zonesForActivePortCount(DEFAULT_ZONES, mockActivePortCount),
         free_zones: [
             { zoneId: 5, enabled: true, mode: 'static', staticColor: '#ffffff', brightness: 100, customLayer: {} },
             { zoneId: 6, enabled: true, mode: 'static', staticColor: '#34c759', brightness: 100, customLayer: {} },
@@ -1052,7 +1069,7 @@ function buildMockDiagnostics() {
     }));
 
     return {
-        activePortCount: 1,
+        activePortCount: 2,
         runtimeMode: mockMode ? 'локальный предпросмотр' : 'runtime',
         primaryLedOutput: { name: 'LED1', gpio: 22, index: 1 },
         ledOutputs: [
@@ -1064,7 +1081,7 @@ function buildMockDiagnostics() {
         inputs,
         ports: [
             { port: 1, enabled: true, zoneId: 1, chargingInput: 'Data1', errorInput: 'Data2', status: 'waiting' },
-            { port: 2, enabled: false, zoneId: 2, chargingInput: 'Data3', errorInput: 'Data4', status: 'disabled' },
+            { port: 2, enabled: true, zoneId: 2, chargingInput: 'Data3', errorInput: 'Data4', status: 'waiting' },
             { port: 3, enabled: false, zoneId: 3, chargingInput: 'Data5', errorInput: 'Data6', status: 'disabled' },
             { port: 4, enabled: false, zoneId: 4, chargingInput: 'Data7', errorInput: 'Data8', status: 'disabled' },
         ],
@@ -1598,10 +1615,6 @@ function paintPixel(pixel) {
         if (!isEditableZone(activeZoneId)) return;
         if (zoneTool === 'erase') {
             if (currentZone === activeZoneId) {
-                if (isRequiredActivePortZone(activeZoneId) && zonePixelCount(activeZoneId) <= 1) {
-                    showEditSafetyMessage(activePortZoneErrorMessage(activeZoneId));
-                    return;
-                }
                 delete hardwareZonesMap[key];
             }
         } else if (currentZone === '0' || currentZone === activeZoneId) {
@@ -1835,13 +1848,9 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
 
 document.getElementById('clear_zone_btn').addEventListener('click', () => {
     if (zonePixelCount(activeZoneId) === 0) return;
-    if (isRequiredActivePortZone(activeZoneId)) {
-        alert(activePortZoneErrorMessage(activeZoneId));
-        return;
-    }
     if (isPortZone(activeZoneId)) {
-        const message = activeZoneId === '1'
-            ? 'Очистить зону Порт 1? Data1/Data2 продолжат работать, но на матрице не останется области для индикации ожидания, зарядки и ошибки.'
+        const message = isRequiredActivePortZone(activeZoneId)
+            ? `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт останется без индикации, и сохранить зоны не получится, пока вы не назначите ему хотя бы один пиксель.`
             : `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт сейчас в резерве, но его разметка будет удалена.`;
         if (!confirm(message)) return;
     }
