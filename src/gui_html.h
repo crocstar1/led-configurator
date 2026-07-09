@@ -974,6 +974,7 @@ let mockMode = false;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
 let activePortCount = 2;
+let zoneMapDirty = false;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -1227,6 +1228,7 @@ function applyConfig(cfg) {
     activePortCount = clampActivePortCount(cfg.activePortCount ?? cfg.active_port_count ?? activePortCount);
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
+    zoneMapDirty = false;
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeLayerForSize(cfg.layers?.charge || {});
     statusColorLayers.error = sanitizeLayerForSize(cfg.layers?.err || {});
@@ -1299,22 +1301,7 @@ function isRequiredActivePortZone(zoneId) {
     return portNumber >= 1 && portNumber <= count;
 }
 
-function activePortZoneErrorMessage(zoneId) {
-    return `${zoneDisplayName(zoneId)} должен иметь хотя бы один пиксель для отображения статуса.`;
-}
-
-function validateActivePortZones(map = hardwareZonesMap) {
-    const count = Number.isFinite(Number(activePortCount)) ? Number(activePortCount) : 1;
-    for (let port = 1; port <= count; port++) {
-        const zoneId = String(port);
-        if (zonePixelCountInMap(map, zoneId) === 0) {
-            return activePortZoneErrorMessage(zoneId);
-        }
-    }
-    return '';
-}
-
-function missingActivePortZoneNotice(map = hardwareZonesMap) {
+function missingActivePortZones(map = hardwareZonesMap) {
     const count = clampActivePortCount(activePortCount);
     const missing = [];
 
@@ -1324,6 +1311,24 @@ function missingActivePortZoneNotice(map = hardwareZonesMap) {
             missing.push(zoneDisplayName(zoneId));
         }
     }
+
+    return missing;
+}
+
+function activePortZoneErrorMessage(missingZones) {
+    const missing = Array.isArray(missingZones) ? missingZones : [zoneDisplayName(missingZones)];
+    return missing.length === 1
+        ? `Разметьте активную зону: ${missing[0]}.`
+        : `Разметьте активные зоны: ${missing.join(', ')}.`;
+}
+
+function validateActivePortZones(map = hardwareZonesMap) {
+    const missing = missingActivePortZones(map);
+    return missing.length ? activePortZoneErrorMessage(missing) : '';
+}
+
+function missingActivePortZoneNotice(map = hardwareZonesMap) {
+    const missing = missingActivePortZones(map);
 
     return missing.length
         ? `Не размечены активные зоны: ${missing.join(', ')}. Сигналы портов будут читаться, но индикации негде отображаться.`
@@ -1616,9 +1621,13 @@ function paintPixel(pixel) {
         if (zoneTool === 'erase') {
             if (currentZone === activeZoneId) {
                 delete hardwareZonesMap[key];
+                zoneMapDirty = true;
             }
         } else if (currentZone === '0' || currentZone === activeZoneId) {
-            hardwareZonesMap[key] = activeZoneId;
+            if (currentZone !== activeZoneId) {
+                hardwareZonesMap[key] = activeZoneId;
+                zoneMapDirty = true;
+            }
         }
     } else if (activeTab === 'status') {
         if (!isEditablePortZone(currentZone)) return;
@@ -1839,8 +1848,11 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         alert(text === 'OK'
             ? 'Зоны сохранены во Flash.'
             : text === 'ACTIVE_PORT_ZONE_EMPTY'
-                ? 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.'
+                ? (validateActivePortZones() || 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.')
                 : 'Не удалось сохранить зоны.');
+        if (res.ok && text === 'OK') {
+            zoneMapDirty = false;
+        }
     } catch (err) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
     }
@@ -1855,7 +1867,10 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
         if (!confirm(message)) return;
     }
     Object.keys(hardwareZonesMap).forEach(key => {
-        if (hardwareZonesMap[key] === activeZoneId) delete hardwareZonesMap[key];
+        if (hardwareZonesMap[key] === activeZoneId) {
+            delete hardwareZonesMap[key];
+            zoneMapDirty = true;
+        }
     });
     redrawMatrix();
 });
@@ -1897,6 +1912,15 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
     const mode = freeModes[activeFreeZone] || 'static';
     if (!backendAvailable) {
         alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
+        return;
+    }
+    const zoneValidationError = validateActivePortZones();
+    if (zoneValidationError) {
+        alert(`${zoneValidationError} Сначала исправьте разметку во вкладке «Зоны матрицы».`);
+        return;
+    }
+    if (zoneMapDirty) {
+        alert('Сначала сохраните разметку зон. Настройки свободной зоны применяются к сохранённой карте матрицы.');
         return;
     }
 
