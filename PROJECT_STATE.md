@@ -234,8 +234,8 @@ Known active review topics:
 
 - Verify first-boot defaults after incompatible old matrix config is ignored.
 - Verify save/reload for zones, topology, status colors, and free zones.
-- Verify active port zones cannot be fully cleared while they are within
-  `activePortCount`.
+- Verify active port zones can be temporarily cleared during editing, but
+  cannot be saved while any active port has no pixels.
 
 ## Known UI Issues
 
@@ -246,6 +246,9 @@ Known active review topics:
   - clear drawing clears only the selected free zone custom layer.
 - Matrix Zones now warn if an active port is not mapped, because inputs can work
   while no pixels are available for status indication.
+- Main UI status line also warns when any active port zone is missing pixels.
+- Matrix zone, status layer, and free zone editors show dirty indicators when
+  changes are local and not yet saved.
 - Matrix size is exposed to UI via `matrix.cols` and `matrix.rows`, but backend/storage are still compile-time fixed through `MATRIX_X`, `VIRTUAL_Y`, and `NUM_IC_CHIPS`.
 - Free zone storage validates current compile-time matrix size. Future runtime matrix resize still needs migration/reset UX.
 - Status/free layers should be filtered or reset when matrix size changes in a future variable-size implementation.
@@ -280,6 +283,11 @@ Known active review topics:
     horizontal/vertical orientation, and color order separated from topology;
   - optional remap/reset UX if topology or matrix size changes.
 - Optional per-port status color override.
+- UI maintainability follow-up:
+  - consider splitting `gui_html.h` into source HTML/CSS/JS with a lightweight
+    build step when the single PROGMEM file becomes too hard to maintain;
+  - do not introduce LittleFS/SPIFFS only for UI organization unless separate
+    assets or field-update requirements justify it.
 - Auth follow-up:
   - replace plaintext NVS password storage with stronger hashing or another
     safer credential format;

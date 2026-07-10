@@ -568,6 +568,25 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             min-height: 18px;
         }
 
+        .status-line.warning {
+            color: var(--red);
+            font-weight: 700;
+        }
+
+        .dirty-indicator {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 4px 8px;
+            border: 1px solid #ffe0ad;
+            border-radius: 999px;
+            background: #fff8ed;
+            color: #9a5d00;
+            font-size: 11px;
+            font-weight: 750;
+            white-space: nowrap;
+        }
+
         @media (max-width: 860px) {
             body { padding: 12px 10px 24px; }
             .topbar { align-items: flex-start; gap: 10px; }
@@ -644,7 +663,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         <aside class="side-stack">
             <section class="panel tab-panel active" id="tab_zones">
-                <div class="panel-title"><h2>Разметка</h2></div>
+                <div class="panel-title"><h2>Разметка</h2><span class="dirty-indicator field-hidden" id="zones_dirty_indicator">не сохранено</span></div>
                 <div class="section">
                     <div class="btn-row" role="group" aria-label="Режим просмотра зон">
                         <button class="btn active" id="zone_edit_mode_btn">Редактирование</button>
@@ -687,7 +706,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_status">
-                <div class="panel-title"><h2>Слои статусов</h2></div>
+                <div class="panel-title"><h2>Слои статусов</h2><span class="dirty-indicator field-hidden" id="status_dirty_indicator">не сохранено</span></div>
                 <div class="section">
                     <div class="btn-row">
                         <button class="btn active" data-status="waiting">Ожидание</button>
@@ -699,10 +718,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <label for="status_color">Цвет кисти</label>
                             <input type="color" id="status_color" value="#0055ff">
                         </div>
-                        <div class="notice">Цвет применяется сразу ко всем портам.</div>
+                        <div class="notice">Слой выбранного статуса общий для всех портов. Цвет наносится по пикселям.</div>
                     </div>
                     <div>
-                        <label for="ports_brightness">Яркость портов</label>
+                        <label for="ports_brightness">Общая яркость портовых зон</label>
                         <div class="brightness-control">
                             <input type="range" id="ports_brightness" min="1" max="255" value="120">
                             <input type="number" id="ports_brightness_input" min="1" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
@@ -716,7 +735,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             </section>
 
             <section class="panel tab-panel" id="tab_free">
-                <div class="panel-title"><h2>Настройка зоны</h2></div>
+                <div class="panel-title"><h2>Настройка зоны</h2><span class="dirty-indicator field-hidden" id="free_dirty_indicator">не сохранено</span></div>
                 <div class="section">
                     <div class="grid-2">
                         <div>
@@ -1015,6 +1034,8 @@ let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
 let activePortCount = 2;
 let zoneMapDirty = false;
+let statusLayerDirty = { waiting: false, charging: false, error: false };
+let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
 
 const grid = document.getElementById('matrix_grid');
 
@@ -1288,6 +1309,8 @@ function applyConfig(cfg) {
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     zoneMapDirty = false;
+    statusLayerDirty = { waiting: false, charging: false, error: false };
+    freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeLayerForSize(cfg.layers?.charge || {});
     statusColorLayers.error = sanitizeLayerForSize(cfg.layers?.err || {});
@@ -1391,6 +1414,19 @@ function missingActivePortZoneNotice(map = hardwareZonesMap) {
     return missing.length
         ? `Не размечены активные зоны: ${missing.join(', ')}. Сигналы портов будут читаться, но индикации негде отображаться.`
         : '';
+}
+
+function updateDirtyIndicators() {
+    const zonesIndicator = document.getElementById('zones_dirty_indicator');
+    const statusIndicator = document.getElementById('status_dirty_indicator');
+    const freeIndicator = document.getElementById('free_dirty_indicator');
+
+    const hasDirtyStatusLayer = Object.values(statusLayerDirty).some(Boolean);
+    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean);
+
+    zonesIndicator?.classList.toggle('field-hidden', !zoneMapDirty);
+    statusIndicator?.classList.toggle('field-hidden', !hasDirtyStatusLayer);
+    freeIndicator?.classList.toggle('field-hidden', !hasDirtyFreeZone);
 }
 
 function zonePixelCountInMap(map, zoneId) {
@@ -1657,6 +1693,7 @@ function redrawMatrix() {
     updateZoneViewControls();
     updateFreeViewControls();
     updateFreeModeControls();
+    updateDirtyIndicators();
     updateEditState();
 }
 
@@ -1669,9 +1706,13 @@ function updateEditState() {
         (freeViewMode === 'overview'
             ? 'Обзор: свободные зоны видны, рисование отключено'
             : `Редактор: ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
-    document.getElementById('edit_state_line').textContent = mockMode
-        ? `${text}. Контроллер недоступен: работает локальный предпросмотр 12x8.`
-        : text;
+    const missingNotice = missingActivePortZoneNotice();
+    const finalText = missingNotice ? `Внимание: ${missingNotice} ${text}` : text;
+    const line = document.getElementById('edit_state_line');
+    line.classList.toggle('warning', Boolean(missingNotice));
+    line.textContent = mockMode
+        ? `${finalText}. Контроллер недоступен: работает локальный предпросмотр 12x8.`
+        : finalText;
 }
 
 function paintPixel(pixel) {
@@ -1697,10 +1738,12 @@ function paintPixel(pixel) {
         if (!isEditablePortZone(currentZone)) return;
         const color = document.getElementById('status_color').value;
         statusColorLayers[activeStatus][key] = color;
+        statusLayerDirty[activeStatus] = true;
     } else if (activeTab === 'free') {
         if (freeViewMode !== 'edit') return;
         if (currentZone !== activeFreeZone || freeModes[activeFreeZone] !== 'custom') return;
         freeCustomLayers[activeFreeZone][key] = freeBrushColors[activeFreeZone] || document.getElementById('free_color').value;
+        freeZoneDirty[activeFreeZone] = true;
     }
 
     redrawMatrix();
@@ -1806,6 +1849,7 @@ document.getElementById('free_zone_select').addEventListener('change', e => {
 
 document.getElementById('free_mode_select').addEventListener('change', e => {
     freeModes[activeFreeZone] = e.target.value;
+    freeZoneDirty[activeFreeZone] = true;
     syncFreeColorInput();
     redrawMatrix();
 });
@@ -1825,6 +1869,7 @@ document.getElementById('free_color').addEventListener('input', e => {
         freeBrushColors[activeFreeZone] = e.target.value;
     } else {
         freeStaticColors[activeFreeZone] = e.target.value;
+        freeZoneDirty[activeFreeZone] = true;
     }
     redrawMatrix();
 });
@@ -1847,6 +1892,7 @@ document.getElementById('zone_erase_btn').addEventListener('click', () => {
 document.getElementById('free_erase_btn').addEventListener('click', () => {
     if (freeViewMode !== 'edit' || (freeModes[activeFreeZone] || 'static') !== 'custom') return;
     freeCustomLayers[activeFreeZone] = {};
+    freeZoneDirty[activeFreeZone] = true;
     redrawMatrix();
 });
 
@@ -1916,6 +1962,8 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
                 : 'Не удалось сохранить зоны.');
         if (res.ok && text === 'OK') {
             zoneMapDirty = false;
+            updateDirtyIndicators();
+            updateEditState();
         }
     } catch (err) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
@@ -1951,7 +1999,13 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: activeStatus, colors: statusColorLayers[activeStatus] })
         });
-        alert(await res.text() === 'OK' ? 'Слой статуса сохранён.' : 'Не удалось сохранить слой статуса.');
+        const ok = await res.text() === 'OK';
+        if (ok) {
+            statusLayerDirty[activeStatus] = false;
+            updateDirtyIndicators();
+            updateEditState();
+        }
+        alert(ok ? 'Слой статуса сохранён.' : 'Не удалось сохранить слой статуса.');
     } catch (err) {
         alert('Контроллер недоступен: слой статуса изменён только в браузере.');
     }
@@ -1959,7 +2013,9 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
 
 document.getElementById('clear_status_btn').addEventListener('click', () => {
     statusColorLayers[activeStatus] = {};
+    statusLayerDirty[activeStatus] = true;
     redrawMatrix();
+    alert('Слой очищен только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.');
 });
 
 async function savePortsBrightness(value) {
@@ -1978,8 +2034,13 @@ document.getElementById('ports_brightness_input').addEventListener('input', asyn
 });
 
 function setActiveFreeBrightness(value) {
+    const previous = Number(freeBrightness[activeFreeZone]) || 100;
     const safe = setBrightnessPair('free_brightness', 'free_brightness_input', value);
     freeBrightness[activeFreeZone] = safe;
+    if (safe !== previous) {
+        freeZoneDirty[activeFreeZone] = true;
+        updateDirtyIndicators();
+    }
     return safe;
 }
 
@@ -2033,7 +2094,13 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
     if (!ensureFreeZoneSaveAllowed()) return;
 
     try {
-        alert(await saveFreeZonePayload(buildFreeZonePayload(activeFreeZone)) ? 'Настройки свободной зоны сохранены.' : 'Не удалось сохранить свободную зону.');
+        const ok = await saveFreeZonePayload(buildFreeZonePayload(activeFreeZone));
+        if (ok) {
+            freeZoneDirty[activeFreeZone] = false;
+            updateDirtyIndicators();
+            updateEditState();
+        }
+        alert(ok ? 'Настройки свободной зоны сохранены.' : 'Не удалось сохранить свободную зону.');
     } catch (err) {
         alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
     }
@@ -2049,6 +2116,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
     const value = setActiveFreeBrightness(document.getElementById('free_brightness').value);
     if (!backendAvailable) {
         mappedZones.forEach(zoneId => { freeBrightness[zoneId] = value; });
+        mappedZones.forEach(zoneId => { freeZoneDirty[zoneId] = true; });
         redrawMatrix();
         alert('Контроллер недоступен: яркость свободных зон изменена только в браузере.');
         return;
@@ -2068,6 +2136,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         for (const zoneId of mappedZones) {
             const ok = await saveFreeZonePayload(buildFreeZonePayload(zoneId));
             if (!ok) throw new Error('SAVE_FAILED');
+            freeZoneDirty[zoneId] = false;
         }
         redrawMatrix();
         alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
