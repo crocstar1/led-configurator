@@ -702,6 +702,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
                     </div>
+                    <div class="hint">Сохраняет только разметку пикселей по зонам.</div>
                 </div>
             </section>
 
@@ -731,6 +732,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
                         <button class="btn danger" id="clear_status_btn">Очистить слой статуса</button>
                     </div>
+                    <div class="hint">Сохраняет слой выбранного статуса.</div>
                 </div>
             </section>
 
@@ -770,7 +772,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                     </div>
                     <div class="btn-row">
-                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Применить ко всем свободным зонам</button>
+                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Сохранить яркость для всех свободных зон</button>
                     </div>
                     <div class="section-divider"></div>
                     <label>Легенда</label>
@@ -779,6 +781,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <button class="btn danger" id="free_erase_btn">Очистить рисунок</button>
                         <button class="btn primary" id="apply_free_btn">Сохранить настройки зоны</button>
                     </div>
+                    <div class="hint">Сохраняет режим, цвет, яркость и рисунок выбранной свободной зоны.</div>
                 </div>
             </section>
 
@@ -1990,6 +1993,15 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
 document.getElementById('save_status_btn').addEventListener('click', async () => {
     if (!backendAvailable) {
         alert('Контроллер недоступен: слой статуса изменён только в браузере.');
+        return;
+    }
+    const zoneValidationError = validateActivePortZones();
+    if (zoneValidationError) {
+        alert(`${zoneValidationError} Сначала исправьте и сохраните разметку во вкладке «Зоны матрицы».`);
+        return;
+    }
+    if (zoneMapDirty) {
+        alert('Сначала сохраните разметку зон. Слой статуса применяется к сохранённой карте матрицы.');
         return;
     }
 
