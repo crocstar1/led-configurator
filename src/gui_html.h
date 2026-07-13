@@ -210,15 +210,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         .pixel {
-            --preview-brightness: 1;
             width: var(--matrix-cell-size);
             height: var(--matrix-cell-size);
             border: 1px solid rgba(0, 0, 0, 0.14);
             border-radius: 7px;
             background: #e8e8ed;
             cursor: pointer;
-            filter: brightness(var(--preview-brightness));
-            transition: opacity 0.12s, transform 0.06s, box-shadow 0.12s, filter 0.12s;
+            transition: opacity 0.12s, transform 0.06s, box-shadow 0.12s;
         }
 
         .pixel.active-zone {
@@ -227,7 +225,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .pixel.locked {
             opacity: 0.24;
-            filter: grayscale(80%) brightness(var(--preview-brightness));
+            filter: grayscale(80%);
             cursor: not-allowed;
         }
 
@@ -462,6 +460,24 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             min-height: 44px;
         }
 
+        .service-trigger {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+        }
+
+        .service-trigger svg {
+            width: 17px;
+            height: 17px;
+            flex: 0 0 auto;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
         .btn.primary {
             border-color: var(--blue);
             background: var(--blue);
@@ -694,7 +710,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         </div>
         <div class="top-actions">
             <div class="runtime-pill"><span class="dot" id="runtime_dot"></span><span id="runtime_label">режим: загрузка</span></div>
-            <button class="btn" id="service_open_btn" type="button">⚙ Сервис</button>
+            <button class="btn service-trigger" id="service_open_btn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span>Сервис</span>
+            </button>
         </div>
     </header>
 
@@ -742,12 +764,12 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <summary>Настройки матрицы</summary>
                         <div class="advanced-body">
                             <div>
-                                <label for="topology_select">Топология LED</label>
+                                <label for="topology_select">Топология матрицы</label>
                                 <select id="topology_select"></select>
                             </div>
                             <div class="status-line" id="topology_summary"></div>
-                            <div class="notice">Смена топологии меняет физический порядок вывода zoneMap и слоев. Если матрица светится не в той области, выберите другой вариант.</div>
-                            <div class="topology-preview" id="topology_preview" aria-label="Порядок LED"></div>
+                            <div class="notice">Смена топологии меняет физический порядок вывода разметки зон и цветовых слоёв. Если матрица светится не в той области, выберите другой вариант.</div>
+                            <div class="topology-preview" id="topology_preview" aria-label="Порядок светодиодов"></div>
                             <div class="btn-row">
                                 <button class="btn primary" id="save_topology_btn">Сохранить топологию</button>
                             </div>
@@ -881,7 +903,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="section-divider"></div>
                     <div>
-                        <label>LED-выходы</label>
+                        <label>Выходы матрицы</label>
                         <div class="diag-grid" id="diag_leds"></div>
                     </div>
                 </div>
@@ -910,15 +932,15 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </label>
                         <div class="grid-2" id="network_static_fields">
                             <div>
-                                <label for="network_static_ip">Static IP</label>
+                                <label for="network_static_ip">Статический IP-адрес</label>
                                 <input id="network_static_ip" name="static_ip" type="text" inputmode="numeric">
                             </div>
                             <div>
-                                <label for="network_gateway">Gateway</label>
+                                <label for="network_gateway">Шлюз</label>
                                 <input id="network_gateway" name="gateway" type="text" inputmode="numeric">
                             </div>
                             <div>
-                                <label for="network_subnet">Subnet</label>
+                                <label for="network_subnet">Маска подсети</label>
                                 <input id="network_subnet" name="subnet" type="text" inputmode="numeric">
                             </div>
                             <div>
@@ -928,11 +950,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                         <div class="grid-2">
                             <div>
-                                <label for="network_ap_ssid">AP fallback SSID</label>
+                                <label for="network_ap_ssid">SSID резервной точки доступа</label>
                                 <input id="network_ap_ssid" name="ap_ssid" type="text">
                             </div>
                             <div>
-                                <label for="network_ap_password">AP fallback пароль</label>
+                                <label for="network_ap_password">Пароль резервной точки доступа</label>
                                 <input id="network_ap_password" name="ap_password" type="password">
                             </div>
                         </div>
@@ -964,7 +986,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <button class="btn primary" id="firmware_upload_btn" type="submit" disabled>Загрузить прошивку</button>
                         </div>
                     </form>
-                    <div class="hint" id="firmware_message">Выберите firmware.bin.</div>
+                    <div class="hint" id="firmware_message">Выберите файл прошивки firmware.bin.</div>
                 </div>
             </section>
 
@@ -999,7 +1021,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
 <script>
 const DEFAULT_ZONES = [
-    { id: 0, name: 'Выключено', type: 'off', enabled: true, reserved: false, linked_port: null, mode: null },
+    { id: 0, name: 'Без зоны', type: 'off', enabled: true, reserved: false, linked_port: null, mode: null },
     { id: 1, name: 'Порт 1', type: 'port', enabled: true, reserved: false, linked_port: 1, mode: null },
     { id: 2, name: 'Порт 2', type: 'port', enabled: false, reserved: true, linked_port: 2, mode: null },
     { id: 3, name: 'Порт 3', type: 'port', enabled: false, reserved: true, linked_port: 3, mode: null },
@@ -1038,7 +1060,7 @@ const STATUS_LABELS = {
 };
 
 const TYPE_LABELS = {
-    off: 'выкл.',
+    off: 'без зоны',
     port: 'порт',
     free: 'свободная',
 };
@@ -1050,7 +1072,7 @@ const MODE_LABELS = {
 };
 
 const ZONE_LABELS = {
-    '0': 'Выкл.',
+    '0': 'Без зоны',
     '1': 'Порт 1',
     '2': 'Порт 2',
     '3': 'Порт 3',
@@ -1069,10 +1091,10 @@ const DEFAULT_FREE_STATIC_COLORS = {
 };
 
 const TOPOLOGY_OPTIONS = [
-    { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'LED0 справа снизу, далее змейкой по столбцам.' },
-    { value: 1, key: 'vert_up', label: 'Вертикальная · старт слева снизу', hint: 'LED0 слева снизу, далее змейкой по столбцам.' },
-    { value: 2, key: 'horiz_right', label: 'Горизонтальная · старт слева сверху', hint: 'LED0 слева сверху, далее змейкой по строкам.' },
-    { value: 3, key: 'horiz_left', label: 'Горизонтальная · старт справа сверху', hint: 'LED0 справа сверху, далее змейкой по строкам.' },
+    { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'Светодиод 0 справа снизу, далее змейкой по столбцам.' },
+    { value: 1, key: 'vert_up', label: 'Вертикальная · старт слева снизу', hint: 'Светодиод 0 слева снизу, далее змейкой по столбцам.' },
+    { value: 2, key: 'horiz_right', label: 'Горизонтальная · старт слева сверху', hint: 'Светодиод 0 слева сверху, далее змейкой по строкам.' },
+    { value: 3, key: 'horiz_left', label: 'Горизонтальная · старт справа сверху', hint: 'Светодиод 0 справа сверху, далее змейкой по строкам.' },
 ];
 
 let COLS = 12;
@@ -1253,8 +1275,8 @@ function buildMockNetworkStatus() {
 
 function networkModeLabel(mode) {
     const labels = {
-        sta: 'STA',
-        ap_fallback: 'Fallback AP',
+        sta: 'Подключение к Wi-Fi',
+        ap_fallback: 'Резервная точка доступа',
         connecting: 'Подключение',
         reconnecting: 'Переподключение',
     };
@@ -1267,10 +1289,10 @@ function networkStatusLabel(status) {
         connecting: 'Подключается',
         reconnecting: 'Переподключается',
         not_configured: 'Не настроено',
-        connect_failed: 'Fallback AP: сеть недоступна',
-        connect_timeout: 'Fallback AP: таймаут подключения',
-        connection_lost: 'Fallback AP: подключение потеряно',
-        mock: 'Локальный preview',
+        connect_failed: 'Резервная точка доступа: сеть недоступна',
+        connect_timeout: 'Резервная точка доступа: превышено время ожидания',
+        connection_lost: 'Резервная точка доступа: подключение потеряно',
+        mock: 'Локальный предпросмотр',
     };
     return labels[status] || status || 'неизвестно';
 }
@@ -1634,7 +1656,7 @@ function renderTopologyControls() {
             ? 'Вертикальная змейка по столбцам · чередование ↑ / ↓'
             : 'Горизонтальная змейка по строкам · чередование → / ←';
         const endpoints = document.createElement('span');
-        endpoints.textContent = `LED0: x=${start?.x ?? '?'}, y=${start?.y ?? '?'} · последний LED: x=${end?.x ?? '?'}, y=${end?.y ?? '?'}`;
+        endpoints.textContent = `Светодиод 0: столбец ${start?.x ?? '?'}, строка ${start?.y ?? '?'} · последний светодиод: столбец ${end?.x ?? '?'}, строка ${end?.y ?? '?'}`;
         const size = document.createElement('span');
         size.textContent = `${COLS}×${ROWS} · ${total} пикселей. Полная нумерация скрыта для читаемости.`;
         direction.append(title, endpoints, size);
@@ -1651,7 +1673,7 @@ function renderTopologyControls() {
             if (index === 0) cell.classList.add('first');
             if (index === total - 1) cell.classList.add('last');
             cell.textContent = String(index);
-            cell.title = `x=${x}, y=${y}, LED=${index}`;
+            cell.title = `Столбец ${x}, строка ${y}, светодиод ${index}`;
             preview.appendChild(cell);
         }
     }
@@ -1688,11 +1710,13 @@ function buildSelects() {
     let activeFreeZoneStillSelectable = false;
 
     zoneMeta.forEach(z => {
-        const opt = document.createElement('option');
-        opt.value = z.id;
-        opt.textContent = zoneOptionLabel(z);
-        opt.disabled = z.reserved || !z.enabled;
-        zoneSelect.appendChild(opt);
+        if (z.type !== 'off') {
+            const opt = document.createElement('option');
+            opt.value = z.id;
+            opt.textContent = zoneOptionLabel(z);
+            opt.disabled = z.reserved || !z.enabled;
+            zoneSelect.appendChild(opt);
+        }
 
         if (z.type === 'free') {
             const mapped = zoneHasPixels(z.id);
@@ -1818,13 +1842,6 @@ function redrawMatrix() {
     grid.querySelectorAll('.pixel').forEach(p => {
         const key = keyOf(p.dataset.x, p.dataset.y);
         const zoneId = hardwareZonesMap[key] || '0';
-        let previewBrightness = 1;
-        if (activeTab === 'status' && isEditablePortZone(zoneId)) {
-            previewBrightness = portsBrightnessValue / 255;
-        } else if (activeTab === 'free' && isFreeZone(zoneId)) {
-            previewBrightness = (Number(freeBrightness[zoneId]) || 100) / 255;
-        }
-        p.style.setProperty('--preview-brightness', String(Math.max(1 / 255, Math.min(1, previewBrightness))));
         p.dataset.zone = zoneId;
         p.classList.toggle('off-zone', zoneId === '0');
         p.classList.toggle('active-zone',
@@ -2105,7 +2122,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         });
         const text = await res.text();
         alert(text === 'OK'
-            ? 'Зоны сохранены во Flash.'
+            ? 'Зоны сохранены в памяти контроллера.'
             : text === 'ACTIVE_PORT_ZONE_EMPTY'
                 ? (validateActivePortZones() || 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.')
                 : 'Не удалось сохранить зоны.');
@@ -2141,7 +2158,7 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
 });
 
 document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
-    if (!confirm('Очистить всю разметку матрицы? Все пиксели станут Off только в браузере. Сохранить такую карту нельзя, пока активные порты не будут размечены.')) return;
+    if (!confirm('Очистить всю разметку матрицы? Все пиксели останутся без зоны только в браузере. Сохранить такую разметку нельзя, пока активные порты не будут размечены.')) return;
     hardwareZonesMap = {};
     zoneMapDirty = true;
     redrawMatrix();
@@ -2559,7 +2576,7 @@ async function loadNetworkStatus() {
     if (!backendAvailable) {
         networkStatus = buildMockNetworkStatus();
         renderNetworkStatus();
-        setNetworkMessage('Backend недоступен, показан локальный preview.');
+        setNetworkMessage('Контроллер недоступен, показан локальный предпросмотр.');
         return;
     }
 
@@ -2590,12 +2607,12 @@ function renderNetworkStatus() {
     renderDiagCards('network_summary', [
         ['Режим', networkModeLabel(networkStatus.mode)],
         ['Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)],
-        ['Wi-Fi SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'],
-        ['Wi-Fi IP', networkStatus.ip || 'нет'],
-        ['AP fallback', networkStatus.apSsid || 'не задан'],
-        ['AP IP', networkStatus.apIp || 'нет'],
-        ['RSSI', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'],
-        ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Static'],
+        ['Сеть Wi-Fi', networkStatus.connectedSsid || networkStatus.ssid || 'не задана'],
+        ['IP-адрес Wi-Fi', networkStatus.ip || 'нет'],
+        ['Резервная точка доступа', networkStatus.apSsid || 'не задана'],
+        ['IP-адрес точки доступа', networkStatus.apIp || 'нет'],
+        ['Уровень сигнала', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'],
+        ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Статический IP'],
     ]);
     fillNetworkForm(networkStatus);
 }
@@ -2603,8 +2620,8 @@ function renderNetworkStatus() {
 async function scanNetworks() {
     if (!backendAvailable) {
         renderDiagCards('network_scan', [
-            ['LED_MATRIX_A1B2C3', 'mock · -45 dBm'],
-            ['Office Wi-Fi', 'mock · -62 dBm'],
+            ['LED_MATRIX_A1B2C3', 'пример · -45 dBm'],
+            ['Пример сети Wi-Fi', 'пример · -62 dBm'],
         ]);
         setNetworkMessage('Сканирование работает только через контроллер.');
         return;
@@ -2618,7 +2635,7 @@ async function scanNetworks() {
         renderDiagCards(
             'network_scan',
             (networks || []).map(net => [
-                net.ssid || '(hidden)',
+                net.ssid || '(скрытая сеть)',
                 `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`,
             ]),
             'Сети не найдены.'
@@ -2631,7 +2648,7 @@ async function scanNetworks() {
 
 async function saveNetworkConfig() {
     if (!backendAvailable) {
-        setNetworkMessage('Backend недоступен, настройки сети не сохранены.', true);
+        setNetworkMessage('Контроллер недоступен, настройки сети не сохранены.', true);
         return;
     }
 
@@ -2681,7 +2698,7 @@ async function loadAuthStatus() {
 
     if (!backendAvailable) {
         document.getElementById('auth_username').value = 'admin';
-        setAuthMessage('Backend недоступен, пароль не будет сохранён.');
+        setAuthMessage('Контроллер недоступен, пароль не будет сохранён.');
         return;
     }
 
@@ -2700,7 +2717,7 @@ async function loadAuthStatus() {
 
 async function saveAuthConfig() {
     if (!backendAvailable) {
-        setAuthMessage('Backend недоступен, пароль не сохранён.', true);
+        setAuthMessage('Контроллер недоступен, пароль не сохранён.', true);
         return;
     }
 
@@ -2783,7 +2800,7 @@ function updateFirmwareFileState() {
 
     if (!file) {
         label.textContent = 'Файл не выбран.';
-        setFirmwareMessage('Выберите firmware.bin.');
+        setFirmwareMessage('Выберите файл прошивки firmware.bin.');
         return;
     }
 
@@ -2807,7 +2824,7 @@ function updateFirmwareFileState() {
 
 function uploadFirmware() {
     if (!backendAvailable) {
-        setFirmwareMessage('Backend недоступен, прошивка возможна только через контроллер.', true);
+        setFirmwareMessage('Контроллер недоступен, загрузка прошивки невозможна.', true);
         return;
     }
 
@@ -2816,7 +2833,7 @@ function uploadFirmware() {
     const file = input.files && input.files[0];
 
     if (!file) {
-        setFirmwareMessage('Выберите firmware.bin.', true);
+        setFirmwareMessage('Выберите файл прошивки firmware.bin.', true);
         return;
     }
     if (!file.name.toLowerCase().endsWith('.bin')) {
@@ -2877,9 +2894,9 @@ function renderDiagnostics() {
     renderDiagCards('diag_summary', [
         ['Активных портов', diagnostics.activePortCount ?? 1],
         ['Рабочий режим', runtimeModeLabel(mode)],
-        ['Состояние редактора', 'предпросмотр в UI'],
-        ['Основной LED-выход', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
-        ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'ESP32 контроллер'],
+        ['Состояние редактора', 'предпросмотр в браузере'],
+        ['Основной выход матрицы', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
+        ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'контроллер'],
     ]);
 
     renderDiagCards('diag_inputs', (diagnostics.inputs || []).map(input => [

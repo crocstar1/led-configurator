@@ -222,14 +222,21 @@ Edit/preview mode:
   - free-zone brightness is labeled as brightness for the selected free zone;
   - hardware live preview remains intentionally disabled; preview is browser-side.
 - Brightness controls were unified without changing backend endpoints:
-  - port brightness and selected free-zone brightness update the browser preview
+  - port brightness and selected free-zone brightness controls update
     immediately and persist after slider release or a short input debounce;
+  - browser matrix preview keeps a fixed readable visual brightness; brightness
+    controls affect only persisted/physical matrix brightness;
   - brightness persistence is independent from status-layer/free-zone content
     save buttons;
   - free-zone brightness uses partial `/save_free_zone` payloads, so changing
     brightness does not save pending mode, color, or custom-layer edits;
   - batch brightness applies only to mapped free zones and also sends
     brightness-only payloads.
+- UI terminology polish keeps zone `0` as the unassigned pixel state labeled
+  `Без зоны`, but excludes it from the active-zone selector because pixels are
+  returned to zone `0` with the eraser and clear actions. Mixed implementation
+  terms use Russian user-facing wording, and the Service icon is a lightweight
+  inline SVG.
 - Matrix UI context and dimension safety were tightened:
   - missing active-port zones are shown once in a dedicated warning above the
     matrix instead of being repeated in editor notices;
