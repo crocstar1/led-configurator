@@ -6,11 +6,21 @@ static constexpr const char *NVS_NAMESPACE = "net_cfg";
 static constexpr const char *DEFAULT_AP_SSID_PREFIX = "LED_MATRIX";
 static constexpr const char *DEFAULT_AP_PASSWORD = "12345678";
 static constexpr unsigned long STA_CONNECT_TIMEOUT_MS = 12000;
+static constexpr unsigned long STA_RECONNECT_TIMEOUT_MS = 45000;
+static constexpr unsigned long STA_RETRY_INTERVAL_MS = 5000;
+static constexpr unsigned long AP_FALLBACK_RETRY_INTERVAL_MS = 60000;
+static constexpr unsigned long NETWORK_WATCHDOG_INTERVAL_MS = 500;
 
 static NetworkConfig networkConfig;
 static NetworkRuntimeMode runtimeMode = NETWORK_MODE_AP_FALLBACK;
 static String connectionStatus = "not_configured";
 static unsigned long pendingApplyAt = 0;
+static unsigned long stateStartedAt = 0;
+static unsigned long lastWatchdogAt = 0;
+static unsigned long lastStaRetryAt = 0;
+static unsigned long fallbackStartedAt = 0;
+static bool retryStartedFromFallback = false;
+static bool fallbackStaRetryEnabled = false;
 
 static IPAddress defaultStaticIp(192, 168, 1, 150);
 static IPAddress defaultGateway(192, 168, 1, 1);
@@ -137,26 +147,29 @@ static void loadConfig() {
     }
 }
 
-static void startApFallback(const char *reason) {
+static void startApFallback(const char *reason, bool allowStaRetry) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(defaultApIp, defaultApIp, defaultApSubnet);
     WiFi.softAP(networkConfig.apSsid.c_str(), networkConfig.apPassword.c_str());
     runtimeMode = NETWORK_MODE_AP_FALLBACK;
     connectionStatus = reason;
+    stateStartedAt = millis();
+    fallbackStartedAt = stateStartedAt;
+    retryStartedFromFallback = false;
+    fallbackStaRetryEnabled = allowStaRetry && networkConfig.ssid.length() > 0;
     Serial.print("AP fallback: ");
     Serial.print(networkConfig.apSsid);
     Serial.print(" / ");
     Serial.println(WiFi.softAPIP());
 }
 
-static bool startSta() {
-    runtimeMode = NETWORK_MODE_CONNECTING;
-    connectionStatus = "connecting";
-
+static void startStaAttempt(NetworkRuntimeMode mode, bool fromFallback) {
+    WiFi.softAPdisconnect(true);
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
     WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.setHostname("led-controller");
 
     if (!networkConfig.dhcp) {
@@ -164,47 +177,108 @@ static bool startSta() {
     }
 
     WiFi.begin(networkConfig.ssid.c_str(), networkConfig.password.c_str());
-
-    const unsigned long startedAt = millis();
-    while (millis() - startedAt < STA_CONNECT_TIMEOUT_MS) {
-        if (WiFi.status() == WL_CONNECTED) {
-            runtimeMode = NETWORK_MODE_STA;
-            connectionStatus = "connected";
-            Serial.print("WiFi STA connected: ");
-            Serial.print(WiFi.SSID());
-            Serial.print(" / ");
-            Serial.println(WiFi.localIP());
-            return true;
-        }
-        delay(250);
-    }
-
-    connectionStatus = "connect_timeout";
-    return false;
+    runtimeMode = mode;
+    connectionStatus = mode == NETWORK_MODE_RECONNECTING ? "reconnecting" : "connecting";
+    stateStartedAt = millis();
+    lastStaRetryAt = stateStartedAt;
+    retryStartedFromFallback = fromFallback;
+    fallbackStaRetryEnabled = false;
 }
 
 static void applyConfig() {
     if (networkConfig.ssid.length() == 0) {
-        startApFallback("not_configured");
+        startApFallback("not_configured", false);
         return;
     }
 
-    if (!startSta()) {
-        startApFallback("connect_failed");
-    }
+    startStaAttempt(NETWORK_MODE_CONNECTING, false);
+}
+
+static void markStaConnected() {
+    runtimeMode = NETWORK_MODE_STA;
+    connectionStatus = "connected";
+    stateStartedAt = millis();
+    retryStartedFromFallback = false;
+    fallbackStaRetryEnabled = false;
+    Serial.print("WiFi STA connected: ");
+    Serial.print(WiFi.SSID());
+    Serial.print(" / ");
+    Serial.println(WiFi.localIP());
+}
+
+static void startStaReconnect(unsigned long now) {
+    runtimeMode = NETWORK_MODE_RECONNECTING;
+    connectionStatus = "reconnecting";
+    stateStartedAt = now;
+    lastStaRetryAt = now;
+    retryStartedFromFallback = false;
+    WiFi.setAutoReconnect(true);
+    WiFi.reconnect();
 }
 
 void network_setup() {
     loadConfig();
     WiFi.persistent(false);
+    WiFi.setAutoReconnect(true);
     WiFi.mode(WIFI_OFF);
     applyConfig();
 }
 
 void network_loop() {
-    if (pendingApplyAt > 0 && millis() >= pendingApplyAt) {
+    const unsigned long now = millis();
+
+    if (pendingApplyAt > 0 && (long)(now - pendingApplyAt) >= 0) {
         pendingApplyAt = 0;
         applyConfig();
+        return;
+    }
+
+    if (now - lastWatchdogAt < NETWORK_WATCHDOG_INTERVAL_MS) {
+        return;
+    }
+    lastWatchdogAt = now;
+
+    const bool connected = WiFi.status() == WL_CONNECTED;
+
+    if ((runtimeMode == NETWORK_MODE_CONNECTING || runtimeMode == NETWORK_MODE_RECONNECTING) && connected) {
+        markStaConnected();
+        return;
+    }
+
+    switch (runtimeMode) {
+        case NETWORK_MODE_STA:
+            if (!connected) {
+                startStaReconnect(now);
+            }
+            break;
+
+        case NETWORK_MODE_CONNECTING:
+            if (now - stateStartedAt >= STA_CONNECT_TIMEOUT_MS) {
+                startApFallback("connect_failed", true);
+            }
+            break;
+
+        case NETWORK_MODE_RECONNECTING: {
+            const unsigned long timeout = retryStartedFromFallback
+                ? STA_CONNECT_TIMEOUT_MS
+                : STA_RECONNECT_TIMEOUT_MS;
+
+            if (now - stateStartedAt >= timeout) {
+                startApFallback(retryStartedFromFallback ? "connect_failed" : "connection_lost", true);
+            } else if (now - lastStaRetryAt >= STA_RETRY_INTERVAL_MS) {
+                lastStaRetryAt = now;
+                WiFi.reconnect();
+            }
+            break;
+        }
+
+        case NETWORK_MODE_AP_FALLBACK:
+            if (fallbackStaRetryEnabled &&
+                WiFi.softAPgetStationNum() == 0 &&
+                now - fallbackStartedAt >= AP_FALLBACK_RETRY_INTERVAL_MS) {
+                startStaAttempt(NETWORK_MODE_RECONNECTING, true);
+            }
+            break;
     }
 }
 
@@ -241,6 +315,7 @@ const char *network_runtime_mode_string() {
     switch (runtimeMode) {
         case NETWORK_MODE_STA: return "sta";
         case NETWORK_MODE_CONNECTING: return "connecting";
+        case NETWORK_MODE_RECONNECTING: return "reconnecting";
         case NETWORK_MODE_AP_FALLBACK:
         default: return "ap_fallback";
     }

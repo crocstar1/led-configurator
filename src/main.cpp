@@ -815,7 +815,8 @@ void handleNetworkStatus() {
 void handleScanNetworks() {
     if (!requireHttpAuth()) return;
 
-    if (network_runtime_mode() == NETWORK_MODE_AP_FALLBACK) {
+    const bool restoreApOnly = network_runtime_mode() == NETWORK_MODE_AP_FALLBACK;
+    if (restoreApOnly) {
         WiFi.mode(WIFI_AP_STA);
     }
 
@@ -837,6 +838,9 @@ void handleScanNetworks() {
     }
     json += "]";
     WiFi.scanDelete();
+    if (restoreApOnly && network_runtime_mode() == NETWORK_MODE_AP_FALLBACK) {
+        WiFi.mode(WIFI_AP);
+    }
 
     server.send(200, "application/json", json);
 }
@@ -1041,8 +1045,15 @@ void setup() {
     network_setup();
 
     Serial.println("\n=== LED matrix controller network started ===");
-    Serial.print("Configurator address: http://");
-    Serial.println(network_sta_connected() ? network_local_ip_string() : network_ap_ip_string());
+    if (network_sta_connected()) {
+        Serial.print("Configurator address: http://");
+        Serial.println(network_local_ip_string());
+    } else if (network_runtime_mode() == NETWORK_MODE_AP_FALLBACK) {
+        Serial.print("Configurator address: http://");
+        Serial.println(network_ap_ip_string());
+    } else {
+        Serial.println("Configurator address pending WiFi connection");
+    }
 
     server.on("/", handleRoot);
     server.on("/get_size", handleGetMatrixSize);

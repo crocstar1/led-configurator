@@ -1256,6 +1256,7 @@ function networkModeLabel(mode) {
         sta: 'STA',
         ap_fallback: 'Fallback AP',
         connecting: 'Подключение',
+        reconnecting: 'Переподключение',
     };
     return labels[mode] || mode || 'неизвестно';
 }
@@ -1264,9 +1265,11 @@ function networkStatusLabel(status) {
     const labels = {
         connected: 'Подключено',
         connecting: 'Подключается',
+        reconnecting: 'Переподключается',
         not_configured: 'Не настроено',
         connect_failed: 'Fallback AP: сеть недоступна',
         connect_timeout: 'Fallback AP: таймаут подключения',
+        connection_lost: 'Fallback AP: подключение потеряно',
         mock: 'Локальный preview',
     };
     return labels[status] || status || 'неизвестно';
@@ -2567,9 +2570,18 @@ async function loadNetworkStatus() {
         renderNetworkStatus();
         setNetworkMessage('');
     } catch (err) {
-        networkStatus = buildMockNetworkStatus();
-        renderNetworkStatus();
-        setNetworkMessage('Не удалось получить статус сети.', true);
+        const hasLastKnownStatus = Boolean(networkStatus);
+        if (!hasLastKnownStatus) {
+            renderDiagCards('network_summary', [
+                ['Состояние', 'Связь с контроллером потеряна'],
+            ]);
+        }
+        setNetworkMessage(
+            hasLastKnownStatus
+                ? 'Не удалось получить статус сети. Показано последнее известное состояние.'
+                : 'Не удалось получить статус сети: связь с контроллером потеряна.',
+            true
+        );
     }
 }
 

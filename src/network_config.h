@@ -19,7 +19,8 @@ struct NetworkConfig {
 enum NetworkRuntimeMode {
     NETWORK_MODE_STA,
     NETWORK_MODE_AP_FALLBACK,
-    NETWORK_MODE_CONNECTING
+    NETWORK_MODE_CONNECTING,
+    NETWORK_MODE_RECONNECTING
 };
 
 void network_setup();

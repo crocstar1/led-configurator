@@ -167,6 +167,15 @@ Edit/preview mode:
   - local build passed after this stage.
 - Network config MVP added:
   - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
+  - STA startup is non-blocking, so the main loop continues reading Data inputs
+    while Wi-Fi connects;
+  - runtime states are `connecting`, `sta`, `reconnecting`, and `ap_fallback`;
+  - a 500 ms watchdog allows 45 seconds for an established STA connection to
+    recover before starting AP fallback;
+  - AP fallback remains AP-only; when no AP client is connected, a saved STA
+    network is retried once per minute without keeping permanent AP+STA mode;
+  - automatic reconnect is explicitly enabled instead of relying on framework
+    defaults;
   - network settings are stored separately in NVS namespace `net_cfg`;
   - DHCP and static IP fields are supported;
   - default AP fallback SSID is unique (`LED_MATRIX_XXXXXX`) using the ESP32
@@ -177,7 +186,10 @@ Edit/preview mode:
   - Network form uses one primary action: "Save and connect";
   - endpoints added: `/network_status`, `/scan_networks`, `/save_network`,
     `/network_reconnect`;
-  - network endpoints are protected with Basic Auth.
+  - network endpoints are protected with Basic Auth;
+  - temporary Network status request failures preserve the last real status
+    instead of displaying mock AP data;
+  - network watchdog changes are pending local build and hardware verification.
 - OTA MVP added:
   - service menu Firmware section uploads `firmware.bin` through `/update`;
   - upload progress and success/error states are shown in the web UI;
@@ -285,8 +297,8 @@ Edit/preview mode:
 The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
 and mechanical neutral rename have been successfully built locally.
 
-Current focus: preserve this stable point and proceed to hardware acceptance
-testing before adding new features.
+Current focus: local build and hardware verification of non-blocking STA,
+network watchdog transitions, and controlled AP fallback.
 
 Known active review topics:
 
@@ -325,8 +337,7 @@ Known active review topics:
 - Network MVP follow-up:
   - validate STA connect/reconnect behavior on hardware;
   - decide whether AP fallback default password is acceptable for production;
-  - consider reset/clear-network flow only if field testing shows it is needed;
-  - consider async/non-blocking startup connection after hardware testing.
+  - consider reset/clear-network flow only if field testing shows it is needed.
 - Auth hardening follow-up:
   - password hashing, captive portal, HTTPS, signed OTA, physical factory reset,
     and auth reset are intentionally deferred.
