@@ -20,13 +20,21 @@ static bool credentialsLookValid(const String &username, const String &password,
     return true;
 }
 
-static void saveRawCredentials(const String &username, const String &password) {
+static bool saveRawCredentials(const String &username, const String &password) {
     Preferences preferences;
-    if (!preferences.begin(NVS_NAMESPACE, false)) return;
-    preferences.putUShort("version", AUTH_CONFIG_VERSION);
-    preferences.putString("username", username);
-    preferences.putString("password", password);
+    if (!preferences.begin(NVS_NAMESPACE, false)) return false;
+    const size_t versionWritten = preferences.putUShort("version", AUTH_CONFIG_VERSION);
+    const size_t usernameWritten = preferences.putString("username", username);
+    const size_t passwordWritten = preferences.putString("password", password);
+    const bool verified =
+        preferences.getUShort("version", 0) == AUTH_CONFIG_VERSION &&
+        preferences.getString("username", "") == username &&
+        preferences.getString("password", "") == password;
     preferences.end();
+    return versionWritten == sizeof(uint16_t) &&
+        usernameWritten == username.length() &&
+        passwordWritten == password.length() &&
+        verified;
 }
 
 void auth_config_setup() {
@@ -45,7 +53,9 @@ void auth_config_setup() {
     if (version != AUTH_CONFIG_VERSION || !credentialsLookValid(username, password, true)) {
         currentUsername = DEFAULT_USERNAME;
         currentPassword = DEFAULT_PASSWORD;
-        saveRawCredentials(currentUsername, currentPassword);
+        if (!saveRawCredentials(currentUsername, currentPassword)) {
+            Serial.println("Auth defaults could not be saved to NVS");
+        }
         return;
     }
 
@@ -94,8 +104,16 @@ bool auth_config_save_credentials(const String &username, const String &password
         return false;
     }
 
+    const String previousUsername = currentUsername;
+    const String previousPassword = currentPassword;
+    if (!saveRawCredentials(cleanUsername, password)) {
+        const bool rollbackSucceeded = saveRawCredentials(previousUsername, previousPassword);
+        error = rollbackSucceeded ? "NVS_WRITE_FAILED" : "NVS_WRITE_FAILED_ROLLBACK_FAILED";
+        return false;
+    }
+
     currentUsername = cleanUsername;
     currentPassword = password;
-    saveRawCredentials(currentUsername, currentPassword);
+    error = "";
     return true;
 }

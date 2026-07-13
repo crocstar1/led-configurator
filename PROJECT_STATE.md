@@ -230,6 +230,35 @@ Edit/preview mode:
   - invalid or dimension-incompatible matrix storage clears matrix/status/free
     layer keys in `led_settings` before loading defaults, without touching
     network or auth namespaces.
+- UI diagnostics reliability pass added:
+  - mock mode is selected only when the initial `/get_config` request is
+    unavailable;
+  - a temporary `/diagnostics` failure reports lost communication without
+    disabling the real backend session, and later requests can recover;
+  - diagnostics polling runs every 2.5 seconds only while its service section
+    is open; outside it, a 30-second refresh keeps the header runtime status
+    current and allows communication recovery without frequent heavy requests;
+  - network and diagnostics values are rendered through DOM `textContent`
+    instead of inserting external strings through `innerHTML`.
+- API/storage correctness pass implemented, pending local build and reboot
+  verification:
+  - current save endpoints return success only after NVS write/read-back
+    verification; storage failures return HTTP 500 instead of false `OK`;
+  - `/set_bright` is POST-only and its UI caller uses POST form data;
+  - status/free custom layers are strictly validated for JSON shape, color,
+    duplicate coordinates, entry count, and current compile-time matrix bounds;
+  - `/save_zones` rejects malformed or out-of-range map entries instead of
+    silently saving a partial map;
+  - `/save_free_zone` validates the full payload before writing, and a
+    brightness-only payload changes only that zone's brightness;
+  - frontend canonical sources are `matrix.topology` and
+    `free_zones[].mode`; legacy response aliases remain for compatibility;
+  - frontend status fallback colors come from `/get_config`, with hardcoded
+    colors retained only for mock/invalid-response fallback;
+  - multi-key status/free/network/auth writes use best-effort rollback on a
+    detected write failure. NVS has no transaction across separate keys, so a
+    sudden power loss between commits remains a small residual consistency
+    risk.
 - Topology selector MVP added:
   - UI exposes the four existing topology codes `0..3`;
   - topology is saved through `/save_topology` in the existing matrix config
@@ -248,21 +277,28 @@ Edit/preview mode:
   - old, missing, or invalid matrix config now falls back to defaults.
 - Runtime indication safety added:
   - active port zones cannot be saved with zero pixels;
-  - UI blocks clearing the last required active-port pixel;
+  - UI allows temporary clearing while editing and warns that the invalid map
+    cannot be saved until every active port has at least one pixel;
   - backend `/save_zones` validates active port zone presence before applying
     a new zone map.
 
 ## Currently In Work
 
-Current focus: build/manual verification of clean matrix storage cleanup and
-active port zone safety.
+Current focus: local build and save/reload/reboot verification of the safe
+cleanup, UI diagnostics reliability, and API/storage correctness changes,
+without changing NVS formats or runtime rendering behavior.
 
 Known active review topics:
 
-- Verify first-boot defaults after incompatible old matrix config is ignored.
-- Verify save/reload for zones, topology, status colors, and free zones.
-- Verify active port zones can be temporarily cleared during editing, but
-  cannot be saved while any active port has no pixels.
+- Verify the safe cleanup builds without missing declarations or includes.
+- Recheck zones, statuses, free zones, diagnostics, network, auth, and OTA after
+  the cleanup build.
+- Verify diagnostics polling uses the 2.5-second active rate only while the
+  diagnostics service section is open, falls back to a 30-second status refresh
+  outside it, and recovers after a temporary failure.
+- Verify matrix zones, topology, status layers/default colors, free-zone full
+  and brightness-only saves, network settings, and auth credentials survive
+  reload and reboot and do not report success on failed writes.
 
 ## Known UI Issues
 

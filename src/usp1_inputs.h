@@ -7,12 +7,10 @@
 struct Usp1InputState {
     bool active[USP1_DATA_INPUT_COUNT];
     uint8_t rawLevel[USP1_DATA_INPUT_COUNT];
-    uint8_t activeMask;
 };
 
 void usp1_inputs_setup();
 void usp1_inputs_update();
 const Usp1InputState &usp1_inputs_get_state();
-bool usp1_inputs_is_active(uint8_t dataIndex);
 
 #endif

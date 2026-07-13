@@ -16,6 +16,9 @@ static constexpr uint16_t MATRIX_CONFIG_VERSION = 1;
 static constexpr uint32_t FREE_ZONE_CONFIG_MAGIC = 0x315A5246UL; // "FRZ1"
 static constexpr uint16_t FREE_ZONE_CONFIG_VERSION = 1;
 static constexpr uint8_t MAX_ZONE_ID = ZONE_ID_MAX;
+static constexpr size_t MAX_LAYER_JSON_BYTES = 2 + (NUM_IC_CHIPS * 32);
+
+static bool zones_are_valid(const uint8_t *zones, size_t zoneCount);
 
 struct StoredMatrixConfig {
     uint32_t magic;
@@ -47,6 +50,123 @@ static bool is_valid_hex_color(const String &value) {
         }
     }
     return true;
+}
+
+static void skip_json_whitespace(const String &value, int &position) {
+    while (position < value.length() && isspace((unsigned char)value[position])) {
+        position++;
+    }
+}
+
+static bool parse_coordinate_component(const String &value, int &result) {
+    if (value.length() == 0) return false;
+
+    result = 0;
+    for (int i = 0; i < value.length(); i++) {
+        if (!isdigit((unsigned char)value[i])) return false;
+        const int digit = value[i] - '0';
+        if (result > (2147483647 - digit) / 10) return false;
+        result = (result * 10) + digit;
+    }
+    return true;
+}
+
+static bool parse_layer_coordinate(const String &coordinate, int &x, int &y) {
+    const int dash = coordinate.indexOf('-');
+    if (dash <= 0 || dash != coordinate.lastIndexOf('-') || dash >= coordinate.length() - 1) {
+        return false;
+    }
+
+    return parse_coordinate_component(coordinate.substring(0, dash), x) &&
+        parse_coordinate_component(coordinate.substring(dash + 1), y) &&
+        x >= 0 && x < MATRIX_X && y >= 0 && y < VIRTUAL_Y;
+}
+
+static bool normalize_layer_json(
+    const String &colorsJson,
+    String &normalizedJson,
+    bool enforceZone,
+    uint8_t zoneId,
+    const uint8_t *zones,
+    size_t zoneCount
+) {
+    String source = colorsJson;
+    source.trim();
+    if (source.length() < 2 || source.length() > MAX_LAYER_JSON_BYTES ||
+        source[0] != '{' || source[source.length() - 1] != '}') {
+        return false;
+    }
+
+    if (enforceZone && (!zone_is_free(zoneId) || !zones_are_valid(zones, zoneCount))) {
+        return false;
+    }
+
+    bool seen[NUM_IC_CHIPS] = {};
+    size_t entryCount = 0;
+    int position = 1;
+    normalizedJson = "{";
+    normalizedJson.reserve(source.length());
+
+    skip_json_whitespace(source, position);
+    if (position == source.length() - 1) {
+        normalizedJson += "}";
+        return true;
+    }
+
+    while (position < source.length() - 1) {
+        if (source[position] != '"') return false;
+        const int keyEnd = source.indexOf('"', position + 1);
+        if (keyEnd < 0) return false;
+        const String coordinate = source.substring(position + 1, keyEnd);
+        position = keyEnd + 1;
+
+        skip_json_whitespace(source, position);
+        if (position >= source.length() || source[position] != ':') return false;
+        position++;
+        skip_json_whitespace(source, position);
+
+        if (position >= source.length() || source[position] != '"') return false;
+        const int valueEnd = source.indexOf('"', position + 1);
+        if (valueEnd < 0) return false;
+        const String color = source.substring(position + 1, valueEnd);
+        position = valueEnd + 1;
+
+        int x = -1;
+        int y = -1;
+        if (!parse_layer_coordinate(coordinate, x, y) || !is_valid_hex_color(color)) {
+            return false;
+        }
+
+        const int index = getLEDIndex(x, y);
+        if (index < 0 || index >= NUM_IC_CHIPS || seen[index] ||
+            (enforceZone && zones[index] != zoneId)) {
+            return false;
+        }
+        seen[index] = true;
+
+        if (entryCount >= NUM_IC_CHIPS) return false;
+        if (entryCount > 0) normalizedJson += ",";
+        normalizedJson += "\"";
+        normalizedJson += String(x);
+        normalizedJson += "-";
+        normalizedJson += String(y);
+        normalizedJson += "\":\"";
+        normalizedJson += color;
+        normalizedJson += "\"";
+        entryCount++;
+
+        skip_json_whitespace(source, position);
+        if (position == source.length() - 1) {
+            normalizedJson += "}";
+            return true;
+        }
+        if (source[position] != ',') return false;
+        position++;
+        skip_json_whitespace(source, position);
+        if (position >= source.length() - 1) return false;
+    }
+
+    return false;
 }
 
 static const char *status_layer_key(const char *status) {
@@ -148,7 +268,7 @@ static bool free_zone_configs_are_valid(const FreeZoneConfig *freeZones, size_t 
     return true;
 }
 
-void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
+static void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zoneCount) {
     memset(&config, 0, sizeof(config));
 
     config.topology = 0;
@@ -180,7 +300,7 @@ void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, size_t zon
     config.color_error[2] = 0;
 }
 
-void matrix_config_set_free_zone_defaults(FreeZoneConfig *freeZones, size_t freeZoneCount) {
+static void matrix_config_set_free_zone_defaults(FreeZoneConfig *freeZones, size_t freeZoneCount) {
     if (freeZones == nullptr || freeZoneCount != FREE_ZONE_COUNT) {
         return;
     }
@@ -210,7 +330,7 @@ void matrix_config_set_free_zone_defaults(FreeZoneConfig *freeZones, size_t free
     freeZones[free_zone_index(ZONE_ID_CUSTOM)].staticColor[2] = 222;
 }
 
-bool matrix_config_validate(const MatrixConfig &config, const uint8_t *zones, size_t zoneCount) {
+static bool matrix_config_validate(const MatrixConfig &config, const uint8_t *zones, size_t zoneCount) {
     if (!zones_are_valid(zones, zoneCount)) {
         return false;
     }
@@ -282,11 +402,16 @@ bool matrix_config_save(const MatrixConfig &config, const uint8_t *zones, size_t
     memcpy(stored.zones, zones, sizeof(stored.zones));
 
     Preferences preferences;
-    preferences.begin(NVS_NAMESPACE, false);
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
     const size_t bytesWritten = preferences.putBytes(KEY_MATRIX_CONFIG, &stored, sizeof(stored));
+    StoredMatrixConfig verified = {};
+    const size_t bytesRead = preferences.getBytes(KEY_MATRIX_CONFIG, &verified, sizeof(verified));
     preferences.end();
 
-    return bytesWritten == sizeof(stored);
+    return bytesWritten == sizeof(stored) && bytesRead == sizeof(verified) &&
+        memcmp(&stored, &verified, sizeof(stored)) == 0;
 }
 
 bool matrix_config_load_free_zones(FreeZoneConfig *freeZones, size_t freeZoneCount) {
@@ -331,11 +456,16 @@ bool matrix_config_save_free_zones(const FreeZoneConfig *freeZones, size_t freeZ
     memcpy(stored.zones, freeZones, sizeof(stored.zones));
 
     Preferences preferences;
-    preferences.begin(NVS_NAMESPACE, false);
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
     const size_t bytesWritten = preferences.putBytes(KEY_FREE_ZONES, &stored, sizeof(stored));
+    StoredFreeZoneConfigV1 verified = {};
+    const size_t bytesRead = preferences.getBytes(KEY_FREE_ZONES, &verified, sizeof(verified));
     preferences.end();
 
-    return bytesWritten == sizeof(stored);
+    return bytesWritten == sizeof(stored) && bytesRead == sizeof(verified) &&
+        memcmp(&stored, &verified, sizeof(stored)) == 0;
 }
 
 String matrix_config_load_status_layer(const char *status) {
@@ -349,11 +479,12 @@ String matrix_config_load_status_layer(const char *status) {
     String layer = preferences.getString(key, "{}");
     preferences.end();
 
-    if (layer.length() == 0) {
+    String normalized;
+    if (!matrix_config_normalize_status_layer(layer, normalized)) {
         return "{}";
     }
 
-    return layer;
+    return normalized;
 }
 
 bool matrix_config_save_status_layer(const char *status, const String &colorsJson) {
@@ -362,18 +493,24 @@ bool matrix_config_save_status_layer(const char *status, const String &colorsJso
         return false;
     }
 
-    String safeJson = colorsJson;
-    safeJson.trim();
-    if (!safeJson.startsWith("{") || !safeJson.endsWith("}")) {
+    String safeJson;
+    if (!matrix_config_normalize_status_layer(colorsJson, safeJson)) {
         return false;
     }
 
     Preferences preferences;
-    preferences.begin(NVS_NAMESPACE, false);
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
     const size_t bytesWritten = preferences.putString(key, safeJson);
+    const String verified = preferences.getString(key, "");
     preferences.end();
 
-    return bytesWritten > 0;
+    return bytesWritten == safeJson.length() && verified == safeJson;
+}
+
+bool matrix_config_normalize_status_layer(const String &colorsJson, String &normalizedJson) {
+    return normalize_layer_json(colorsJson, normalizedJson, false, ZONE_ID_OFF, nullptr, 0);
 }
 
 String matrix_config_load_free_zone_layer(uint8_t zoneId) {
@@ -387,11 +524,12 @@ String matrix_config_load_free_zone_layer(uint8_t zoneId) {
     String layer = preferences.getString(key.c_str(), "{}");
     preferences.end();
 
-    if (layer.length() == 0 || !layer.startsWith("{") || !layer.endsWith("}")) {
+    String normalized;
+    if (!normalize_layer_json(layer, normalized, false, zoneId, nullptr, 0)) {
         return "{}";
     }
 
-    return layer;
+    return normalized;
 }
 
 bool matrix_config_save_free_zone_layer(uint8_t zoneId, const String &colorsJson, const uint8_t *zones, size_t zoneCount) {
@@ -400,65 +538,28 @@ bool matrix_config_save_free_zone_layer(uint8_t zoneId, const String &colorsJson
         return false;
     }
 
-    String source = colorsJson;
-    source.trim();
-    if (!source.startsWith("{") || !source.endsWith("}")) {
+    String safeJson;
+    if (!matrix_config_normalize_free_zone_layer(zoneId, colorsJson, zones, zoneCount, safeJson)) {
         return false;
     }
 
-    String safeJson = "{";
-    bool first = true;
-    int pos = 0;
-
-    while (true) {
-        int keyStart = source.indexOf('"', pos);
-        if (keyStart < 0) break;
-
-        int keyEnd = source.indexOf('"', keyStart + 1);
-        if (keyEnd < 0) break;
-
-        String coord = source.substring(keyStart + 1, keyEnd);
-        int dashPos = coord.indexOf('-');
-        if (dashPos < 0) {
-            pos = keyEnd + 1;
-            continue;
-        }
-
-        int colonPos = source.indexOf(':', keyEnd + 1);
-        if (colonPos < 0) break;
-
-        int valueStart = source.indexOf('"', colonPos + 1);
-        if (valueStart < 0) break;
-
-        int valueEnd = source.indexOf('"', valueStart + 1);
-        if (valueEnd < 0) break;
-
-        String value = source.substring(valueStart + 1, valueEnd);
-        const int x = coord.substring(0, dashPos).toInt();
-        const int y = coord.substring(dashPos + 1).toInt();
-        const int index = getLEDIndex(x, y);
-
-        if (index >= 0 && index < (int)zoneCount && zones[index] == zoneId && is_valid_hex_color(value)) {
-            if (!first) safeJson += ",";
-            first = false;
-            safeJson += "\"";
-            safeJson += String(x);
-            safeJson += "-";
-            safeJson += String(y);
-            safeJson += "\":\"";
-            safeJson += value;
-            safeJson += "\"";
-        }
-
-        pos = valueEnd + 1;
-    }
-
-    safeJson += "}";
-
     Preferences preferences;
-    preferences.begin(NVS_NAMESPACE, false);
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
     const size_t bytesWritten = preferences.putString(key.c_str(), safeJson);
+    const String verified = preferences.getString(key.c_str(), "");
     preferences.end();
 
-    return bytesWritten > 0 || safeJson == "{}";
+    return bytesWritten == safeJson.length() && verified == safeJson;
+}
+
+bool matrix_config_normalize_free_zone_layer(
+    uint8_t zoneId,
+    const String &colorsJson,
+    const uint8_t *zones,
+    size_t zoneCount,
+    String &normalizedJson
+) {
+    return normalize_layer_json(colorsJson, normalizedJson, true, zoneId, zones, zoneCount);
 }

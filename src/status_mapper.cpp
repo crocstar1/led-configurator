@@ -43,34 +43,6 @@ const StatusMapperState &status_mapper_get_state() {
     return mapperState;
 }
 
-void status_mapper_set_active_port_count(uint8_t activePortCount) {
-    if (activePortCount > USP1_MAX_PORT_COUNT) {
-        activePortCount = USP1_MAX_PORT_COUNT;
-    }
-    mapperState.activePortCount = activePortCount;
-
-    for (uint8_t i = 0; i < USP1_MAX_PORT_COUNT; i++) {
-        mapperState.ports[i].enabled = (i < mapperState.activePortCount);
-        if (!mapperState.ports[i].enabled) {
-            mapperState.statuses[i] = PORT_STATUS_DISABLED;
-        }
-    }
-}
-
-bool status_mapper_configure_port(uint8_t portIndex, uint8_t chargingInput, uint8_t errorInput, uint8_t zoneId) {
-    if (portIndex >= USP1_MAX_PORT_COUNT ||
-        chargingInput >= USP1_DATA_INPUT_COUNT ||
-        errorInput >= USP1_DATA_INPUT_COUNT) {
-        return false;
-    }
-
-    mapperState.ports[portIndex].chargingInput = chargingInput;
-    mapperState.ports[portIndex].errorInput = errorInput;
-    mapperState.ports[portIndex].zoneId = zoneId;
-    mapperState.ports[portIndex].enabled = (portIndex < mapperState.activePortCount);
-    return true;
-}
-
 const char *status_mapper_status_to_string(PortStatus status) {
     switch (status) {
         case PORT_STATUS_WAITING:

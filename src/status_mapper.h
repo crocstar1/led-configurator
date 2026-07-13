@@ -28,8 +28,6 @@ struct StatusMapperState {
 void status_mapper_setup();
 void status_mapper_update(const Usp1InputState &inputs);
 const StatusMapperState &status_mapper_get_state();
-void status_mapper_set_active_port_count(uint8_t activePortCount);
-bool status_mapper_configure_port(uint8_t portIndex, uint8_t chargingInput, uint8_t errorInput, uint8_t zoneId);
 const char *status_mapper_status_to_string(PortStatus status);
 
 #endif

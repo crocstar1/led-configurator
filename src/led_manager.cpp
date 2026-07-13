@@ -36,6 +36,8 @@ FreeZoneLayerCache freeZoneLayers[FREE_ZONE_COUNT];
 static constexpr uint16_t STARTUP_COLOR_MS = 180;
 static constexpr uint16_t STARTUP_ERROR_POLL_MS = 20;
 
+static void led_load_config_from_flash();
+
 static bool startup_error_active() {
     usp1_inputs_update();
     status_mapper_update(usp1_inputs_get_state());
@@ -295,7 +297,7 @@ void led_refresh_internal() {
     static uint8_t rainbowHue = 0;
     rainbowHue += 1; 
 
-    // Вычисляем синусоидальный пульс яркости для режима ожидания
+    // Вычисляем треугольный пульс яркости для режима ожидания.
     uint8_t pulseBright = (uint8_t)(220 * breatheScale);
     if (pulseBright < 40) pulseBright = 40; 
 
@@ -304,7 +306,7 @@ void led_refresh_internal() {
     CRGB customCharge = CRGB(cfg.color_charge[0], cfg.color_charge[1], cfg.color_charge[2]);
     CRGB customError  = CRGB(cfg.color_error[0], cfg.color_error[1], cfg.color_error[2]);
 
-    // Применяем индивидуальные лимиты яркости зон (ШИМ-масштабирование FastLED)
+    // Применяем общую яркость ко всем портовым зонам.
     customWait.nscale8_video(cfg.bright_ports);
     customCharge.nscale8_video(cfg.bright_ports);
     customError.nscale8_video(cfg.bright_ports);
@@ -346,7 +348,7 @@ void led_refresh_internal() {
                 }
             }
         }
-        // СЕРВИСНЫЕ ЗОНЫ ЗАРЯДНЫХ ПОРТОВ (1, 2, 3, 4)
+        // Port zones 1..4 use the current mapped runtime status.
         if (zone_is_port(zone)) {
             const uint8_t portIndex = zone - ZONE_ID_PORT1;
             const PortStatus zoneStatus = (portIndex < USP1_MAX_PORT_COUNT)
@@ -427,7 +429,7 @@ void led_setup() {
     xTaskCreatePinnedToCore(ledTaskWorker, "LED_Task", 4096, NULL, 1, NULL, 1);
 }
 
-void led_load_config_from_flash() {
+static void led_load_config_from_flash() {
     matrix_config_load(cfg, zoneMap, sizeof(zoneMap));
     matrix_config_load_free_zones(freeZoneConfigs, FREE_ZONE_COUNT);
     led_reload_status_layers_unlocked();
@@ -441,18 +443,6 @@ void led_refresh_safe() {
     if (ledMutex == NULL) return;
     if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
         led_refresh_internal();
-        xSemaphoreGive(ledMutex);
-    }
-}
-
-void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId) {
-    if (!zone_id_is_valid(zoneId)) return;
-    if (ledMutex == NULL) return;
-    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
-        int index = getLEDIndex(x, y);
-        if (index != -1) {
-            zoneMap[index] = zoneId;
-        }
         xSemaphoreGive(ledMutex);
     }
 }

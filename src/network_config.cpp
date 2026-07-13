@@ -82,6 +82,36 @@ static bool validateConfig(const NetworkConfig &config, String &error) {
     return true;
 }
 
+static bool writeConfigToNvs(const NetworkConfig &config) {
+    Preferences preferences;
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
+
+    preferences.putString("ssid", config.ssid);
+    preferences.putString("pass", config.password);
+    preferences.putBool("dhcp", config.dhcp);
+    preferences.putString("ip", network_ip_to_string(config.staticIp));
+    preferences.putString("gw", network_ip_to_string(config.gateway));
+    preferences.putString("mask", network_ip_to_string(config.subnet));
+    preferences.putString("dns", network_ip_to_string(config.dns));
+    preferences.putString("ap_ssid", config.apSsid);
+    preferences.putString("ap_pass", config.apPassword);
+
+    const bool verified =
+        preferences.getString("ssid", "") == config.ssid &&
+        preferences.getString("pass", "") == config.password &&
+        preferences.getBool("dhcp", !config.dhcp) == config.dhcp &&
+        preferences.getString("ip", "") == network_ip_to_string(config.staticIp) &&
+        preferences.getString("gw", "") == network_ip_to_string(config.gateway) &&
+        preferences.getString("mask", "") == network_ip_to_string(config.subnet) &&
+        preferences.getString("dns", "") == network_ip_to_string(config.dns) &&
+        preferences.getString("ap_ssid", "") == config.apSsid &&
+        preferences.getString("ap_pass", "") == config.apPassword;
+    preferences.end();
+    return verified;
+}
+
 static void loadConfig() {
     setDefaults(networkConfig);
 
@@ -187,20 +217,15 @@ bool network_config_save(const NetworkConfig &config, String &error) {
         return false;
     }
 
-    Preferences preferences;
-    preferences.begin(NVS_NAMESPACE, false);
-    preferences.putString("ssid", config.ssid);
-    preferences.putString("pass", config.password);
-    preferences.putBool("dhcp", config.dhcp);
-    preferences.putString("ip", network_ip_to_string(config.staticIp));
-    preferences.putString("gw", network_ip_to_string(config.gateway));
-    preferences.putString("mask", network_ip_to_string(config.subnet));
-    preferences.putString("dns", network_ip_to_string(config.dns));
-    preferences.putString("ap_ssid", config.apSsid);
-    preferences.putString("ap_pass", config.apPassword);
-    preferences.end();
+    const NetworkConfig previous = networkConfig;
+    if (!writeConfigToNvs(config)) {
+        const bool rollbackSucceeded = writeConfigToNvs(previous);
+        error = rollbackSucceeded ? "NVS_WRITE_FAILED" : "NVS_WRITE_FAILED_ROLLBACK_FAILED";
+        return false;
+    }
 
     networkConfig = config;
+    error = "";
     return true;
 }
 

@@ -10,8 +10,8 @@ and stores matrix configuration in NVS.
 
 - Data1 = GPIO16, Port 1 charging
 - Data2 = GPIO17, Port 1 error
-- Data3 = GPIO18, Port 2 charging, reserved
-- Data4 = GPIO19, Port 2 error, reserved
+- Data3 = GPIO18, Port 2 charging
+- Data4 = GPIO19, Port 2 error
 - Data5 = GPIO21, Port 3 charging, reserved
 - Data6 = GPIO25, Port 3 error, reserved
 - Data7 = GPIO26, Port 4 charging, reserved
@@ -26,7 +26,7 @@ Fixed zone slots:
 
 - 0 = Off
 - 1 = Port 1
-- 2 = Port 2 reserved
+- 2 = Port 2
 - 3 = Port 3 reserved
 - 4 = Port 4 reserved
 - 5 = Logo
@@ -50,15 +50,15 @@ The firmware serves an engineering setup UI with:
 - Matrix Zones editor
 - Port Status editor
 - Free Zones editor
-- Diagnostics
+- Service menu with Diagnostics, Network, Security, and Firmware sections
 
 Preview editing is client-side where possible so runtime port error indication
 is not hidden by UI custom mode.
 
-## Current MVP Notes
+## Current State
 
-- Port 1 is active.
-- Port 2..4 are reserved/disabled.
-- Free zone storage is partial: Logo color/brightness/rainbow use existing
-  backend config; QR, Service, and Custom modes are UI-preview only until
-  FreeZoneConfig storage is added.
+- Port 1 and Port 2 are active by default; Port 3 and Port 4 are reserved.
+- Logo, QR, Service, and Custom zones persist mode, color, brightness, and
+  custom pixel layers in NVS.
+- Network STA/AP fallback, Basic Auth, diagnostics, and local web OTA are
+  available through the service menu.

@@ -18,7 +18,7 @@
 // Stored matrix rendering configuration.
 struct MatrixConfig {
     uint8_t topology;        // 0 - Справа-Снизу, 1 - Слева-Снизу, 2 - Слева-Сверху, 3 - Справа-Сверху
-    uint8_t bright_ports;    // Яркость зон зарядок (1-255)
+    uint8_t bright_ports;    // Общая яркость портовых зон (1-255)
     
     // Global RGB colors for port statuses.
     uint8_t color_wait[3];   // RGB для статуса "Ожидание"
@@ -43,9 +43,7 @@ extern uint8_t zoneMap[NUM_IC_CHIPS];
 void led_setup();
 
 // Thread-safe LED and zone update helpers.
-void led_load_config_from_flash(); 
 void led_refresh_safe();
-void led_set_pixel_zone_safe(int x, int y, uint8_t zoneId);
 void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount);
 void led_reload_status_layers_safe();
 void led_reload_free_zone_layers_safe();

@@ -2,7 +2,6 @@
 #define ZONE_MODEL_H
 
 #include <Arduino.h>
-#include "usp1_board_config.h"
 
 enum ZoneType : uint8_t {
     ZONE_TYPE_OFF = 0,

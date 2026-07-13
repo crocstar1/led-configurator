@@ -867,6 +867,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <strong>Диагностика</strong>
                         <button class="btn" id="refresh_diag_btn" type="button">Обновить данные</button>
                     </div>
+                    <div class="hint" id="diagnostics_message"></div>
                     <div class="diag-grid" id="diag_summary"></div>
                     <div class="section-divider"></div>
                     <div>
@@ -1021,11 +1022,12 @@ const zoneColors = {
     '8': '#af52de',
 };
 
-const statusDefaults = {
+const MOCK_STATUS_DEFAULTS = {
     waiting: '#34c759',
     charging: '#0055ff',
     error: '#ff3b30',
 };
+let statusDefaults = { ...MOCK_STATUS_DEFAULTS };
 
 const STATUS_LABELS = {
     waiting: 'ожидание',
@@ -1097,6 +1099,8 @@ let networkStatus = null;
 let rainbowTick = 0;
 let backendAvailable = false;
 let mockMode = false;
+let serviceOpen = false;
+let diagnosticsRequestInFlight = false;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
 let activePortCount = 2;
@@ -1180,7 +1184,6 @@ function zonesForActivePortCount(zones, count) {
 function buildMockConfig() {
     const mockActivePortCount = 2;
     return {
-        topo: 0,
         b_ports: 120,
         c_wait: '#34c759',
         c_charge: '#0055ff',
@@ -1291,10 +1294,22 @@ function sanitizeLayerForSize(layer) {
     return clean;
 }
 
+function sanitizeFreeLayerForZone(layer, zoneId) {
+    const clean = sanitizeLayerForSize(layer);
+    Object.keys(clean).forEach(key => {
+        if (String(hardwareZonesMap[key] ?? '0') !== String(zoneId)) delete clean[key];
+    });
+    return clean;
+}
+
 function clampBrightnessValue(value, fallback = 100) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return fallback;
     return Math.max(1, Math.min(255, Math.round(parsed)));
+}
+
+function configHexColor(value, fallback) {
+    return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 function setBrightnessPair(rangeId, inputId, value) {
@@ -1376,7 +1391,7 @@ function applyConfig(cfg) {
         cols: COLS,
         rows: ROWS,
         total: Number(matrix.total) || COLS * ROWS,
-        topology: Number(matrix.topology ?? cfg.topo ?? 0),
+        topology: Number(matrix.topology ?? 0),
     };
     pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
     activePortCount = clampActivePortCount(cfg.activePortCount ?? cfg.active_port_count ?? activePortCount);
@@ -1396,6 +1411,12 @@ function applyConfig(cfg) {
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeLayerForSize(cfg.layers?.charge || {});
     statusColorLayers.error = sanitizeLayerForSize(cfg.layers?.err || {});
+    statusDefaults = {
+        waiting: configHexColor(cfg.c_wait, MOCK_STATUS_DEFAULTS.waiting),
+        charging: configHexColor(cfg.c_charge, MOCK_STATUS_DEFAULTS.charging),
+        error: configHexColor(cfg.c_error, MOCK_STATUS_DEFAULTS.error),
+    };
+    document.getElementById('status_color').value = statusDefaults[activeStatus];
     Object.keys(freeCustomLayers).forEach(zoneId => {
         freeCustomLayers[zoneId] = sanitizeLayerForSize(freeCustomLayers[zoneId]);
     });
@@ -1404,8 +1425,7 @@ function applyConfig(cfg) {
         activePortCount
     );
     portsBrightnessValue = setBrightnessPair('ports_brightness', 'ports_brightness_input', cfg.b_ports || 120);
-    zoneMeta.filter(z => z.type === 'free').forEach(z => { freeModes[String(z.id)] = z.mode || freeModes[String(z.id)] || 'static'; });
-
+    freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
     if (Array.isArray(cfg.free_zones)) {
         cfg.free_zones.forEach(fz => {
             const zoneId = String(fz.zoneId ?? fz.id);
@@ -1414,7 +1434,7 @@ function applyConfig(cfg) {
             freeStaticColors[zoneId] = fz.staticColor || freeStaticColors[zoneId] || '#ffffff';
             freeBrushColors[zoneId] = freeBrushColors[zoneId] || freeStaticColors[zoneId];
             freeBrightness[zoneId] = Number(fz.brightness) || freeBrightness[zoneId] || 100;
-            freeCustomLayers[zoneId] = sanitizeLayerForSize(fz.customLayer || freeCustomLayers[zoneId] || {});
+            freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(fz.customLayer || {}, zoneId);
         });
     }
 }
@@ -1521,10 +1541,6 @@ function updateDirtyIndicators() {
 function zonePixelCountInMap(map, zoneId) {
     const target = String(zoneId);
     return Object.values(map || {}).filter(value => String(value) === target).length;
-}
-
-function showEditSafetyMessage(message) {
-    document.getElementById('edit_state_line').textContent = message;
 }
 
 function activeFreeZoneIsMapped() {
@@ -1912,6 +1928,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 function setServiceOpen(open) {
+    serviceOpen = open;
     const backdrop = document.getElementById('service_backdrop');
     backdrop.classList.toggle('open', open);
     backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
@@ -2091,6 +2108,9 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
                 : 'Не удалось сохранить зоны.');
         if (res.ok && text === 'OK') {
             zoneMapDirty = false;
+            Object.keys(freeCustomLayers).forEach(zoneId => {
+                freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(freeCustomLayers[zoneId], zoneId);
+            });
             updateDirtyIndicators();
             updateEditState();
             flushPendingFreeZoneBrightness();
@@ -2145,8 +2165,12 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: activeStatus, colors: statusColorLayers[activeStatus] })
         });
-        const ok = await res.text() === 'OK';
+        const responseText = await res.text();
+        const ok = res.ok && responseText === 'OK';
         if (ok) {
+            const firstSavedColor = Object.values(statusColorLayers[activeStatus])
+                .find(color => typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color));
+            if (firstSavedColor) statusDefaults[activeStatus] = firstSavedColor;
             statusLayerDirty[activeStatus] = false;
             updateDirtyIndicators();
             updateEditState();
@@ -2180,7 +2204,14 @@ async function persistPortsBrightness(value, revision) {
     if (!backendAvailable) return false;
 
     try {
-        const res = await fetch(`/set_bright?type=ports&val=${value}`);
+        const body = new URLSearchParams();
+        body.set('type', 'ports');
+        body.set('val', String(value));
+        const res = await fetch('/set_bright', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+        });
         const ok = res.ok && (await res.text()) === 'OK';
         if (revision === portsBrightnessRevision) {
             portsBrightnessDirty = !ok;
@@ -2263,14 +2294,15 @@ document.getElementById('free_brightness_input').addEventListener('change', e =>
 
 function buildFreeZonePayload(zoneId) {
     const id = String(zoneId);
-    return {
+    const payload = {
         zoneId: Number(id),
         enabled: true,
         mode: freeModes[id] || 'static',
         staticColor: freeStaticColors[id] || '#ffffff',
         brightness: freeBrightness[id] || 100,
-        customLayer: freeCustomLayers[id] || {},
     };
+    if (payload.mode === 'custom') payload.customLayer = freeCustomLayers[id] || {};
+    return payload;
 }
 
 function buildFreeZoneBrightnessPayload(zoneId, brightness) {
@@ -2443,7 +2475,7 @@ async function loadConfig() {
                     cols: Number(parts[0]) || 12,
                     rows: Number(parts[1]) || 8,
                     total: (Number(parts[0]) || 12) * (Number(parts[1]) || 8),
-                    topology: cfg.topo || 0,
+                    topology: 0,
                 };
             }
         }
@@ -2468,22 +2500,32 @@ async function loadDiagnostics() {
     if (!backendAvailable) {
         diagnostics = buildMockDiagnostics();
         renderDiagnostics();
+        setDiagnosticsMessage('Локальный предпросмотр: данные контроллера недоступны.');
         return;
     }
+
+    if (diagnosticsRequestInFlight) return;
+    diagnosticsRequestInFlight = true;
 
     try {
         const res = await fetch('/diagnostics');
         if (!res.ok) throw new Error(`diagnostics ${res.status}`);
         diagnostics = await res.json();
         renderDiagnostics();
+        setDiagnosticsMessage('');
     } catch (err) {
-        backendAvailable = false;
-        mockMode = true;
-        diagnostics = buildMockDiagnostics();
-        renderDiagnostics();
-        document.getElementById('runtime_label').textContent = 'локальный предпросмотр: контроллер недоступен';
+        setDiagnosticsMessage('Связь с контроллером потеряна. Повторная проверка будет выполнена автоматически.', true);
+        document.getElementById('runtime_label').textContent = 'связь с контроллером потеряна';
         document.getElementById('runtime_dot').style.background = 'var(--orange)';
+    } finally {
+        diagnosticsRequestInFlight = false;
     }
+}
+
+function setDiagnosticsMessage(text, isError = false) {
+    const el = document.getElementById('diagnostics_message');
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
 }
 
 function setNetworkMessage(text, isError = false) {
@@ -2533,25 +2575,25 @@ async function loadNetworkStatus() {
 
 function renderNetworkStatus() {
     if (!networkStatus) return;
-    document.getElementById('network_summary').innerHTML = [
-        diagCard('Режим', networkModeLabel(networkStatus.mode)),
-        diagCard('Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)),
-        diagCard('Wi-Fi SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'),
-        diagCard('Wi-Fi IP', networkStatus.ip || 'нет'),
-        diagCard('AP fallback', networkStatus.apSsid || 'не задан'),
-        diagCard('AP IP', networkStatus.apIp || 'нет'),
-        diagCard('RSSI', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'),
-        diagCard('Адресация', networkStatus.dhcp ? 'DHCP' : 'Static'),
-    ].join('');
+    renderDiagCards('network_summary', [
+        ['Режим', networkModeLabel(networkStatus.mode)],
+        ['Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)],
+        ['Wi-Fi SSID', networkStatus.connectedSsid || networkStatus.ssid || 'не задан'],
+        ['Wi-Fi IP', networkStatus.ip || 'нет'],
+        ['AP fallback', networkStatus.apSsid || 'не задан'],
+        ['AP IP', networkStatus.apIp || 'нет'],
+        ['RSSI', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'],
+        ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Static'],
+    ]);
     fillNetworkForm(networkStatus);
 }
 
 async function scanNetworks() {
     if (!backendAvailable) {
-        document.getElementById('network_scan').innerHTML = [
-            diagCard('LED_MATRIX_A1B2C3', 'mock · -45 dBm'),
-            diagCard('Office Wi-Fi', 'mock · -62 dBm'),
-        ].join('');
+        renderDiagCards('network_scan', [
+            ['LED_MATRIX_A1B2C3', 'mock · -45 dBm'],
+            ['Office Wi-Fi', 'mock · -62 dBm'],
+        ]);
         setNetworkMessage('Сканирование работает только через контроллер.');
         return;
     }
@@ -2561,9 +2603,14 @@ async function scanNetworks() {
         const res = await fetch('/scan_networks');
         if (!res.ok) throw new Error(`scan ${res.status}`);
         const networks = await res.json();
-        document.getElementById('network_scan').innerHTML = (networks || []).map(net =>
-            diagCard(net.ssid || '(hidden)', `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`)
-        ).join('') || '<div class="notice">Сети не найдены.</div>';
+        renderDiagCards(
+            'network_scan',
+            (networks || []).map(net => [
+                net.ssid || '(hidden)',
+                `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`,
+            ]),
+            'Сети не найдены.'
+        );
         setNetworkMessage('');
     } catch (err) {
         setNetworkMessage('Не удалось выполнить сканирование.', true);
@@ -2815,29 +2862,51 @@ function renderDiagnostics() {
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
 
-    document.getElementById('diag_summary').innerHTML = [
-        diagCard('Активных портов', diagnostics.activePortCount ?? 1),
-        diagCard('Рабочий режим', runtimeModeLabel(mode)),
-        diagCard('Состояние редактора', 'предпросмотр в UI'),
-        diagCard('Основной LED-выход', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`),
-        diagCard('Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'ESP32 контроллер'),
-    ].join('');
+    renderDiagCards('diag_summary', [
+        ['Активных портов', diagnostics.activePortCount ?? 1],
+        ['Рабочий режим', runtimeModeLabel(mode)],
+        ['Состояние редактора', 'предпросмотр в UI'],
+        ['Основной LED-выход', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
+        ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'ESP32 контроллер'],
+    ]);
 
-    document.getElementById('diag_inputs').innerHTML = (diagnostics.inputs || []).map(input =>
-        diagCard(input.name, `GPIO${input.gpio} · ${input.raw} · ${input.active ? 'активен' : 'неактивен'}`)
-    ).join('');
+    renderDiagCards('diag_inputs', (diagnostics.inputs || []).map(input => [
+        input.name,
+        `GPIO${input.gpio} · ${input.raw} · ${input.active ? 'активен' : 'неактивен'}`,
+    ]));
 
-    document.getElementById('diag_ports').innerHTML = (diagnostics.ports || []).map(port =>
-        diagCard(`Порт ${port.port}`, `${port.enabled ? statusLabel(port.status) : 'отключён / резерв'} · зона ${port.zoneId}`)
-    ).join('');
+    renderDiagCards('diag_ports', (diagnostics.ports || []).map(port => [
+        `Порт ${port.port}`,
+        `${port.enabled ? statusLabel(port.status) : 'отключён / резерв'} · зона ${port.zoneId}`,
+    ]));
 
-    document.getElementById('diag_leds').innerHTML = (diagnostics.ledOutputs || []).map(led =>
-        diagCard(led.name, `GPIO${led.gpio} · ${led.state === 'primary' ? 'основной' : 'резерв'}`)
-    ).join('');
+    renderDiagCards('diag_leds', (diagnostics.ledOutputs || []).map(led => [
+        led.name,
+        `GPIO${led.gpio} · ${led.state === 'primary' ? 'основной' : 'резерв'}`,
+    ]));
 }
 
-function diagCard(title, value) {
-    return `<div class="diag-card"><strong>${title}</strong><span>${value}</span></div>`;
+function createDiagCard(title, value) {
+    const card = document.createElement('div');
+    card.className = 'diag-card';
+    const heading = document.createElement('strong');
+    const content = document.createElement('span');
+    heading.textContent = String(title ?? '');
+    content.textContent = String(value ?? '');
+    card.append(heading, content);
+    return card;
+}
+
+function renderDiagCards(containerId, cards, emptyText = '') {
+    const container = document.getElementById(containerId);
+    const nodes = (cards || []).map(([title, value]) => createDiagCard(title, value));
+    if (!nodes.length && emptyText) {
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.textContent = emptyText;
+        nodes.push(notice);
+    }
+    container.replaceChildren(...nodes);
 }
 
 setInterval(() => {
@@ -2845,7 +2914,17 @@ setInterval(() => {
     if (activeTab === 'free' && freeModes[activeFreeZone] === 'rainbow') redrawMatrix();
 }, 160);
 
-setInterval(loadDiagnostics, 2500);
+setInterval(() => {
+    if (backendAvailable && serviceOpen && activeServiceSection === 'diagnostics') {
+        loadDiagnostics();
+    }
+}, 2500);
+
+setInterval(() => {
+    if (backendAvailable && (!serviceOpen || activeServiceSection !== 'diagnostics')) {
+        loadDiagnostics();
+    }
+}, 30000);
 
 loadConfig().catch(err => {
     const line = document.getElementById('edit_state_line');

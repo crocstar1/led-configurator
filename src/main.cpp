@@ -2,7 +2,6 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ctype.h>
-#include <string.h>
 #include "gui_html.h"
 #include "led_manager.h"
 #include "matrix_config_storage.h"
@@ -47,18 +46,20 @@ String rgbToHex(const uint8_t *rgb) {
     return String(buf);
 }
 
+bool isValidHexColor(const String &value) {
+    if (value.length() != 7 || value[0] != '#') return false;
+    for (int i = 1; i < value.length(); i++) {
+        if (!isxdigit((unsigned char)value[i])) return false;
+    }
+    return true;
+}
+
 String jsonEscape(String value) {
     value.replace("\\", "\\\\");
     value.replace("\"", "\\\"");
     value.replace("\n", "\\n");
     value.replace("\r", "\\r");
     return value;
-}
-
-uint8_t clampByteValue(int value, uint8_t fallback) {
-    if (value < 1) return fallback;
-    if (value > 255) return 255;
-    return (uint8_t)value;
 }
 
 String extractJsonStringField(const String &json, const char *fieldName) {
@@ -72,8 +73,9 @@ String extractJsonStringField(const String &json, const char *fieldName) {
     int colonPos = json.indexOf(':', fieldPos + pattern.length());
     if (colonPos < 0) return "";
 
-    int quoteStart = json.indexOf('"', colonPos + 1);
-    if (quoteStart < 0) return "";
+    int quoteStart = colonPos + 1;
+    while (quoteStart < json.length() && isspace((unsigned char)json[quoteStart])) quoteStart++;
+    if (quoteStart >= json.length() || json[quoteStart] != '"') return "";
 
     int quoteEnd = json.indexOf('"', quoteStart + 1);
     if (quoteEnd < 0) return "";
@@ -88,44 +90,82 @@ bool jsonHasField(const String &json, const char *fieldName) {
     return json.indexOf(pattern) >= 0;
 }
 
-int extractJsonIntField(const String &json, const char *fieldName, int fallback) {
+bool parseStrictInt(const String &value, int &result) {
+    String clean = value;
+    clean.trim();
+    if (clean.length() == 0) return false;
+
+    int position = 0;
+    bool negative = false;
+    if (clean[position] == '-') {
+        negative = true;
+        position++;
+    }
+    if (position >= clean.length()) return false;
+
+    long parsed = 0;
+    for (; position < clean.length(); position++) {
+        if (!isdigit((unsigned char)clean[position])) return false;
+        const int digit = clean[position] - '0';
+        if (parsed > (2147483647L - digit) / 10L) return false;
+        parsed = (parsed * 10) + digit;
+    }
+
+    result = negative ? -(int)parsed : (int)parsed;
+    return true;
+}
+
+bool extractJsonIntField(const String &json, const char *fieldName, int &result, bool allowBoolean = false) {
     String pattern = "\"";
     pattern += fieldName;
     pattern += "\"";
 
     int fieldPos = json.indexOf(pattern);
-    if (fieldPos < 0) return fallback;
+    if (fieldPos < 0) return false;
 
     int colonPos = json.indexOf(':', fieldPos + pattern.length());
-    if (colonPos < 0) return fallback;
+    if (colonPos < 0) return false;
 
     int valueStart = colonPos + 1;
     while (valueStart < json.length() && isspace((unsigned char)json[valueStart])) valueStart++;
 
-    if (json.substring(valueStart, valueStart + 4) == "true") return 1;
-    if (json.substring(valueStart, valueStart + 5) == "false") return 0;
+    if (allowBoolean) {
+        const bool trueValue = json.substring(valueStart, valueStart + 4) == "true";
+        const bool falseValue = json.substring(valueStart, valueStart + 5) == "false";
+        if (trueValue || falseValue) {
+            int trailing = valueStart + (trueValue ? 4 : 5);
+            while (trailing < json.length() && isspace((unsigned char)json[trailing])) trailing++;
+            if (trailing >= json.length() || (json[trailing] != ',' && json[trailing] != '}')) return false;
+            result = trueValue ? 1 : 0;
+            return true;
+        }
+    }
 
     int valueEnd = valueStart;
     if (valueEnd < json.length() && json[valueEnd] == '-') valueEnd++;
     while (valueEnd < json.length() && isdigit((unsigned char)json[valueEnd])) valueEnd++;
 
-    if (valueEnd <= valueStart) return fallback;
-    return json.substring(valueStart, valueEnd).toInt();
+    if (valueEnd <= valueStart) return false;
+    int trailing = valueEnd;
+    while (trailing < json.length() && isspace((unsigned char)json[trailing])) trailing++;
+    if (trailing < json.length() && json[trailing] != ',' && json[trailing] != '}') return false;
+    return parseStrictInt(json.substring(valueStart, valueEnd), result);
 }
 
-String extractJsonObjectField(const String &json, const char *fieldName) {
+bool extractJsonObjectField(const String &json, const char *fieldName, String &result) {
     String pattern = "\"";
     pattern += fieldName;
     pattern += "\"";
 
     int fieldPos = json.indexOf(pattern);
-    if (fieldPos < 0) return "{}";
+    if (fieldPos < 0) return false;
 
     int colonPos = json.indexOf(':', fieldPos + pattern.length());
-    if (colonPos < 0) return "{}";
+    if (colonPos < 0) return false;
 
-    int objectStart = json.indexOf('{', colonPos + 1);
-    if (objectStart < 0) return "{}";
+    int objectStart = colonPos + 1;
+    while (objectStart < json.length() && isspace((unsigned char)json[objectStart])) objectStart++;
+    if (objectStart >= json.length() || json[objectStart] != '{') return false;
 
     int depth = 0;
     for (int i = objectStart; i < json.length(); i++) {
@@ -133,12 +173,13 @@ String extractJsonObjectField(const String &json, const char *fieldName) {
         if (json[i] == '}') {
             depth--;
             if (depth == 0) {
-                return json.substring(objectStart, i + 1);
+                result = json.substring(objectStart, i + 1);
+                return true;
             }
         }
     }
 
-    return "{}";
+    return false;
 }
 
 bool findFirstHexColor(const String &json, String &hexColor) {
@@ -164,12 +205,25 @@ bool findFirstHexColor(const String &json, String &hexColor) {
     return false;
 }
 
-FreeZoneMode parseFreeZoneMode(String mode, FreeZoneMode fallback) {
+bool parseFreeZoneMode(String mode, FreeZoneMode &result) {
     mode.toLowerCase();
-    if (mode == "static") return FREE_ZONE_STATIC;
-    if (mode == "custom") return FREE_ZONE_CUSTOM;
-    if (mode == "rainbow") return FREE_ZONE_RAINBOW;
-    return fallback;
+    if (mode == "static") result = FREE_ZONE_STATIC;
+    else if (mode == "custom") result = FREE_ZONE_CUSTOM;
+    else if (mode == "rainbow") result = FREE_ZONE_RAINBOW;
+    else return false;
+    return true;
+}
+
+bool canonicalStatusName(const String &value, String &canonical) {
+    if (value == "waiting" || value == "wait") canonical = "waiting";
+    else if (value == "charging" || value == "charge") canonical = "charging";
+    else if (value == "error" || value == "err") canonical = "error";
+    else return false;
+    return true;
+}
+
+bool isStorageError(const String &error) {
+    return error.startsWith("NVS_");
 }
 
 void appendHardwareMapJson(String &json) {
@@ -327,6 +381,82 @@ bool zoneMapHasRequiredActivePortZones(const uint8_t *zones, size_t zoneCount) {
     return true;
 }
 
+void skipJsonWhitespace(const String &value, int &position) {
+    while (position < value.length() && isspace((unsigned char)value[position])) position++;
+}
+
+bool parseZoneCoordinate(const String &coordinate, int &x, int &y) {
+    const int dash = coordinate.indexOf('-');
+    if (dash <= 0 || dash != coordinate.lastIndexOf('-') || dash >= coordinate.length() - 1) return false;
+    return parseStrictInt(coordinate.substring(0, dash), x) &&
+        parseStrictInt(coordinate.substring(dash + 1), y) &&
+        x >= 0 && x < MATRIX_X && y >= 0 && y < VIRTUAL_Y;
+}
+
+bool parseZoneMapPayload(const String &body, uint8_t *zones, size_t zoneCount) {
+    if (zones == nullptr || zoneCount != NUM_IC_CHIPS || body.length() < 2 ||
+        body.length() > (2 + (NUM_IC_CHIPS * 24)) || body[0] != '{' || body[body.length() - 1] != '}') {
+        return false;
+    }
+
+    for (size_t i = 0; i < zoneCount; i++) zones[i] = ZONE_ID_OFF;
+    bool seen[NUM_IC_CHIPS] = {};
+    size_t entryCount = 0;
+    int position = 1;
+    skipJsonWhitespace(body, position);
+    if (position == body.length() - 1) return true;
+
+    while (position < body.length() - 1) {
+        if (body[position] != '"') return false;
+        const int keyEnd = body.indexOf('"', position + 1);
+        if (keyEnd < 0) return false;
+        const String coordinate = body.substring(position + 1, keyEnd);
+        position = keyEnd + 1;
+
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] != ':') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+
+        bool quoted = false;
+        if (position < body.length() && body[position] == '"') {
+            quoted = true;
+            position++;
+        }
+        const int valueStart = position;
+        if (position < body.length() && body[position] == '-') position++;
+        while (position < body.length() && isdigit((unsigned char)body[position])) position++;
+        if (position == valueStart || (body[valueStart] == '-' && position == valueStart + 1)) return false;
+        const String zoneValue = body.substring(valueStart, position);
+        if (quoted) {
+            if (position >= body.length() || body[position] != '"') return false;
+            position++;
+        }
+
+        int x = -1;
+        int y = -1;
+        int zoneId = -1;
+        if (!parseZoneCoordinate(coordinate, x, y) || !parseStrictInt(zoneValue, zoneId) ||
+            zoneId < ZONE_ID_OFF || zoneId > ZONE_ID_MAX || !zone_id_is_valid((uint8_t)zoneId)) {
+            return false;
+        }
+        const int index = getLEDIndex(x, y);
+        if (index < 0 || index >= NUM_IC_CHIPS || seen[index] || entryCount >= NUM_IC_CHIPS) return false;
+        seen[index] = true;
+        zones[index] = (uint8_t)zoneId;
+        entryCount++;
+
+        skipJsonWhitespace(body, position);
+        if (position == body.length() - 1) return true;
+        if (body[position] != ',') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() - 1) return false;
+    }
+
+    return false;
+}
+
 void handleRoot() {
     if (!requireHttpAuth()) return;
     server.send_P(200, "text/html", PAGE_MAIN); 
@@ -378,57 +508,10 @@ void handleSaveZones() {
 
     String body = server.arg("plain");
     body.trim();
-    if (!body.startsWith("{") || !body.endsWith("}")) {
+    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
+    if (!parseZoneMapPayload(body, nextZoneMap, sizeof(nextZoneMap))) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
-    }
-
-    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
-
-    int pos = 0;
-    while (true) {
-        int keyStart = body.indexOf('"', pos);
-        if (keyStart < 0) break;
-
-        int keyEnd = body.indexOf('"', keyStart + 1);
-        if (keyEnd < 0) break;
-
-        String key = body.substring(keyStart + 1, keyEnd);
-        int dashPos = key.indexOf('-');
-        if (dashPos < 0) {
-            pos = keyEnd + 1;
-            continue;
-        }
-
-        int colonPos = body.indexOf(':', keyEnd + 1);
-        if (colonPos < 0) break;
-
-        int valueStart = colonPos + 1;
-        while (valueStart < body.length() && isspace((unsigned char)body[valueStart])) valueStart++;
-
-        String value;
-        if (valueStart < body.length() && body[valueStart] == '"') {
-            int valueEnd = body.indexOf('"', valueStart + 1);
-            if (valueEnd < 0) break;
-            value = body.substring(valueStart + 1, valueEnd);
-            pos = valueEnd + 1;
-        } else {
-            int valueEnd = valueStart;
-            while (valueEnd < body.length() && isdigit((unsigned char)body[valueEnd])) valueEnd++;
-            value = body.substring(valueStart, valueEnd);
-            pos = valueEnd;
-        }
-
-        int x = key.substring(0, dashPos).toInt();
-        int y = key.substring(dashPos + 1).toInt();
-        int zoneId = value.toInt();
-
-        if (x >= 0 && x < MATRIX_X && y >= 0 && y < VIRTUAL_Y && zoneId >= 0 && zone_id_is_valid((uint8_t)zoneId)) {
-            const int index = getLEDIndex(x, y);
-            if (index >= 0 && index < NUM_IC_CHIPS) {
-                nextZoneMap[index] = (uint8_t)zoneId;
-            }
-        }
     }
 
     if (!zoneMapHasRequiredActivePortZones(nextZoneMap, sizeof(nextZoneMap))) {
@@ -451,10 +534,10 @@ void handleSaveTopology() {
 
     int topology = -1;
     if (server.hasArg("topology")) {
-        topology = server.arg("topology").toInt();
+        if (!parseStrictInt(server.arg("topology"), topology)) topology = -1;
     } else {
         const String body = server.arg("plain");
-        topology = extractJsonIntField(body, "topology", -1);
+        if (!extractJsonIntField(body, "topology", topology)) topology = -1;
     }
 
     if (topology < 0 || topology > 3) {
@@ -462,11 +545,13 @@ void handleSaveTopology() {
         return;
     }
 
-    cfg.topology = (uint8_t)topology;
-    if (!matrix_config_save(cfg, zoneMap, sizeof(zoneMap))) {
+    MatrixConfig nextConfig = cfg;
+    nextConfig.topology = (uint8_t)topology;
+    if (!matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
         server.send(500, "text/plain", "SAVE_FAILED");
         return;
     }
+    cfg = nextConfig;
 
     led_reload_status_layers_safe();
     led_reload_free_zone_layers_safe();
@@ -482,17 +567,26 @@ void handleSetBright() {
         return;
     }
 
-    String type = server.arg("type");
-    uint8_t value = clampByteValue(server.arg("val").toInt(), 120);
+    const String type = server.arg("type");
+    int parsedValue = 0;
+    if (!parseStrictInt(server.arg("val"), parsedValue) || parsedValue < 1 || parsedValue > 255) {
+        server.send(400, "text/plain", "BAD_BRIGHTNESS");
+        return;
+    }
 
+    MatrixConfig nextConfig = cfg;
     if (type == "ports") {
-        cfg.bright_ports = value;
+        nextConfig.bright_ports = (uint8_t)parsedValue;
     } else {
         server.send(400, "text/plain", "BAD_TYPE");
         return;
     }
 
-    matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    if (!matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+    cfg = nextConfig;
     led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
@@ -502,31 +596,63 @@ void handleSaveStatusColors() {
 
     String body = server.arg("plain");
     body.trim();
-    if (!body.startsWith("{") || !body.endsWith("}")) {
+    if (!body.startsWith("{") || !body.endsWith("}") ||
+        body.length() > (2 + (NUM_IC_CHIPS * 32) + 128)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
 
-    String status = extractJsonStringField(body, "status");
-    String colorsJson = extractJsonObjectField(body, "colors");
-
-    if (status.length() == 0 || !matrix_config_save_status_layer(status.c_str(), colorsJson)) {
+    String status;
+    if (!canonicalStatusName(extractJsonStringField(body, "status"), status)) {
         server.send(400, "text/plain", "BAD_STATUS");
         return;
     }
 
-    String firstColor;
-    if (findFirstHexColor(colorsJson, firstColor)) {
-        if (status == "waiting") {
-            parseHexColor(firstColor, cfg.color_wait);
-        } else if (status == "charging") {
-            parseHexColor(firstColor, cfg.color_charge);
-        } else if (status == "error") {
-            parseHexColor(firstColor, cfg.color_error);
-        }
-        matrix_config_save(cfg, zoneMap, sizeof(zoneMap));
+    String colorsJson;
+    String normalizedLayer;
+    if (!extractJsonObjectField(body, "colors", colorsJson) ||
+        !matrix_config_normalize_status_layer(colorsJson, normalizedLayer)) {
+        server.send(400, "text/plain", "BAD_LAYER");
+        return;
     }
 
+    MatrixConfig nextConfig = cfg;
+    bool configChanged = false;
+    String firstColor;
+    if (findFirstHexColor(normalizedLayer, firstColor)) {
+        uint8_t parsedColor[3] = {};
+        parseHexColor(firstColor, parsedColor);
+        uint8_t *target = nullptr;
+        if (status == "waiting") {
+            target = nextConfig.color_wait;
+        } else if (status == "charging") {
+            target = nextConfig.color_charge;
+        } else if (status == "error") {
+            target = nextConfig.color_error;
+        }
+        if (target != nullptr) {
+            configChanged = target[0] != parsedColor[0] || target[1] != parsedColor[1] || target[2] != parsedColor[2];
+            target[0] = parsedColor[0];
+            target[1] = parsedColor[1];
+            target[2] = parsedColor[2];
+        }
+    }
+
+    const String previousLayer = matrix_config_load_status_layer(status.c_str());
+    if (!matrix_config_save_status_layer(status.c_str(), normalizedLayer)) {
+        server.send(500, "text/plain", "SAVE_LAYER_FAILED");
+        return;
+    }
+
+    if (configChanged && !matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
+        const bool rollbackSucceeded = matrix_config_save_status_layer(status.c_str(), previousLayer);
+        server.send(500, "text/plain", rollbackSucceeded
+            ? "SAVE_CONFIG_FAILED"
+            : "SAVE_CONFIG_FAILED_ROLLBACK_FAILED");
+        return;
+    }
+
+    if (configChanged) cfg = nextConfig;
     led_reload_status_layers_safe();
     server.send(200, "text/plain", "OK");
 }
@@ -536,13 +662,15 @@ void handleSaveFreeZone() {
 
     String body = server.arg("plain");
     body.trim();
-    if (!body.startsWith("{") || !body.endsWith("}")) {
+    if (!body.startsWith("{") || !body.endsWith("}") ||
+        body.length() > (2 + (NUM_IC_CHIPS * 32) + 512)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
 
-    const int zoneIdValue = extractJsonIntField(body, "zoneId", -1);
-    if (zoneIdValue < 0 || zoneIdValue > 255 || !zone_is_free((uint8_t)zoneIdValue)) {
+    int zoneIdValue = -1;
+    if (!extractJsonIntField(body, "zoneId", zoneIdValue) ||
+        zoneIdValue < 0 || zoneIdValue > 255 || !zone_is_free((uint8_t)zoneIdValue)) {
         server.send(400, "text/plain", "BAD_ZONE");
         return;
     }
@@ -553,29 +681,87 @@ void handleSaveFreeZone() {
         return;
     }
 
-    FreeZoneConfig &freeZone = freeZoneConfigs[zoneIndex];
-    freeZone.enabled = extractJsonIntField(body, "enabled", freeZone.enabled ? 1 : 0) ? 1 : 0;
-    freeZone.mode = parseFreeZoneMode(extractJsonStringField(body, "mode"), freeZone.mode);
-    freeZone.brightness = clampByteValue(extractJsonIntField(body, "brightness", freeZone.brightness), freeZone.brightness);
+    FreeZoneConfig nextConfigs[FREE_ZONE_COUNT];
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) nextConfigs[i] = freeZoneConfigs[i];
+    FreeZoneConfig &nextZone = nextConfigs[zoneIndex];
+    bool hasConfigPayload = false;
 
-    const String staticColor = extractJsonStringField(body, "staticColor");
-    if (staticColor.length() == 7) {
-        parseHexColor(staticColor, freeZone.staticColor);
+    if (jsonHasField(body, "enabled")) {
+        int enabled = -1;
+        if (!extractJsonIntField(body, "enabled", enabled, true) || (enabled != 0 && enabled != 1)) {
+            server.send(400, "text/plain", "BAD_ENABLED");
+            return;
+        }
+        nextZone.enabled = (uint8_t)enabled;
+        hasConfigPayload = true;
     }
 
-    if (!matrix_config_save_free_zones(freeZoneConfigs, FREE_ZONE_COUNT)) {
-        server.send(500, "text/plain", "SAVE_CONFIG_FAILED");
-        return;
+    if (jsonHasField(body, "mode")) {
+        if (!parseFreeZoneMode(extractJsonStringField(body, "mode"), nextZone.mode)) {
+            server.send(400, "text/plain", "BAD_MODE");
+            return;
+        }
+        hasConfigPayload = true;
     }
 
-    if (freeZone.mode == FREE_ZONE_CUSTOM && jsonHasField(body, "customLayer")) {
-        const String customLayer = extractJsonObjectField(body, "customLayer");
-        if (!matrix_config_save_free_zone_layer(freeZone.zoneId, customLayer, zoneMap, sizeof(zoneMap))) {
+    if (jsonHasField(body, "brightness")) {
+        int brightness = 0;
+        if (!extractJsonIntField(body, "brightness", brightness) || brightness < 1 || brightness > 255) {
+            server.send(400, "text/plain", "BAD_BRIGHTNESS");
+            return;
+        }
+        nextZone.brightness = (uint8_t)brightness;
+        hasConfigPayload = true;
+    }
+
+    if (jsonHasField(body, "staticColor")) {
+        const String staticColor = extractJsonStringField(body, "staticColor");
+        if (!isValidHexColor(staticColor)) {
+            server.send(400, "text/plain", "BAD_COLOR");
+            return;
+        }
+        parseHexColor(staticColor, nextZone.staticColor);
+        hasConfigPayload = true;
+    }
+
+    const bool hasCustomLayer = jsonHasField(body, "customLayer");
+    String normalizedLayer;
+    if (hasCustomLayer) {
+        String customLayer;
+        if (!extractJsonObjectField(body, "customLayer", customLayer) ||
+            !matrix_config_normalize_free_zone_layer(nextZone.zoneId, customLayer, zoneMap, sizeof(zoneMap), normalizedLayer)) {
             server.send(400, "text/plain", "BAD_LAYER");
             return;
         }
     }
 
+    const bool saveCustomLayer = hasCustomLayer && nextZone.mode == FREE_ZONE_CUSTOM;
+    if (!hasConfigPayload && !saveCustomLayer) {
+        server.send(400, "text/plain", "NO_CHANGES");
+        return;
+    }
+
+    String previousLayer;
+    if (saveCustomLayer) {
+        previousLayer = matrix_config_load_free_zone_layer(nextZone.zoneId);
+        if (!matrix_config_save_free_zone_layer(nextZone.zoneId, normalizedLayer, zoneMap, sizeof(zoneMap))) {
+            server.send(500, "text/plain", "SAVE_LAYER_FAILED");
+            return;
+        }
+    }
+
+    if (hasConfigPayload && !matrix_config_save_free_zones(nextConfigs, FREE_ZONE_COUNT)) {
+        const bool rollbackSucceeded = !saveCustomLayer ||
+            matrix_config_save_free_zone_layer(nextZone.zoneId, previousLayer, zoneMap, sizeof(zoneMap));
+        server.send(500, "text/plain", rollbackSucceeded
+            ? "SAVE_CONFIG_FAILED"
+            : "SAVE_CONFIG_FAILED_ROLLBACK_FAILED");
+        return;
+    }
+
+    if (hasConfigPayload) {
+        for (size_t i = 0; i < FREE_ZONE_COUNT; i++) freeZoneConfigs[i] = nextConfigs[i];
+    }
     led_reload_free_zone_layers_safe();
     led_refresh_safe();
     server.send(200, "text/plain", "OK");
@@ -711,7 +897,7 @@ void handleSaveNetworkConfig() {
 
     String error;
     if (!network_config_save(next, error)) {
-        server.send(400, "text/plain", error);
+        server.send(isStorageError(error) ? 500 : 400, "text/plain", error);
         return;
     }
 
@@ -758,7 +944,7 @@ void handleSaveAuth() {
 
     String error;
     if (!auth_config_save_credentials(username, password, error)) {
-        server.send(400, "text/plain", error);
+        server.send(isStorageError(error) ? 500 : 400, "text/plain", error);
         return;
     }
 
@@ -863,7 +1049,7 @@ void setup() {
     server.on("/get_config", handleGetConfig);
     server.on("/save_zones", HTTP_POST, handleSaveZones);
     server.on("/save_topology", HTTP_POST, handleSaveTopology);
-    server.on("/set_bright", handleSetBright);
+    server.on("/set_bright", HTTP_POST, handleSetBright);
     server.on("/save_status_colors", HTTP_POST, handleSaveStatusColors);
     server.on("/save_free_zone", HTTP_POST, handleSaveFreeZone);
     server.on("/network_status", HTTP_GET, handleNetworkStatus);
