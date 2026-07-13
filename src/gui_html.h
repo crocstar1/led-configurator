@@ -191,6 +191,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         .matrix {
+            --matrix-cell-size: 30px;
             display: grid;
             gap: 5px;
             width: max-content;
@@ -198,14 +199,26 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             touch-action: none;
         }
 
+        .matrix.dense {
+            --matrix-cell-size: 24px;
+            gap: 4px;
+        }
+
+        .matrix.very-dense {
+            --matrix-cell-size: 18px;
+            gap: 3px;
+        }
+
         .pixel {
-            width: 30px;
-            height: 30px;
+            --preview-brightness: 1;
+            width: var(--matrix-cell-size);
+            height: var(--matrix-cell-size);
             border: 1px solid rgba(0, 0, 0, 0.14);
             border-radius: 7px;
             background: #e8e8ed;
             cursor: pointer;
-            transition: opacity 0.12s, transform 0.06s, box-shadow 0.12s;
+            filter: brightness(var(--preview-brightness));
+            transition: opacity 0.12s, transform 0.06s, box-shadow 0.12s, filter 0.12s;
         }
 
         .pixel.active-zone {
@@ -214,7 +227,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .pixel.locked {
             opacity: 0.24;
-            filter: grayscale(80%);
+            filter: grayscale(80%) brightness(var(--preview-brightness));
             cursor: not-allowed;
         }
 
@@ -224,6 +237,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         .topology-preview {
+            --topology-cell-width: 30px;
+            --topology-cell-height: 26px;
             display: grid;
             gap: 4px;
             width: max-content;
@@ -235,9 +250,18 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             background: #fbfcff;
         }
 
+        .topology-preview.dense {
+            --topology-cell-width: 24px;
+            --topology-cell-height: 22px;
+        }
+
+        .topology-preview.compact {
+            width: 100%;
+        }
+
         .topology-cell {
-            width: 30px;
-            height: 26px;
+            width: var(--topology-cell-width);
+            height: var(--topology-cell-height);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -259,6 +283,19 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         .topology-cell.last {
             border-color: var(--green);
             background: #eaf8ef;
+        }
+
+        .topology-direction {
+            display: grid;
+            gap: 5px;
+            padding: 4px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .topology-direction strong {
+            color: var(--text);
         }
 
         .advanced-block {
@@ -518,6 +555,14 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             line-height: 1.35;
         }
 
+        .safety-warning {
+            margin-bottom: 12px;
+            border-color: #f2cf91;
+            background: #fff8ed;
+            color: #7a4b00;
+            font-weight: 700;
+        }
+
         .brightness-control {
             display: flex;
             align-items: center;
@@ -598,7 +643,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .panel { padding: 13px; border-radius: 11px; }
             .service-backdrop { align-items: stretch; padding: 0; }
             .service-panel { width: 100%; max-height: 100vh; border-radius: 0; }
-            .pixel { width: 28px; height: 28px; border-radius: 7px; }
+            .matrix { --matrix-cell-size: 28px; }
+            .matrix.dense { --matrix-cell-size: 22px; }
+            .matrix.very-dense { --matrix-cell-size: 18px; }
+            .topology-preview { --topology-cell-width: 28px; --topology-cell-height: 24px; }
+            .topology-preview.dense { --topology-cell-width: 22px; --topology-cell-height: 20px; }
             .legend { grid-template-columns: 1fr; }
             .diag-grid { grid-template-columns: 1fr; }
             .service-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -608,8 +657,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .brand { flex-basis: 220px; }
             .brand span { font-size: 10px; letter-spacing: 0.04em; }
             .brand h1 { font-size: 18px; }
-            .pixel { width: 24px; height: 24px; border-radius: 6px; }
-            .topology-cell { width: 24px; height: 22px; font-size: 9px; }
+            .matrix { --matrix-cell-size: 24px; }
+            .matrix.dense { --matrix-cell-size: 20px; }
+            .matrix.very-dense { --matrix-cell-size: 17px; }
+            .pixel { border-radius: 6px; }
+            .topology-preview { --topology-cell-width: 24px; --topology-cell-height: 22px; }
+            .topology-preview.dense { --topology-cell-width: 20px; --topology-cell-height: 19px; }
+            .topology-cell { font-size: 9px; }
             .matrix { gap: 4px; }
             .grid-2 { grid-template-columns: 1fr; }
             .runtime-pill { display: none; }
@@ -654,12 +708,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         <section class="panel">
             <div class="panel-title">
                 <h2 id="matrix_title">Матрица</h2>
-                <span class="hint" id="matrix_hint">12x8, локальное редактирование</span>
+                <span class="hint" id="matrix_hint">12×8</span>
             </div>
+            <div class="notice safety-warning field-hidden" id="active_ports_warning"></div>
             <div class="matrix-shell">
                 <div class="matrix" id="matrix_grid"></div>
             </div>
-            <div class="status-line" id="edit_state_line">Редактор: изменения локальные до сохранения.</div>
+            <div class="status-line field-hidden" id="edit_state_line"></div>
         </section>
 
         <aside class="side-stack">
@@ -729,6 +784,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <input type="range" id="ports_brightness" min="1" max="255" value="120">
                             <input type="number" id="ports_brightness_input" min="1" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
                         </div>
+                        <div class="hint">Яркость применяется автоматически после изменения.</div>
                     </div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
@@ -771,11 +827,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                 <input type="range" id="free_brightness" min="1" max="255" value="100">
                                 <input type="number" id="free_brightness_input" min="1" max="255" value="100" inputmode="numeric" aria-label="Яркость свободной зоны числом">
                             </div>
+                            <div class="hint">Яркость применяется автоматически после изменения.</div>
                         </div>
                     </div>
                     <div class="btn-row">
-                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Применить выбранную яркость ко всем</button>
+                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Применить яркость ко всем зонам</button>
                     </div>
+                    <div class="hint">Сразу сохраняет яркость всех размеченных свободных зон.</div>
                     <div class="section-divider"></div>
                     <label>Легенда</label>
                     <div class="legend" id="free_legend"></div>
@@ -1045,6 +1103,16 @@ let activePortCount = 2;
 let zoneMapDirty = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
+let portsBrightnessValue = 120;
+let portsBrightnessDirty = false;
+let portsBrightnessRevision = 0;
+let portsBrightnessSaveTimer = null;
+let freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
+let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
+let freeBrightnessSaveTimers = {};
+
+const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
+const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -1278,7 +1346,6 @@ function updateFreeModeControls() {
 
 function updateZoneViewControls() {
     const isOverview = zoneViewMode === 'overview';
-    const missingActivePortNotice = missingActivePortZoneNotice();
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
@@ -1286,9 +1353,7 @@ function updateZoneViewControls() {
     const baseText = isOverview
         ? 'Обзор: все зоны показаны своими цветами, рисование отключено.'
         : 'Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.';
-    document.getElementById('zones_mode_notice').textContent = missingActivePortNotice
-        ? `${baseText} ${missingActivePortNotice}`
-        : baseText;
+    document.getElementById('zones_mode_notice').textContent = baseText;
 }
 
 function updateFreeViewControls() {
@@ -1317,9 +1382,17 @@ function applyConfig(cfg) {
     activePortCount = clampActivePortCount(cfg.activePortCount ?? cfg.active_port_count ?? activePortCount);
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
+    if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
+    portsBrightnessSaveTimer = null;
+    Object.values(freeBrightnessSaveTimers).forEach(timer => clearTimeout(timer));
+    freeBrightnessSaveTimers = {};
+    portsBrightnessRevision += 1;
+    Object.keys(freeBrightnessRevisions).forEach(zoneId => { freeBrightnessRevisions[zoneId] += 1; });
     zoneMapDirty = false;
     statusLayerDirty = { waiting: false, charging: false, error: false };
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
+    portsBrightnessDirty = false;
+    freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
     statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeLayerForSize(cfg.layers?.charge || {});
     statusColorLayers.error = sanitizeLayerForSize(cfg.layers?.err || {});
@@ -1330,7 +1403,7 @@ function applyConfig(cfg) {
         Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
         activePortCount
     );
-    setBrightnessPair('ports_brightness', 'ports_brightness_input', cfg.b_ports || 120);
+    portsBrightnessValue = setBrightnessPair('ports_brightness', 'ports_brightness_input', cfg.b_ports || 120);
     zoneMeta.filter(z => z.type === 'free').forEach(z => { freeModes[String(z.id)] = z.mode || freeModes[String(z.id)] || 'static'; });
 
     if (Array.isArray(cfg.free_zones)) {
@@ -1425,13 +1498,20 @@ function missingActivePortZoneNotice(map = hardwareZonesMap) {
         : '';
 }
 
+function updateActivePortsWarning() {
+    const warning = document.getElementById('active_ports_warning');
+    const text = missingActivePortZoneNotice();
+    warning.classList.toggle('field-hidden', !text);
+    warning.textContent = text ? `Внимание: ${text}` : '';
+}
+
 function updateDirtyIndicators() {
     const zonesIndicator = document.getElementById('zones_dirty_indicator');
     const statusIndicator = document.getElementById('status_dirty_indicator');
     const freeIndicator = document.getElementById('free_dirty_indicator');
 
-    const hasDirtyStatusLayer = Object.values(statusLayerDirty).some(Boolean);
-    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean);
+    const hasDirtyStatusLayer = portsBrightnessDirty || Object.values(statusLayerDirty).some(Boolean);
+    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean) || Object.values(freeBrightnessDirty).some(Boolean);
 
     zonesIndicator?.classList.toggle('field-hidden', !zoneMapDirty);
     statusIndicator?.classList.toggle('field-hidden', !hasDirtyStatusLayer);
@@ -1511,8 +1591,39 @@ function renderTopologyControls() {
     summary.textContent = topologyOption(normalized).hint;
 
     preview.innerHTML = '';
-    preview.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
     const total = COLS * ROWS;
+    const compact = total > TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS;
+    preview.classList.toggle('compact', compact);
+    preview.classList.toggle('dense', !compact && total > 96);
+
+    if (compact) {
+        preview.style.gridTemplateColumns = '1fr';
+        let start = null;
+        let end = null;
+        for (let y = 0; y < ROWS; y++) {
+            for (let x = 0; x < COLS; x++) {
+                const index = ledIndexForTopology(x, y, normalized);
+                if (index === 0) start = { x, y };
+                if (index === total - 1) end = { x, y };
+            }
+        }
+
+        const direction = document.createElement('div');
+        direction.className = 'topology-direction';
+        const title = document.createElement('strong');
+        title.textContent = normalized < 2
+            ? 'Вертикальная змейка по столбцам · чередование ↑ / ↓'
+            : 'Горизонтальная змейка по строкам · чередование → / ←';
+        const endpoints = document.createElement('span');
+        endpoints.textContent = `LED0: x=${start?.x ?? '?'}, y=${start?.y ?? '?'} · последний LED: x=${end?.x ?? '?'}, y=${end?.y ?? '?'}`;
+        const size = document.createElement('span');
+        size.textContent = `${COLS}×${ROWS} · ${total} пикселей. Полная нумерация скрыта для читаемости.`;
+        direction.append(title, endpoints, size);
+        preview.appendChild(direction);
+        return;
+    }
+
+    preview.style.gridTemplateColumns = `repeat(${COLS}, var(--topology-cell-width))`;
     for (let y = ROWS - 1; y >= 0; y--) {
         for (let x = 0; x < COLS; x++) {
             const index = ledIndexForTopology(x, y, normalized);
@@ -1529,7 +1640,10 @@ function renderTopologyControls() {
 
 function buildMatrix() {
     grid.innerHTML = '';
-    grid.style.gridTemplateColumns = `repeat(${COLS}, 30px)`;
+    const total = COLS * ROWS;
+    grid.classList.toggle('dense', total > 96);
+    grid.classList.toggle('very-dense', total > 256);
+    grid.style.gridTemplateColumns = `repeat(${COLS}, var(--matrix-cell-size))`;
 
     for (let y = ROWS - 1; y >= 0; y--) {
         for (let x = 0; x < COLS; x++) {
@@ -1670,14 +1784,28 @@ function redrawMatrix() {
         activeTab === 'status' ? 'Матрица' :
         'Матрица';
 
+    const matrixSize = `${COLS}×${ROWS}`;
     document.getElementById('matrix_hint').textContent =
-        activeTab === 'zones' ? `${COLS}x${ROWS}, ${zoneViewMode === 'overview' ? 'обзор всей разметки' : 'редактирование выбранной зоны'}` :
-        activeTab === 'status' ? `слой "${statusLabel(activeStatus)}", предпросмотр только в UI` :
-        `${freeViewMode === 'overview' ? 'обзор свободных зон' : `${zoneDisplayName(activeFreeZone)}: ${modeLabel(freeModes[activeFreeZone])}`}`;
+        activeTab === 'zones'
+            ? (zoneViewMode === 'overview'
+                ? `${matrixSize} · Обзор зон`
+                : `${matrixSize} · ${zoneDisplayName(activeZoneId)} · ${zoneTool === 'erase' ? 'Ластик' : 'Кисть'}`)
+            : activeTab === 'status'
+                ? `${matrixSize} · Статус: ${statusLabel(activeStatus)}`
+                : (freeViewMode === 'overview'
+                    ? `${matrixSize} · Обзор свободных зон`
+                    : `${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
 
     grid.querySelectorAll('.pixel').forEach(p => {
         const key = keyOf(p.dataset.x, p.dataset.y);
         const zoneId = hardwareZonesMap[key] || '0';
+        let previewBrightness = 1;
+        if (activeTab === 'status' && isEditablePortZone(zoneId)) {
+            previewBrightness = portsBrightnessValue / 255;
+        } else if (activeTab === 'free' && isFreeZone(zoneId)) {
+            previewBrightness = (Number(freeBrightness[zoneId]) || 100) / 255;
+        }
+        p.style.setProperty('--preview-brightness', String(Math.max(1 / 255, Math.min(1, previewBrightness))));
         p.dataset.zone = zoneId;
         p.classList.toggle('off-zone', zoneId === '0');
         p.classList.toggle('active-zone',
@@ -1703,25 +1831,17 @@ function redrawMatrix() {
     updateFreeViewControls();
     updateFreeModeControls();
     updateDirtyIndicators();
+    updateActivePortsWarning();
     updateEditState();
 }
 
 function updateEditState() {
-    const text =
-        activeTab === 'zones' ? (zoneViewMode === 'overview'
-            ? 'Обзор: все зоны видны, рисование отключено'
-            : `Редактор: зона ${activeZoneId} · ${zoneTool === 'erase' ? 'ластик' : 'кисть'}`) :
-        activeTab === 'status' ? `Редактор: глобальный статус "${statusLabel(activeStatus)}"` :
-        (freeViewMode === 'overview'
-            ? 'Обзор: свободные зоны видны, рисование отключено'
-            : `Редактор: ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
-    const missingNotice = missingActivePortZoneNotice();
-    const finalText = missingNotice ? `Внимание: ${missingNotice} ${text}` : text;
     const line = document.getElementById('edit_state_line');
-    line.classList.toggle('warning', Boolean(missingNotice));
+    line.classList.remove('warning');
+    line.classList.toggle('field-hidden', !mockMode);
     line.textContent = mockMode
-        ? `${finalText}. Контроллер недоступен: работает локальный предпросмотр 12x8.`
-        : finalText;
+        ? `Контроллер недоступен: изменения остаются только в браузере. Локальный предпросмотр ${COLS}×${ROWS}.`
+        : '';
 }
 
 function paintPixel(pixel) {
@@ -1973,6 +2093,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
             zoneMapDirty = false;
             updateDirtyIndicators();
             updateEditState();
+            flushPendingFreeZoneBrightness();
         }
     } catch (err) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
@@ -2043,28 +2164,80 @@ document.getElementById('clear_status_btn').addEventListener('click', () => {
     alert('Слой очищен только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.');
 });
 
-async function savePortsBrightness(value) {
-    if (!backendAvailable) return;
-    await fetch(`/set_bright?type=ports&val=${value}`).catch(() => {});
+function updatePortsBrightness(value) {
+    const safe = setBrightnessPair('ports_brightness', 'ports_brightness_input', value);
+    if (safe !== portsBrightnessValue) {
+        portsBrightnessValue = safe;
+        portsBrightnessRevision += 1;
+        portsBrightnessDirty = true;
+        updateDirtyIndicators();
+        redrawMatrix();
+    }
+    return safe;
 }
 
-document.getElementById('ports_brightness').addEventListener('input', async e => {
-    const value = setBrightnessPair('ports_brightness', 'ports_brightness_input', e.target.value);
-    await savePortsBrightness(value);
+async function persistPortsBrightness(value, revision) {
+    if (!backendAvailable) return false;
+
+    try {
+        const res = await fetch(`/set_bright?type=ports&val=${value}`);
+        const ok = res.ok && (await res.text()) === 'OK';
+        if (revision === portsBrightnessRevision) {
+            portsBrightnessDirty = !ok;
+            updateDirtyIndicators();
+        }
+        if (!ok) alert('Не удалось сохранить яркость портовых зон.');
+        return ok;
+    } catch (err) {
+        if (revision === portsBrightnessRevision) {
+            portsBrightnessDirty = true;
+            updateDirtyIndicators();
+        }
+        alert('Контроллер недоступен: яркость портовых зон изменена только в браузере.');
+        return false;
+    }
+}
+
+function schedulePortsBrightnessSave(value, immediate = false) {
+    if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
+    if (!portsBrightnessDirty || !backendAvailable) return;
+
+    const revision = portsBrightnessRevision;
+    portsBrightnessSaveTimer = setTimeout(() => {
+        portsBrightnessSaveTimer = null;
+        persistPortsBrightness(value, revision);
+    }, immediate ? 0 : BRIGHTNESS_SAVE_DEBOUNCE_MS);
+}
+
+document.getElementById('ports_brightness').addEventListener('input', e => {
+    updatePortsBrightness(e.target.value);
 });
 
-document.getElementById('ports_brightness_input').addEventListener('input', async e => {
-    const value = setBrightnessPair('ports_brightness', 'ports_brightness_input', e.target.value);
-    await savePortsBrightness(value);
+document.getElementById('ports_brightness').addEventListener('change', e => {
+    const value = updatePortsBrightness(e.target.value);
+    schedulePortsBrightnessSave(value, true);
+});
+
+document.getElementById('ports_brightness_input').addEventListener('input', e => {
+    const value = updatePortsBrightness(e.target.value);
+    schedulePortsBrightnessSave(value);
+});
+
+document.getElementById('ports_brightness_input').addEventListener('change', e => {
+    const value = updatePortsBrightness(e.target.value);
+    schedulePortsBrightnessSave(value, true);
 });
 
 function setActiveFreeBrightness(value) {
+    const zoneId = String(activeFreeZone);
     const previous = Number(freeBrightness[activeFreeZone]) || 100;
     const safe = setBrightnessPair('free_brightness', 'free_brightness_input', value);
-    freeBrightness[activeFreeZone] = safe;
+    freeBrightness[zoneId] = safe;
     if (safe !== previous) {
-        freeZoneDirty[activeFreeZone] = true;
+        freeBrightnessRevisions[zoneId] += 1;
+        freeBrightnessDirty[zoneId] = true;
         updateDirtyIndicators();
+        redrawMatrix();
     }
     return safe;
 }
@@ -2073,8 +2246,19 @@ document.getElementById('free_brightness').addEventListener('input', e => {
     setActiveFreeBrightness(e.target.value);
 });
 
+document.getElementById('free_brightness').addEventListener('change', e => {
+    const value = setActiveFreeBrightness(e.target.value);
+    scheduleFreeZoneBrightnessSave(activeFreeZone, value, true);
+});
+
 document.getElementById('free_brightness_input').addEventListener('input', e => {
-    setActiveFreeBrightness(e.target.value);
+    const value = setActiveFreeBrightness(e.target.value);
+    scheduleFreeZoneBrightnessSave(activeFreeZone, value);
+});
+
+document.getElementById('free_brightness_input').addEventListener('change', e => {
+    const value = setActiveFreeBrightness(e.target.value);
+    scheduleFreeZoneBrightnessSave(activeFreeZone, value, true);
 });
 
 function buildFreeZonePayload(zoneId) {
@@ -2089,6 +2273,13 @@ function buildFreeZonePayload(zoneId) {
     };
 }
 
+function buildFreeZoneBrightnessPayload(zoneId, brightness) {
+    return {
+        zoneId: Number(zoneId),
+        brightness: clampBrightnessValue(brightness),
+    };
+}
+
 async function saveFreeZonePayload(payload) {
     const res = await fetch('/save_free_zone', {
         method: 'POST',
@@ -2096,6 +2287,56 @@ async function saveFreeZonePayload(payload) {
         body: JSON.stringify(payload),
     });
     return res.ok && (await res.text()) === 'OK';
+}
+
+function cancelFreeZoneBrightnessSave(zoneId) {
+    const id = String(zoneId);
+    if (freeBrightnessSaveTimers[id] !== undefined) {
+        clearTimeout(freeBrightnessSaveTimers[id]);
+        delete freeBrightnessSaveTimers[id];
+    }
+}
+
+async function persistFreeZoneBrightness(zoneId, brightness, revision, showError = true) {
+    const id = String(zoneId);
+    if (!backendAvailable || zoneMapDirty || validateActivePortZones()) return false;
+
+    try {
+        const ok = await saveFreeZonePayload(buildFreeZoneBrightnessPayload(id, brightness));
+        if (revision === freeBrightnessRevisions[id]) {
+            freeBrightnessDirty[id] = !ok;
+            updateDirtyIndicators();
+        }
+        if (!ok && showError) alert(`Не удалось сохранить яркость зоны «${zoneDisplayName(id)}».`);
+        return ok;
+    } catch (err) {
+        if (revision === freeBrightnessRevisions[id]) {
+            freeBrightnessDirty[id] = true;
+            updateDirtyIndicators();
+        }
+        if (showError) alert('Контроллер недоступен: яркость свободной зоны изменена только в браузере.');
+        return false;
+    }
+}
+
+function scheduleFreeZoneBrightnessSave(zoneId, brightness, immediate = false) {
+    const id = String(zoneId);
+    cancelFreeZoneBrightnessSave(id);
+    if (!freeBrightnessDirty[id] || !backendAvailable) return;
+
+    const revision = freeBrightnessRevisions[id];
+    freeBrightnessSaveTimers[id] = setTimeout(() => {
+        delete freeBrightnessSaveTimers[id];
+        persistFreeZoneBrightness(id, brightness, revision);
+    }, immediate ? 0 : BRIGHTNESS_SAVE_DEBOUNCE_MS);
+}
+
+function flushPendingFreeZoneBrightness() {
+    Object.keys(freeBrightnessDirty).forEach(zoneId => {
+        if (freeBrightnessDirty[zoneId] && zoneHasPixels(zoneId)) {
+            scheduleFreeZoneBrightnessSave(zoneId, freeBrightness[zoneId], true);
+        }
+    });
 }
 
 function ensureFreeZoneSaveAllowed() {
@@ -2118,10 +2359,13 @@ function ensureFreeZoneSaveAllowed() {
 document.getElementById('apply_free_btn').addEventListener('click', async () => {
     if (!ensureFreeZoneSaveAllowed()) return;
 
+    const zoneId = String(activeFreeZone);
+    cancelFreeZoneBrightnessSave(zoneId);
     try {
-        const ok = await saveFreeZonePayload(buildFreeZonePayload(activeFreeZone));
+        const ok = await saveFreeZonePayload(buildFreeZonePayload(zoneId));
         if (ok) {
-            freeZoneDirty[activeFreeZone] = false;
+            freeZoneDirty[zoneId] = false;
+            freeBrightnessDirty[zoneId] = false;
             updateDirtyIndicators();
             updateEditState();
         }
@@ -2138,10 +2382,13 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         return;
     }
 
-    const value = setActiveFreeBrightness(document.getElementById('free_brightness').value);
+    const value = clampBrightnessValue(document.getElementById('free_brightness').value);
     if (!backendAvailable) {
-        mappedZones.forEach(zoneId => { freeBrightness[zoneId] = value; });
-        mappedZones.forEach(zoneId => { freeZoneDirty[zoneId] = true; });
+        mappedZones.forEach(zoneId => {
+            freeBrightness[zoneId] = value;
+            freeBrightnessRevisions[zoneId] += 1;
+            freeBrightnessDirty[zoneId] = true;
+        });
         redrawMatrix();
         alert('Контроллер недоступен: яркость свободных зон изменена только в браузере.');
         return;
@@ -2157,14 +2404,22 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
     }
 
     try {
-        mappedZones.forEach(zoneId => { freeBrightness[zoneId] = value; });
+        const failedZones = [];
         for (const zoneId of mappedZones) {
-            const ok = await saveFreeZonePayload(buildFreeZonePayload(zoneId));
-            if (!ok) throw new Error('SAVE_FAILED');
-            freeZoneDirty[zoneId] = false;
+            cancelFreeZoneBrightnessSave(zoneId);
+            freeBrightness[zoneId] = value;
+            freeBrightnessRevisions[zoneId] += 1;
+            freeBrightnessDirty[zoneId] = true;
+            const revision = freeBrightnessRevisions[zoneId];
+            const ok = await persistFreeZoneBrightness(zoneId, value, revision, false);
+            if (!ok) failedZones.push(zoneDisplayName(zoneId));
         }
         redrawMatrix();
-        alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
+        if (failedZones.length) {
+            alert(`Не удалось сохранить яркость зон: ${failedZones.join(', ')}.`);
+        } else {
+            alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
+        }
     } catch (err) {
         alert('Не удалось сохранить яркость для всех свободных зон.');
     }
@@ -2593,7 +2848,9 @@ setInterval(() => {
 setInterval(loadDiagnostics, 2500);
 
 loadConfig().catch(err => {
-    document.getElementById('edit_state_line').textContent = 'Не удалось загрузить конфигурацию.';
+    const line = document.getElementById('edit_state_line');
+    line.classList.remove('field-hidden');
+    line.textContent = 'Не удалось загрузить конфигурацию.';
     console.error(err);
 });
 </script>

@@ -211,6 +211,25 @@ Edit/preview mode:
     `Matrix settings` expandable block so the main zone editor stays focused;
   - free-zone brightness is labeled as brightness for the selected free zone;
   - hardware live preview remains intentionally disabled; preview is browser-side.
+- Brightness controls were unified without changing backend endpoints:
+  - port brightness and selected free-zone brightness update the browser preview
+    immediately and persist after slider release or a short input debounce;
+  - brightness persistence is independent from status-layer/free-zone content
+    save buttons;
+  - free-zone brightness uses partial `/save_free_zone` payloads, so changing
+    brightness does not save pending mode, color, or custom-layer edits;
+  - batch brightness applies only to mapped free zones and also sends
+    brightness-only payloads.
+- Matrix UI context and dimension safety were tightened:
+  - missing active-port zones are shown once in a dedicated warning above the
+    matrix instead of being repeated in editor notices;
+  - the matrix header keeps only dimensions and the selected zone/status/mode,
+    while backend-unavailable text is limited to mock mode;
+  - topology numbering remains available up to 256 pixels, with a compact
+    direction/start/end summary for larger matrices;
+  - invalid or dimension-incompatible matrix storage clears matrix/status/free
+    layer keys in `led_settings` before loading defaults, without touching
+    network or auth namespaces.
 - Topology selector MVP added:
   - UI exposes the four existing topology codes `0..3`;
   - topology is saved through `/save_topology` in the existing matrix config

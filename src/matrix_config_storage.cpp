@@ -80,6 +80,33 @@ static String free_zone_layer_key(uint8_t zoneId) {
     return key;
 }
 
+static void remove_free_zone_layers(Preferences &preferences) {
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
+        const String key = free_zone_layer_key(FREE_ZONE_IDS[i]);
+        if (key.length() > 0) preferences.remove(key.c_str());
+    }
+}
+
+static void clear_incompatible_matrix_storage() {
+    Preferences preferences;
+    preferences.begin(NVS_NAMESPACE, false);
+    preferences.remove(KEY_MATRIX_CONFIG);
+    preferences.remove(KEY_FREE_ZONES);
+    preferences.remove(KEY_LAYER_WAIT);
+    preferences.remove(KEY_LAYER_CHARGE);
+    preferences.remove(KEY_LAYER_ERROR);
+    remove_free_zone_layers(preferences);
+    preferences.end();
+}
+
+static void clear_incompatible_free_zone_storage() {
+    Preferences preferences;
+    preferences.begin(NVS_NAMESPACE, false);
+    preferences.remove(KEY_FREE_ZONES);
+    remove_free_zone_layers(preferences);
+    preferences.end();
+}
+
 static bool zones_are_valid(const uint8_t *zones, size_t zoneCount) {
     if (zones == nullptr || zoneCount != NUM_IC_CHIPS) {
         return false;
@@ -233,6 +260,7 @@ bool matrix_config_load(MatrixConfig &config, uint8_t *zones, size_t zoneCount) 
     preferences.end();
 
     if (!loaded) {
+        clear_incompatible_matrix_storage();
         matrix_config_set_defaults(config, zones, zoneCount);
     }
 
@@ -280,6 +308,7 @@ bool matrix_config_load_free_zones(FreeZoneConfig *freeZones, size_t freeZoneCou
         stored.matrixX != MATRIX_X ||
         stored.matrixY != VIRTUAL_Y ||
         !free_zone_configs_are_valid(stored.zones, FREE_ZONE_COUNT)) {
+        clear_incompatible_free_zone_storage();
         matrix_config_set_free_zone_defaults(freeZones, freeZoneCount);
         return false;
     }
