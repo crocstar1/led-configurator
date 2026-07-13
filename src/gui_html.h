@@ -388,10 +388,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         }
 
         input[type="number"] {
-            max-width: 78px;
+            max-width: 64px;
             text-align: center;
-            padding-left: 8px;
-            padding-right: 8px;
+            padding-left: 6px;
+            padding-right: 6px;
+            font-size: 12px;
         }
 
         input[type="color"] {
@@ -701,6 +702,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <div class="btn-row">
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
+                        <button class="btn danger" id="clear_all_zones_btn" type="button">Очистить всю разметку</button>
                     </div>
                     <div class="hint">Сохраняет только разметку пикселей по зонам.</div>
                 </div>
@@ -772,7 +774,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                     </div>
                     <div class="btn-row">
-                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Сохранить яркость для всех свободных зон</button>
+                        <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Применить выбранную яркость ко всем</button>
                     </div>
                     <div class="section-divider"></div>
                     <label>Легенда</label>
@@ -795,27 +797,30 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <button class="btn" id="service_close_btn" type="button">Закрыть</button>
             </div>
             <div class="service-tabs" aria-label="Сервисные разделы">
-                <button class="tab-btn active" data-service="diagnostics" type="button">Диагностика</button>
-                <button class="tab-btn" data-service="network" type="button">Сеть</button>
+                <button class="tab-btn active" data-service="network" type="button">Сеть</button>
                 <button class="tab-btn" data-service="security" type="button">Безопасность</button>
                 <button class="tab-btn" data-service="firmware" type="button">Прошивка</button>
+                <button class="tab-btn" data-service="diagnostics" type="button">Диагностика</button>
             </div>
 
-            <section class="service-section active" id="service_diagnostics">
+            <section class="service-section" id="service_diagnostics">
                 <div class="section">
                     <div class="row">
                         <strong>Диагностика</strong>
                         <button class="btn" id="refresh_diag_btn" type="button">Обновить данные</button>
                     </div>
                     <div class="diag-grid" id="diag_summary"></div>
+                    <div class="section-divider"></div>
                     <div>
                         <label>Входы Data1..Data8</label>
                         <div class="diag-grid" id="diag_inputs"></div>
                     </div>
+                    <div class="section-divider"></div>
                     <div>
                         <label>Порты</label>
                         <div class="diag-grid" id="diag_ports"></div>
                     </div>
+                    <div class="section-divider"></div>
                     <div>
                         <label>LED-выходы</label>
                         <div class="diag-grid" id="diag_leds"></div>
@@ -823,13 +828,14 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </div>
             </section>
 
-            <section class="service-section" id="service_network">
+            <section class="service-section active" id="service_network">
                 <div class="section">
                     <div class="row">
                         <strong>Сеть</strong>
                         <button class="btn" id="refresh_network_btn" type="button">Обновить статус сети</button>
                     </div>
                     <div class="diag-grid" id="network_summary"></div>
+                    <div class="section-divider"></div>
                     <form id="network_form" class="section">
                         <div>
                             <label for="network_ssid">SSID</label>
@@ -1012,7 +1018,7 @@ const TOPOLOGY_OPTIONS = [
 let COLS = 12;
 let ROWS = 8;
 let activeTab = 'zones';
-let activeServiceSection = 'diagnostics';
+let activeServiceSection = 'network';
 let activeZoneId = '1';
 let activeStatus = 'waiting';
 let activeFreeZone = '5';
@@ -1789,7 +1795,7 @@ function setServiceOpen(open) {
     const backdrop = document.getElementById('service_backdrop');
     backdrop.classList.toggle('open', open);
     backdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
-    if (open) loadDiagnostics();
+    if (open && activeServiceSection === 'diagnostics') loadDiagnostics();
     if (open && activeServiceSection === 'network') loadNetworkStatus();
     if (open && activeServiceSection === 'security') loadAuthStatus();
 }
@@ -1987,6 +1993,13 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
             zoneMapDirty = true;
         }
     });
+    redrawMatrix();
+});
+
+document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
+    if (!confirm('Очистить всю разметку матрицы? Все пиксели станут Off только в браузере. Сохранить такую карту нельзя, пока активные порты не будут размечены.')) return;
+    hardwareZonesMap = {};
+    zoneMapDirty = true;
     redrawMatrix();
 });
 

@@ -10,6 +10,14 @@ firmware. The controller reads optocoupler input signals, maps port state,
 renders LED matrix zones, exposes a web setup UI, and stores configuration in
 NVS.
 
+Current product direction: this is no longer a demo-only or throwaway MVP. The
+target is a real working standalone LED controller firmware for a charging
+station, with runtime indication safety treated as the primary requirement.
+
+The old `proj1` firmware is a reference source for ideas and behavior checks
+only. Do not directly port its EVSE/OCPP/MQTT/POS/RAPI/legacy configuration
+architecture unless a separate task explicitly requires one narrow piece.
+
 ## Confirmed Hardware Mapping
 
 Inputs are active-low: `LOW = active`.
@@ -273,7 +281,15 @@ Known active review topics:
   - consider signed firmware validation;
   - consider rollback/recovery behavior;
   - improve post-reboot reconnect guidance after hardware testing.
-- Brightness schedule by time of day.
+- Brightness schedule by time of day is deferred until real matrix brightness is
+  checked on hardware or a customer requirement confirms it is needed.
+  - `proj1` had related night behavior through SNTP, sunrise/sunset calculation,
+    coordinates, and backlight brightness.
+  - `proj1` did not have a universal per-zone LED matrix brightness schedule.
+  - For this project, schedule is not critical before real matrix validation.
+  - If needed later, MVP should be: enabled/disabled, night start/end,
+    day/night brightness multiplier, NTP/timezone status, and fallback that keeps
+    manual brightness when time is unavailable.
 - Full WiFi manager polish beyond current MVP.
 - Multi-matrix outputs on LED1..LED4.
 - Runtime configurable matrix dimensions.
