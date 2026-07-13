@@ -2,11 +2,11 @@
 #define LED_MANAGER_H
 
 #include <Arduino.h>
-#include "usp1_board_config.h"
+#include "board_config.h"
 #include "zone_model.h"
 
 // Физические параметры матрицы 
-#define LED_PIN         USP1_PRIMARY_LED_PIN
+#define LED_PIN         PRIMARY_LED_PIN
 #define MATRIX_X        12      
 #define VIRTUAL_Y       8       
 #define NUM_IC_CHIPS    (MATRIX_X * VIRTUAL_Y) 

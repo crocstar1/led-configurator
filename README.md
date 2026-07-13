@@ -1,10 +1,10 @@
-# USP-1 LED Matrix Controller
+# Standalone LED Matrix Controller
 
-Standalone ESP32 firmware for an USP-1 LED matrix controller.
+Standalone ESP32 firmware for an LED matrix controller.
 
-This project is not full EVSE firmware. The controller reads USP-1 optocoupler
-signals, maps port state, renders a WS2811 LED matrix, serves a web setup UI,
-and stores matrix configuration in NVS.
+The controller reads active-low optocoupler signals, maps port state, renders a
+WS2811 LED matrix, serves a web setup UI, and stores matrix configuration in
+NVS.
 
 ## Hardware
 
@@ -52,8 +52,8 @@ The firmware serves an engineering setup UI with:
 - Free Zones editor
 - Service menu with Diagnostics, Network, Security, and Firmware sections
 
-Preview editing is client-side where possible so runtime port error indication
-is not hidden by UI custom mode.
+Zone editing preview stays in the browser so it cannot hide runtime port error
+indication on the physical matrix.
 
 ## Current State
 

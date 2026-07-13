@@ -4,7 +4,7 @@ These rules apply to work in this repository.
 
 ## Project Scope
 
-- This is standalone ESP32 firmware for a USP-1 LED matrix controller.
+- This is standalone ESP32 firmware for an LED matrix controller.
 - Do not treat this as full EVSE firmware.
 - Keep changes scoped to the standalone LED matrix controller unless the user
   explicitly asks otherwise.
@@ -76,8 +76,8 @@ Do not modify these areas unless the user explicitly opens a task for them:
 - Visible web UI text should be Russian unless the user requests otherwise.
 - Visible web UI should use neutral product wording such as
   `контроллер матрицы`, `LED-контроллер`, `матрица`, `входы`, and
-  `выход LED1`; do not mention `УСП-1` in UI copy unless explicitly requested
-  for a hardware-specific screen.
+  `выход LED1`; do not mention a specific board name in UI copy unless
+  explicitly requested for a hardware-specific screen.
 - Technical identifiers in code may remain English.
 - Keep primary UI focused on engineering actions.
 - Keep verbose diagnostic/technical details in the Diagnostics tab rather than

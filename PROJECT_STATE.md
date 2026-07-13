@@ -2,13 +2,11 @@
 
 ## Project Goal
 
-This repository contains standalone firmware for an ESP32-based USP-1 LED matrix
+This repository contains standalone firmware for an ESP32-based LED matrix
 controller.
 
-USP-1 is treated here as a dedicated LED matrix controller, not as full EVSE
-firmware. The controller reads optocoupler input signals, maps port state,
-renders LED matrix zones, exposes a web setup UI, and stores configuration in
-NVS.
+The controller reads optocoupler input signals, maps port state, renders LED
+matrix zones, exposes a web setup UI, and stores configuration in NVS.
 
 Current product direction: this is no longer a demo-only or throwaway MVP. The
 target is a real working standalone LED controller firmware for a charging
@@ -44,7 +42,7 @@ LED outputs:
 
 ## Port Logic
 
-- Current active port count default: 2 (`USP1_DEFAULT_ACTIVE_PORT_COUNT`).
+- Current active port count default: 2 (`DEFAULT_ACTIVE_PORT_COUNT`).
 - `status_mapper` is the runtime source of truth for active/reserved ports.
 - `/get_config` and `/diagnostics` expose `activePortCount`.
 - Port zone metadata is generated from `activePortCount`:
@@ -112,15 +110,15 @@ Edit/preview mode:
   - `матрица`
   - `входы`
   - `выход LED1`
-- Do not mention `УСП-1` in visible web UI unless a future task explicitly
-  requests hardware-specific wording.
-- Existing hardware-specific code names can stay for now. A later rename pass
-  can move names such as `usp1_board_config` and `usp1_inputs` toward
-  `board_config` / `hardware_config` and `discrete_inputs` / `board_inputs`.
+- Do not mention a specific board name in visible web UI unless a future task
+  explicitly requests hardware-specific wording.
+- Hardware-facing code uses neutral `board_config` and `station_inputs` names.
 
 ## Already Done
 
-- Board config added for confirmed USP-1 GPIO mapping.
+- Board config added for the confirmed GPIO mapping.
+- Hardware configuration and input modules use neutral standalone-controller
+  names without changing GPIO or runtime behavior.
 - Active-low input reading implemented.
 - `status_mapper` added with `error > charging > waiting`.
 - `/diagnostics` endpoint added.
@@ -240,8 +238,8 @@ Edit/preview mode:
     current and allows communication recovery without frequent heavy requests;
   - network and diagnostics values are rendered through DOM `textContent`
     instead of inserting external strings through `innerHTML`.
-- API/storage correctness pass implemented, pending local build and reboot
-  verification:
+- API/storage correctness pass implemented and successfully built locally;
+  save/reload/reboot behavior remains part of hardware acceptance testing:
   - current save endpoints return success only after NVS write/read-back
     verification; storage failures return HTTP 500 instead of false `OK`;
   - `/set_bright` is POST-only and its UI caller uses POST form data;
@@ -284,15 +282,16 @@ Edit/preview mode:
 
 ## Currently In Work
 
-Current focus: local build and save/reload/reboot verification of the safe
-cleanup, UI diagnostics reliability, and API/storage correctness changes,
-without changing NVS formats or runtime rendering behavior.
+The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
+and mechanical neutral rename have been successfully built locally.
+
+Current focus: preserve this stable point and proceed to hardware acceptance
+testing before adding new features.
 
 Known active review topics:
 
-- Verify the safe cleanup builds without missing declarations or includes.
 - Recheck zones, statuses, free zones, diagnostics, network, auth, and OTA after
-  the cleanup build.
+  flashing the tested build to hardware.
 - Verify diagnostics polling uses the 2.5-second active rate only while the
   diagnostics service section is open, falls back to a 30-second status refresh
   outside it, and recovers after a temporary failure.

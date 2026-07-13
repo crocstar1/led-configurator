@@ -275,11 +275,11 @@ static void matrix_config_set_defaults(MatrixConfig &config, uint8_t *zones, siz
     config.bright_ports = 120;
 
     if (zones != nullptr && zoneCount > 0) {
-        const uint8_t activePorts = USP1_DEFAULT_ACTIVE_PORT_COUNT == 0
+        const uint8_t activePorts = DEFAULT_ACTIVE_PORT_COUNT == 0
             ? 1
-            : (USP1_DEFAULT_ACTIVE_PORT_COUNT > USP1_MAX_PORT_COUNT
-                ? USP1_MAX_PORT_COUNT
-                : USP1_DEFAULT_ACTIVE_PORT_COUNT);
+            : (DEFAULT_ACTIVE_PORT_COUNT > MAX_PORT_COUNT
+                ? MAX_PORT_COUNT
+                : DEFAULT_ACTIVE_PORT_COUNT);
 
         for (size_t i = 0; i < zoneCount; i++) {
             const uint8_t portOffset = (uint8_t)((i * activePorts) / zoneCount);

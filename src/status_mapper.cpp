@@ -3,9 +3,9 @@
 static StatusMapperState mapperState = {};
 
 void status_mapper_setup() {
-    mapperState.activePortCount = USP1_DEFAULT_ACTIVE_PORT_COUNT;
+    mapperState.activePortCount = DEFAULT_ACTIVE_PORT_COUNT;
 
-    for (uint8_t i = 0; i < USP1_MAX_PORT_COUNT; i++) {
+    for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
         mapperState.ports[i].chargingInput = i * 2;
         mapperState.ports[i].errorInput = (i * 2) + 1;
         mapperState.ports[i].zoneId = i + 1;
@@ -16,8 +16,8 @@ void status_mapper_setup() {
     }
 }
 
-void status_mapper_update(const Usp1InputState &inputs) {
-    for (uint8_t i = 0; i < USP1_MAX_PORT_COUNT; i++) {
+void status_mapper_update(const StationInputState &inputs) {
+    for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
         PortInputMapping &port = mapperState.ports[i];
         port.enabled = (i < mapperState.activePortCount);
 

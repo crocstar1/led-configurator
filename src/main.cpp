@@ -5,8 +5,8 @@
 #include "gui_html.h"
 #include "led_manager.h"
 #include "matrix_config_storage.h"
-#include "usp1_board_config.h"
-#include "usp1_inputs.h"
+#include "board_config.h"
+#include "station_inputs.h"
 #include "status_mapper.h"
 #include "zone_model.h"
 #include "network_config.h"
@@ -301,8 +301,8 @@ void appendFreeZoneConfigsJson(String &json) {
 
 void appendZoneMetadataJson(String &json) {
     const StatusMapperState &status = status_mapper_get_state();
-    const uint8_t activePortCount = status.activePortCount > USP1_MAX_PORT_COUNT
-        ? USP1_MAX_PORT_COUNT
+    const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
+        ? MAX_PORT_COUNT
         : status.activePortCount;
 
     json += ",\"zones\":[";
@@ -358,8 +358,8 @@ bool zoneMapHasRequiredActivePortZones(const uint8_t *zones, size_t zoneCount) {
     }
 
     const StatusMapperState &status = status_mapper_get_state();
-    const uint8_t activePortCount = status.activePortCount > USP1_MAX_PORT_COUNT
-        ? USP1_MAX_PORT_COUNT
+    const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
+        ? MAX_PORT_COUNT
         : status.activePortCount;
 
     for (uint8_t portIndex = 0; portIndex < activePortCount; portIndex++) {
@@ -954,10 +954,10 @@ void handleSaveAuth() {
 void handleDiagnostics() {
     if (!requireHttpAuth()) return;
 
-    usp1_inputs_update();
-    status_mapper_update(usp1_inputs_get_state());
+    station_inputs_update();
+    status_mapper_update(station_inputs_get_state());
 
-    const Usp1InputState &inputs = usp1_inputs_get_state();
+    const StationInputState &inputs = station_inputs_get_state();
     const StatusMapperState &status = status_mapper_get_state();
 
     String json;
@@ -966,29 +966,29 @@ void handleDiagnostics() {
     json += String((int)status.activePortCount);
     json += ",\"runtimeMode\":\"runtime\"";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
-    json += String((int)USP1_PRIMARY_LED_PIN);
+    json += String((int)PRIMARY_LED_PIN);
     json += ",\"index\":";
-    json += String((int)USP1_PRIMARY_LED_OUTPUT_INDEX + 1);
+    json += String((int)PRIMARY_LED_OUTPUT_INDEX + 1);
     json += "},\"ledOutputs\":[";
 
-    for (uint8_t i = 0; i < USP1_LED_OUTPUT_COUNT; i++) {
+    for (uint8_t i = 0; i < LED_OUTPUT_COUNT; i++) {
         if (i > 0) json += ",";
         json += "{\"name\":\"LED";
         json += String((int)i + 1);
         json += "\",\"gpio\":";
-        json += String((int)USP1_LED_OUTPUT_PINS[i]);
+        json += String((int)LED_OUTPUT_PINS[i]);
         json += ",\"state\":\"";
-        json += ((i == USP1_PRIMARY_LED_OUTPUT_INDEX) ? "primary" : "reserved");
+        json += ((i == PRIMARY_LED_OUTPUT_INDEX) ? "primary" : "reserved");
         json += "\"}";
     }
 
     json += "],\"inputs\":[";
-    for (uint8_t i = 0; i < USP1_DATA_INPUT_COUNT; i++) {
+    for (uint8_t i = 0; i < BOARD_INPUT_COUNT; i++) {
         if (i > 0) json += ",";
         json += "{\"name\":\"Data";
         json += String((int)i + 1);
         json += "\",\"gpio\":";
-        json += String((int)USP1_DATA_PINS[i]);
+        json += String((int)BOARD_INPUT_PINS[i]);
         json += ",\"raw\":\"";
         json += ((inputs.rawLevel[i] == LOW) ? "LOW" : "HIGH");
         json += "\",\"active\":";
@@ -997,7 +997,7 @@ void handleDiagnostics() {
     }
 
     json += "],\"ports\":[";
-    for (uint8_t i = 0; i < USP1_MAX_PORT_COUNT; i++) {
+    for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
         if (i > 0) json += ",";
         const PortInputMapping &port = status.ports[i];
         json += "{\"port\":";
@@ -1028,14 +1028,14 @@ void updatePortStatusFromInputs() {
     }
     lastUpdateMs = now;
 
-    usp1_inputs_update();
-    status_mapper_update(usp1_inputs_get_state());
+    station_inputs_update();
+    status_mapper_update(station_inputs_get_state());
 }
 
 void setup() {
     Serial.begin(115200);
     auth_config_setup();
-    usp1_inputs_setup();
+    station_inputs_setup();
     status_mapper_setup();
     led_setup();
     network_setup();

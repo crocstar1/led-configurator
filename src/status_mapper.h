@@ -2,8 +2,8 @@
 #define STATUS_MAPPER_H
 
 #include <Arduino.h>
-#include "usp1_board_config.h"
-#include "usp1_inputs.h"
+#include "board_config.h"
+#include "station_inputs.h"
 
 enum PortStatus : uint8_t {
     PORT_STATUS_WAITING = 0,
@@ -21,12 +21,12 @@ struct PortInputMapping {
 
 struct StatusMapperState {
     uint8_t activePortCount;
-    PortInputMapping ports[USP1_MAX_PORT_COUNT];
-    PortStatus statuses[USP1_MAX_PORT_COUNT];
+    PortInputMapping ports[MAX_PORT_COUNT];
+    PortStatus statuses[MAX_PORT_COUNT];
 };
 
 void status_mapper_setup();
-void status_mapper_update(const Usp1InputState &inputs);
+void status_mapper_update(const StationInputState &inputs);
 const StatusMapperState &status_mapper_get_state();
 const char *status_mapper_status_to_string(PortStatus status);
 

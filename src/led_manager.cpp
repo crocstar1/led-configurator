@@ -3,7 +3,7 @@
 #include <ctype.h>
 #include "matrix_config_storage.h"
 #include "status_mapper.h"
-#include "usp1_inputs.h"
+#include "station_inputs.h"
 #include "zone_model.h"
 
 CRGB leds[NUM_IC_CHIPS]; 
@@ -39,12 +39,12 @@ static constexpr uint16_t STARTUP_ERROR_POLL_MS = 20;
 static void led_load_config_from_flash();
 
 static bool startup_error_active() {
-    usp1_inputs_update();
-    status_mapper_update(usp1_inputs_get_state());
+    station_inputs_update();
+    status_mapper_update(station_inputs_get_state());
 
     const StatusMapperState &state = status_mapper_get_state();
-    const uint8_t activePortCount = state.activePortCount > USP1_MAX_PORT_COUNT
-        ? USP1_MAX_PORT_COUNT
+    const uint8_t activePortCount = state.activePortCount > MAX_PORT_COUNT
+        ? MAX_PORT_COUNT
         : state.activePortCount;
 
     for (uint8_t i = 0; i < activePortCount; i++) {
@@ -323,7 +323,7 @@ void led_refresh_internal() {
             CRGB layerColor;
             if (zone_is_port(zone)) {
                 const uint8_t portIndex = zone - ZONE_ID_PORT1;
-                const PortStatus zoneStatus = (portIndex < USP1_MAX_PORT_COUNT)
+                const PortStatus zoneStatus = (portIndex < MAX_PORT_COUNT)
                     ? portState.statuses[portIndex]
                     : PORT_STATUS_DISABLED;
 
@@ -351,7 +351,7 @@ void led_refresh_internal() {
         // Port zones 1..4 use the current mapped runtime status.
         if (zone_is_port(zone)) {
             const uint8_t portIndex = zone - ZONE_ID_PORT1;
-            const PortStatus zoneStatus = (portIndex < USP1_MAX_PORT_COUNT)
+            const PortStatus zoneStatus = (portIndex < MAX_PORT_COUNT)
                 ? portState.statuses[portIndex]
                 : PORT_STATUS_DISABLED;
 
