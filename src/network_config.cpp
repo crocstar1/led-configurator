@@ -10,6 +10,7 @@ static constexpr unsigned long STA_RECONNECT_TIMEOUT_MS = 45000;
 static constexpr unsigned long STA_RETRY_INTERVAL_MS = 5000;
 static constexpr unsigned long AP_FALLBACK_RETRY_INTERVAL_MS = 60000;
 static constexpr unsigned long NETWORK_WATCHDOG_INTERVAL_MS = 500;
+static constexpr unsigned long NETWORK_SCAN_TIMEOUT_MS = 15000;
 
 static NetworkConfig networkConfig;
 static NetworkRuntimeMode runtimeMode = NETWORK_MODE_AP_FALLBACK;
@@ -21,6 +22,9 @@ static unsigned long lastStaRetryAt = 0;
 static unsigned long fallbackStartedAt = 0;
 static bool retryStartedFromFallback = false;
 static bool fallbackStaRetryEnabled = false;
+static bool scanActive = false;
+static bool scanRestoreApOnly = false;
+static unsigned long scanStartedAt = 0;
 
 static IPAddress defaultStaticIp(192, 168, 1, 150);
 static IPAddress defaultGateway(192, 168, 1, 1);
@@ -148,6 +152,7 @@ static void loadConfig() {
 }
 
 static void startApFallback(const char *reason, bool allowStaRetry) {
+    if (scanActive) network_scan_finish();
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(defaultApIp, defaultApIp, defaultApSubnet);
@@ -165,6 +170,7 @@ static void startApFallback(const char *reason, bool allowStaRetry) {
 }
 
 static void startStaAttempt(NetworkRuntimeMode mode, bool fromFallback) {
+    if (scanActive) network_scan_finish();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true);
     WiFi.mode(WIFI_STA);
@@ -227,6 +233,10 @@ void network_setup() {
 void network_loop() {
     const unsigned long now = millis();
 
+    if (scanActive && now - scanStartedAt >= NETWORK_SCAN_TIMEOUT_MS) {
+        network_scan_finish();
+    }
+
     if (pendingApplyAt > 0 && (long)(now - pendingApplyAt) >= 0) {
         pendingApplyAt = 0;
         applyConfig();
@@ -279,6 +289,51 @@ void network_loop() {
                 startStaAttempt(NETWORK_MODE_RECONNECTING, true);
             }
             break;
+    }
+}
+
+bool network_scan_start() {
+    if (scanActive) return true;
+
+    WiFi.scanDelete();
+    scanRestoreApOnly = runtimeMode == NETWORK_MODE_AP_FALLBACK;
+    if (scanRestoreApOnly) {
+        WiFi.mode(WIFI_AP_STA);
+    }
+
+    const int result = WiFi.scanNetworks(true, true);
+    if (result == WIFI_SCAN_FAILED) {
+        if (scanRestoreApOnly && runtimeMode == NETWORK_MODE_AP_FALLBACK) {
+            WiFi.mode(WIFI_AP);
+        }
+        scanRestoreApOnly = false;
+        return false;
+    }
+
+    scanActive = true;
+    scanStartedAt = millis();
+    return true;
+}
+
+bool network_scan_is_active() {
+    return scanActive;
+}
+
+int network_scan_complete() {
+    return scanActive ? WiFi.scanComplete() : WIFI_SCAN_FAILED;
+}
+
+void network_scan_finish() {
+    if (!scanActive) return;
+
+    WiFi.scanDelete();
+    const bool restoreApOnly = scanRestoreApOnly && runtimeMode == NETWORK_MODE_AP_FALLBACK;
+    scanActive = false;
+    scanRestoreApOnly = false;
+    scanStartedAt = 0;
+
+    if (restoreApOnly) {
+        WiFi.mode(WIFI_AP);
     }
 }
 

@@ -27,7 +27,7 @@ struct StatusMapperState {
 
 void status_mapper_setup();
 void status_mapper_update(const StationInputState &inputs);
-const StatusMapperState &status_mapper_get_state();
+void status_mapper_get_snapshot(StatusMapperState &snapshot);
 const char *status_mapper_status_to_string(PortStatus status);
 
 #endif

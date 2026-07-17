@@ -11,6 +11,6 @@ struct StationInputState {
 
 void station_inputs_setup();
 void station_inputs_update();
-const StationInputState &station_inputs_get_state();
+void station_inputs_get_snapshot(StationInputState &snapshot);
 
 #endif

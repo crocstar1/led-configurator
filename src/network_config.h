@@ -25,6 +25,10 @@ enum NetworkRuntimeMode {
 
 void network_setup();
 void network_loop();
+bool network_scan_start();
+bool network_scan_is_active();
+int network_scan_complete();
+void network_scan_finish();
 const NetworkConfig &network_config_get();
 bool network_config_save(const NetworkConfig &config, String &error);
 void network_schedule_apply(unsigned long delayMs);

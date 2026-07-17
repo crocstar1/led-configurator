@@ -40,9 +40,12 @@ static void led_load_config_from_flash();
 
 static bool startup_error_active() {
     station_inputs_update();
-    status_mapper_update(station_inputs_get_state());
+    StationInputState inputs;
+    station_inputs_get_snapshot(inputs);
+    status_mapper_update(inputs);
 
-    const StatusMapperState &state = status_mapper_get_state();
+    StatusMapperState state;
+    status_mapper_get_snapshot(state);
     const uint8_t activePortCount = state.activePortCount > MAX_PORT_COUNT
         ? MAX_PORT_COUNT
         : state.activePortCount;
@@ -311,7 +314,8 @@ void led_refresh_internal() {
     customCharge.nscale8_video(cfg.bright_ports);
     customError.nscale8_video(cfg.bright_ports);
 
-    const StatusMapperState &portState = status_mapper_get_state();
+    StatusMapperState portState;
+    status_mapper_get_snapshot(portState);
 
     for (int i = 0; i < NUM_IC_CHIPS; i++) {
         uint8_t zone = zoneMap[i]; 

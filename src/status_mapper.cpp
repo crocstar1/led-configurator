@@ -1,28 +1,37 @@
 #include "status_mapper.h"
 
 static StatusMapperState mapperState = {};
+static portMUX_TYPE mapperStateMux = portMUX_INITIALIZER_UNLOCKED;
 
 void status_mapper_setup() {
-    mapperState.activePortCount = DEFAULT_ACTIVE_PORT_COUNT;
+    StatusMapperState nextState = {};
+    nextState.activePortCount = DEFAULT_ACTIVE_PORT_COUNT;
 
     for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
-        mapperState.ports[i].chargingInput = i * 2;
-        mapperState.ports[i].errorInput = (i * 2) + 1;
-        mapperState.ports[i].zoneId = i + 1;
-        mapperState.ports[i].enabled = (i < mapperState.activePortCount);
-        mapperState.statuses[i] = mapperState.ports[i].enabled
+        nextState.ports[i].chargingInput = i * 2;
+        nextState.ports[i].errorInput = (i * 2) + 1;
+        nextState.ports[i].zoneId = i + 1;
+        nextState.ports[i].enabled = (i < nextState.activePortCount);
+        nextState.statuses[i] = nextState.ports[i].enabled
             ? PORT_STATUS_WAITING
             : PORT_STATUS_DISABLED;
     }
+
+    portENTER_CRITICAL(&mapperStateMux);
+    mapperState = nextState;
+    portEXIT_CRITICAL(&mapperStateMux);
 }
 
 void status_mapper_update(const StationInputState &inputs) {
+    StatusMapperState nextState;
+    status_mapper_get_snapshot(nextState);
+
     for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
-        PortInputMapping &port = mapperState.ports[i];
-        port.enabled = (i < mapperState.activePortCount);
+        PortInputMapping &port = nextState.ports[i];
+        port.enabled = (i < nextState.activePortCount);
 
         if (!port.enabled) {
-            mapperState.statuses[i] = PORT_STATUS_DISABLED;
+            nextState.statuses[i] = PORT_STATUS_DISABLED;
             continue;
         }
 
@@ -30,17 +39,23 @@ void status_mapper_update(const StationInputState &inputs) {
         const bool chargingActive = inputs.active[port.chargingInput];
 
         if (errorActive) {
-            mapperState.statuses[i] = PORT_STATUS_ERROR;
+            nextState.statuses[i] = PORT_STATUS_ERROR;
         } else if (chargingActive) {
-            mapperState.statuses[i] = PORT_STATUS_CHARGING;
+            nextState.statuses[i] = PORT_STATUS_CHARGING;
         } else {
-            mapperState.statuses[i] = PORT_STATUS_WAITING;
+            nextState.statuses[i] = PORT_STATUS_WAITING;
         }
     }
+
+    portENTER_CRITICAL(&mapperStateMux);
+    mapperState = nextState;
+    portEXIT_CRITICAL(&mapperStateMux);
 }
 
-const StatusMapperState &status_mapper_get_state() {
-    return mapperState;
+void status_mapper_get_snapshot(StatusMapperState &snapshot) {
+    portENTER_CRITICAL(&mapperStateMux);
+    snapshot = mapperState;
+    portEXIT_CRITICAL(&mapperStateMux);
 }
 
 const char *status_mapper_status_to_string(PortStatus status) {

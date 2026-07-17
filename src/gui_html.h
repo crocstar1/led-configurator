@@ -1136,9 +1136,12 @@ let portsBrightnessSaveTimer = null;
 let freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
 let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
 let freeBrightnessSaveTimers = {};
+let networkScanInFlight = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
+const NETWORK_SCAN_POLL_MS = 500;
+const NETWORK_SCAN_UI_TIMEOUT_MS = 14000;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -2626,23 +2629,40 @@ async function scanNetworks() {
         setNetworkMessage('Сканирование работает только через контроллер.');
         return;
     }
+    if (networkScanInFlight) return;
 
-    setNetworkMessage('Сканирование...');
+    const button = document.getElementById('scan_network_btn');
+    const startedAt = Date.now();
+    networkScanInFlight = true;
+    button.disabled = true;
+    setNetworkMessage('Сканирование сетей...');
     try {
-        const res = await fetch('/scan_networks');
-        if (!res.ok) throw new Error(`scan ${res.status}`);
-        const networks = await res.json();
-        renderDiagCards(
-            'network_scan',
-            (networks || []).map(net => [
-                net.ssid || '(скрытая сеть)',
-                `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`,
-            ]),
-            'Сети не найдены.'
-        );
-        setNetworkMessage('');
+        while (Date.now() - startedAt < NETWORK_SCAN_UI_TIMEOUT_MS) {
+            const res = await fetch('/scan_networks', { cache: 'no-store' });
+            if (res.status === 202) {
+                await new Promise(resolve => setTimeout(resolve, NETWORK_SCAN_POLL_MS));
+                continue;
+            }
+            if (!res.ok) throw new Error(`scan ${res.status}`);
+
+            const networks = await res.json();
+            renderDiagCards(
+                'network_scan',
+                (networks || []).map(net => [
+                    net.ssid || '(скрытая сеть)',
+                    `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`,
+                ]),
+                'Сети не найдены.'
+            );
+            setNetworkMessage('');
+            return;
+        }
+        throw new Error('scan timeout');
     } catch (err) {
         setNetworkMessage('Не удалось выполнить сканирование.', true);
+    } finally {
+        networkScanInFlight = false;
+        button.disabled = false;
     }
 }
 

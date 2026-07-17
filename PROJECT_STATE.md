@@ -190,6 +190,16 @@ Edit/preview mode:
   - temporary Network status request failures preserve the last real status
     instead of displaying mock AP data;
   - network watchdog changes are pending local build and hardware verification.
+- Runtime input isolation and non-blocking network scan stage added and
+  successfully built locally; hardware verification remains pending:
+  - Data1..Data8 and `status_mapper` are updated by a dedicated 50 ms FreeRTOS
+    task, independently of HTTP handlers and the Arduino `loop()`;
+  - input and mapped-status readers use short critical-section snapshots instead
+    of sharing mutable state by reference;
+  - Wi-Fi scanning uses the framework asynchronous scan mode; `/scan_networks`
+    returns HTTP 202 while scanning and the UI polls until results are ready;
+  - AP fallback changes temporarily to AP+STA only while a scan is active, then
+    returns to AP-only; abandoned scans are cleaned up after 15 seconds.
 - OTA MVP added:
   - service menu Firmware section uploads `firmware.bin` through `/update`;
   - upload progress and success/error states are shown in the web UI;
@@ -304,8 +314,9 @@ Edit/preview mode:
 The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
 and mechanical neutral rename have been successfully built locally.
 
-Current focus: local build and hardware verification of non-blocking STA,
-network watchdog transitions, and controlled AP fallback.
+Current focus: hardware verification of isolated Data input updates,
+asynchronous Wi-Fi scanning, non-blocking STA, network watchdog transitions,
+and controlled AP fallback.
 
 Known active review topics:
 

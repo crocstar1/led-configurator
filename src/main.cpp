@@ -20,6 +20,42 @@ bool otaRestartPending = false;
 String otaUpdateError = "";
 unsigned long otaRestartAt = 0;
 
+static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
+static bool inputTaskStarted = false;
+
+static void updatePortStatusFromInputs() {
+    station_inputs_update();
+    StationInputState inputs;
+    station_inputs_get_snapshot(inputs);
+    status_mapper_update(inputs);
+}
+
+static void inputTaskWorker(void *) {
+    TickType_t lastWake = xTaskGetTickCount();
+    const TickType_t period = pdMS_TO_TICKS(INPUT_TASK_PERIOD_MS);
+
+    while (true) {
+        updatePortStatusFromInputs();
+        vTaskDelayUntil(&lastWake, period);
+    }
+}
+
+static void startInputTask() {
+    const BaseType_t result = xTaskCreatePinnedToCore(
+        inputTaskWorker,
+        "Input_Task",
+        2048,
+        nullptr,
+        2,
+        nullptr,
+        1
+    );
+    inputTaskStarted = result == pdPASS;
+    if (!inputTaskStarted) {
+        Serial.println("Input task start failed; using loop fallback");
+    }
+}
+
 bool authRequestAuthenticated() {
     return server.authenticate(auth_config_username(), auth_config_password());
 }
@@ -300,7 +336,8 @@ void appendFreeZoneConfigsJson(String &json) {
 }
 
 void appendZoneMetadataJson(String &json) {
-    const StatusMapperState &status = status_mapper_get_state();
+    StatusMapperState status;
+    status_mapper_get_snapshot(status);
     const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
         ? MAX_PORT_COUNT
         : status.activePortCount;
@@ -357,7 +394,8 @@ bool zoneMapHasRequiredActivePortZones(const uint8_t *zones, size_t zoneCount) {
         return false;
     }
 
-    const StatusMapperState &status = status_mapper_get_state();
+    StatusMapperState status;
+    status_mapper_get_snapshot(status);
     const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
         ? MAX_PORT_COUNT
         : status.activePortCount;
@@ -484,7 +522,9 @@ void handleGetConfig() {
     json += "\",\"c_error\":\"";
     json += rgbToHex(cfg.color_error);
     json += "\",\"activePortCount\":";
-    json += String((int)status_mapper_get_state().activePortCount);
+    StatusMapperState status;
+    status_mapper_get_snapshot(status);
+    json += String((int)status.activePortCount);
     json += ",\"matrix\":{\"cols\":";
     json += String((int)MATRIX_X);
     json += ",\"rows\":";
@@ -815,12 +855,28 @@ void handleNetworkStatus() {
 void handleScanNetworks() {
     if (!requireHttpAuth()) return;
 
-    const bool restoreApOnly = network_runtime_mode() == NETWORK_MODE_AP_FALLBACK;
-    if (restoreApOnly) {
-        WiFi.mode(WIFI_AP_STA);
+    if (!network_scan_is_active()) {
+        if (!network_scan_start()) {
+            server.send(500, "application/json", "{\"status\":\"failed\"}");
+            return;
+        }
+        server.sendHeader("Retry-After", "1");
+        server.send(202, "application/json", "{\"status\":\"scanning\"}");
+        return;
     }
 
-    const int count = WiFi.scanNetworks(false, true);
+    const int count = network_scan_complete();
+    if (count == WIFI_SCAN_RUNNING) {
+        server.sendHeader("Retry-After", "1");
+        server.send(202, "application/json", "{\"status\":\"scanning\"}");
+        return;
+    }
+    if (count == WIFI_SCAN_FAILED) {
+        network_scan_finish();
+        server.send(500, "application/json", "{\"status\":\"failed\"}");
+        return;
+    }
+
     String json = "[";
     if (count > 0) {
         for (int i = 0; i < count; i++) {
@@ -837,10 +893,7 @@ void handleScanNetworks() {
         }
     }
     json += "]";
-    WiFi.scanDelete();
-    if (restoreApOnly && network_runtime_mode() == NETWORK_MODE_AP_FALLBACK) {
-        WiFi.mode(WIFI_AP);
-    }
+    network_scan_finish();
 
     server.send(200, "application/json", json);
 }
@@ -958,11 +1011,10 @@ void handleSaveAuth() {
 void handleDiagnostics() {
     if (!requireHttpAuth()) return;
 
-    station_inputs_update();
-    status_mapper_update(station_inputs_get_state());
-
-    const StationInputState &inputs = station_inputs_get_state();
-    const StatusMapperState &status = status_mapper_get_state();
+    StationInputState inputs;
+    StatusMapperState status;
+    station_inputs_get_snapshot(inputs);
+    status_mapper_get_snapshot(status);
 
     String json;
     json.reserve(1400);
@@ -1023,25 +1075,14 @@ void handleDiagnostics() {
     server.send(200, "application/json", json);
 }
 
-void updatePortStatusFromInputs() {
-    static unsigned long lastUpdateMs = 0;
-
-    const unsigned long now = millis();
-    if (now - lastUpdateMs < 100) {
-        return;
-    }
-    lastUpdateMs = now;
-
-    station_inputs_update();
-    status_mapper_update(station_inputs_get_state());
-}
-
 void setup() {
     Serial.begin(115200);
     auth_config_setup();
     station_inputs_setup();
     status_mapper_setup();
+    updatePortStatusFromInputs();
     led_setup();
+    startInputTask();
     network_setup();
 
     Serial.println("\n=== LED matrix controller network started ===");
@@ -1140,7 +1181,14 @@ void setup() {
 void loop() {
     server.handleClient();
     network_loop();
-    updatePortStatusFromInputs();
+    if (!inputTaskStarted) {
+        static unsigned long lastFallbackInputUpdate = 0;
+        const unsigned long now = millis();
+        if (now - lastFallbackInputUpdate >= INPUT_TASK_PERIOD_MS) {
+            lastFallbackInputUpdate = now;
+            updatePortStatusFromInputs();
+        }
+    }
     if (otaRestartPending && millis() >= otaRestartAt) {
         otaRestartPending = false;
         ESP.restart();
