@@ -296,6 +296,17 @@ Edit/preview mode:
   - no hardware test pattern or hardware preview endpoint was added.
   - local build passed, save/reload topology works, and all four browser
     preview variants were checked.
+- Topology/zone-map consistency follow-up added, pending local build and
+  hardware verification:
+  - changing topology remaps the physical `zoneMap` through logical `x-y`
+    coordinates, so the editor layout remains unchanged;
+  - status and free custom layers remain stored as `x-y` and are reloaded
+    against the remapped zone map without rewriting their NVS keys;
+  - topology and the remapped zone map are saved together in the existing
+    `matrix_cfg` blob before the matching RAM state is applied under the LED
+    mutex;
+  - the UI blocks topology save while zone/status/free-layer edits are dirty
+    and asks for confirmation before an actual topology change.
 - Matrix storage cleanup added:
   - legacy matrix fields were removed from `MatrixConfig`;
   - old `zone_map` / `zone_cfg` fallback loaders were removed;
@@ -316,7 +327,7 @@ and mechanical neutral rename have been successfully built locally.
 
 Current focus: hardware verification of isolated Data input updates,
 asynchronous Wi-Fi scanning, non-blocking STA, network watchdog transitions,
-and controlled AP fallback.
+controlled AP fallback, plus local build and verification of topology remap.
 
 Known active review topics:
 

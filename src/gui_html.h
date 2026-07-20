@@ -319,6 +319,42 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             gap: 10px;
         }
 
+        #matrix_settings_block,
+        #matrix_settings_block .advanced-body,
+        #matrix_settings_block .advanced-body > * {
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        #matrix_settings_block select {
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        #matrix_settings_block .notice,
+        #matrix_settings_block .status-line,
+        #matrix_settings_block .hint {
+            min-width: 0;
+            max-width: 100%;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        #matrix_settings_block .status-line {
+            flex-wrap: wrap;
+        }
+
+        #matrix_settings_block .topology-preview {
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            justify-content: start;
+            overscroll-behavior-inline: contain;
+            -webkit-overflow-scrolling: touch;
+        }
+
         .side-stack {
             display: flex;
             flex-direction: column;
@@ -2081,6 +2117,24 @@ document.getElementById('topology_select').addEventListener('change', e => {
 });
 
 document.getElementById('save_topology_btn').addEventListener('click', async () => {
+    const hasDirtyStatusLayer = Object.values(statusLayerDirty).some(Boolean);
+    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean);
+    if (zoneMapDirty || hasDirtyStatusLayer || hasDirtyFreeZone) {
+        const message = 'Сначала сохраните изменения зон, статусов и свободных зон.';
+        setTopologyMessage(message, true);
+        alert(message);
+        return;
+    }
+
+    if (pendingTopology === matrixConfig.topology) {
+        setTopologyMessage('Топология не изменена.');
+        return;
+    }
+
+    if (!confirm('Смена топологии изменит физический порядок светодиодов. Разметка зон останется на своих местах в редакторе.')) {
+        return;
+    }
+
     if (!backendAvailable) {
         matrixConfig.topology = pendingTopology;
         setTopologyMessage('Контроллер недоступен: топология изменена только в браузере.');

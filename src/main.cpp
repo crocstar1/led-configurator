@@ -587,15 +587,24 @@ void handleSaveTopology() {
 
     MatrixConfig nextConfig = cfg;
     nextConfig.topology = (uint8_t)topology;
-    if (!matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
+    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
+    if (!led_remap_zone_map_for_topology(
+            zoneMap,
+            sizeof(zoneMap),
+            cfg.topology,
+            nextConfig.topology,
+            nextZoneMap,
+            sizeof(nextZoneMap))) {
+        server.send(500, "text/plain", "REMAP_FAILED");
+        return;
+    }
+
+    if (!matrix_config_save(nextConfig, nextZoneMap, sizeof(nextZoneMap))) {
         server.send(500, "text/plain", "SAVE_FAILED");
         return;
     }
-    cfg = nextConfig;
 
-    led_reload_status_layers_safe();
-    led_reload_free_zone_layers_safe();
-    led_refresh_safe();
+    led_apply_matrix_config_safe(nextConfig, nextZoneMap, sizeof(nextZoneMap));
     server.send(200, "text/plain", "OK");
 }
 

@@ -84,13 +84,13 @@ static void led_run_startup_animation() {
 }
 
 // Map logical matrix coordinates to the physical LED chain.
-int getLEDIndex(int x, int virtualY) {
+int getLEDIndexForTopology(int x, int virtualY, uint8_t topology) {
     if (x < 0 || x >= MATRIX_X || virtualY < 0 || virtualY >= VIRTUAL_Y) return -1;
     
     int tx = x;
     int ty = virtualY;
 
-    switch (cfg.topology) {
+    switch (topology) {
         case 0: // Right-bottom start, vertical snake.
             tx = (MATRIX_X - 1) - x;
             if (tx % 2 == 0) return (tx * VIRTUAL_Y) + ty;
@@ -114,6 +114,47 @@ int getLEDIndex(int x, int virtualY) {
         default:
             return -1;
     }
+}
+
+int getLEDIndex(int x, int virtualY) {
+    return getLEDIndexForTopology(x, virtualY, cfg.topology);
+}
+
+bool led_remap_zone_map_for_topology(
+    const uint8_t *sourceZones,
+    size_t sourceCount,
+    uint8_t oldTopology,
+    uint8_t newTopology,
+    uint8_t *targetZones,
+    size_t targetCount
+) {
+    if (sourceZones == nullptr || targetZones == nullptr || sourceZones == targetZones ||
+        sourceCount != NUM_IC_CHIPS || targetCount != NUM_IC_CHIPS ||
+        oldTopology > 3 || newTopology > 3) {
+        return false;
+    }
+
+    bool assigned[NUM_IC_CHIPS] = {};
+    memset(targetZones, 0, targetCount);
+
+    for (int y = 0; y < VIRTUAL_Y; y++) {
+        for (int x = 0; x < MATRIX_X; x++) {
+            const int oldIndex = getLEDIndexForTopology(x, y, oldTopology);
+            const int newIndex = getLEDIndexForTopology(x, y, newTopology);
+            if (oldIndex < 0 || oldIndex >= NUM_IC_CHIPS ||
+                newIndex < 0 || newIndex >= NUM_IC_CHIPS || assigned[newIndex]) {
+                return false;
+            }
+
+            targetZones[newIndex] = sourceZones[oldIndex];
+            assigned[newIndex] = true;
+        }
+    }
+
+    for (int i = 0; i < NUM_IC_CHIPS; i++) {
+        if (!assigned[i]) return false;
+    }
+    return true;
 }
 
 int hexDigitValue(char c) {
@@ -461,6 +502,27 @@ void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount) {
 
     if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
         memcpy(zoneMap, zones, sizeof(zoneMap));
+        led_refresh_internal();
+        xSemaphoreGive(ledMutex);
+    }
+}
+
+void led_apply_matrix_config_safe(const MatrixConfig &config, const uint8_t *zones, size_t zoneCount) {
+    if (zones == nullptr || zoneCount != NUM_IC_CHIPS) return;
+
+    if (ledMutex == NULL) {
+        cfg = config;
+        memcpy(zoneMap, zones, sizeof(zoneMap));
+        led_reload_status_layers_unlocked();
+        led_reload_free_zone_layers_unlocked();
+        return;
+    }
+
+    if (xSemaphoreTake(ledMutex, portMAX_DELAY) == pdTRUE) {
+        cfg = config;
+        memcpy(zoneMap, zones, sizeof(zoneMap));
+        led_reload_status_layers_unlocked();
+        led_reload_free_zone_layers_unlocked();
         led_refresh_internal();
         xSemaphoreGive(ledMutex);
     }

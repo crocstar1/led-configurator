@@ -45,8 +45,18 @@ void led_setup();
 // Thread-safe LED and zone update helpers.
 void led_refresh_safe();
 void led_replace_zone_map_safe(const uint8_t *zones, size_t zoneCount);
+void led_apply_matrix_config_safe(const MatrixConfig &config, const uint8_t *zones, size_t zoneCount);
 void led_reload_status_layers_safe();
 void led_reload_free_zone_layers_safe();
+bool led_remap_zone_map_for_topology(
+    const uint8_t *sourceZones,
+    size_t sourceCount,
+    uint8_t oldTopology,
+    uint8_t newTopology,
+    uint8_t *targetZones,
+    size_t targetCount
+);
+int getLEDIndexForTopology(int x, int virtualY, uint8_t topology);
 int getLEDIndex(int x, int virtualY);
 
 #endif
