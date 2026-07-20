@@ -55,6 +55,9 @@ The firmware serves an engineering setup UI with:
 Zone editing preview stays in the browser so it cannot hide runtime port error
 indication on the physical matrix.
 
+Detailed Russian walkthrough for developers and field engineers:
+[`FIRMWARE_WALKTHROUGH_RU.md`](FIRMWARE_WALKTHROUGH_RU.md).
+
 ## Current State
 
 - Port 1 and Port 2 are active by default; Port 3 and Port 4 are reserved.
