@@ -58,6 +58,9 @@ indication on the physical matrix.
 Detailed Russian walkthrough for developers and field engineers:
 [`FIRMWARE_WALKTHROUGH_RU.md`](FIRMWARE_WALKTHROUGH_RU.md).
 
+Detailed Russian guide to the current C++/JavaScript methods and call flow:
+[`CODE_METHODS_GUIDE_RU.md`](CODE_METHODS_GUIDE_RU.md).
+
 ## Current State
 
 - Port 1 and Port 2 are active by default; Port 3 and Port 4 are reserved.
