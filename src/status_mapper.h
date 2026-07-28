@@ -5,21 +5,24 @@
 #include "board_config.h"
 #include "station_inputs.h"
 
-enum PortStatus : uint8_t {
+enum PortStatus : uint8_t
+{
     PORT_STATUS_WAITING = 0,
     PORT_STATUS_CHARGING,
     PORT_STATUS_ERROR,
     PORT_STATUS_DISABLED
 };
 
-struct PortInputMapping {
+struct PortInputMapping
+{ // хранит для одного порта индексы charging/error входов, zoneId и enabled
     uint8_t chargingInput;
     uint8_t errorInput;
     uint8_t zoneId;
     bool enabled;
 };
 
-struct StatusMapperState {
+struct StatusMapperState
+{
     uint8_t activePortCount;
     PortInputMapping ports[MAX_PORT_COUNT];
     PortStatus statuses[MAX_PORT_COUNT];
