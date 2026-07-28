@@ -267,6 +267,24 @@ Edit/preview mode:
     current and allows communication recovery without frequent heavy requests;
   - network and diagnostics values are rendered through DOM `textContent`
     instead of inserting external strings through `innerHTML`.
+- Stage 3A operational diagnostics added and successfully built locally; manual
+  verification on ESP32 remains:
+  - `/diagnostics` reports firmware version/build/environment, 64-bit uptime,
+    current/minimum free heap, and the stable ESP32 reset reason;
+  - release version and build ID are maintained explicitly in
+    `src/firmware_version.h`;
+  - Input runtime reports task/fallback mode and the age of the last complete
+    Data1..Data8 read plus status update;
+  - LED runtime reports the age of the last frame sent through `FastLED.show()`
+    in addition to mutex/task/fallback state;
+  - the last `WiFi.softAP()` attempt is reported as `not_attempted`, `ok`, or
+    `failed`, and a failed attempt is written to Serial;
+  - the Diagnostics UI shows compact Firmware, System, Tasks, and AP result
+    sections and warns when input or LED updates are older than 500 ms.
+  - `pio run -e esp32dev` completed successfully: RAM 49,672 bytes (15.2%);
+    Flash 1,002,237 bytes (76.5%);
+  - before preparing every official firmware release, the developer must update
+    `FIRMWARE_VERSION` and `FIRMWARE_BUILD_ID` in `src/firmware_version.h`.
 - API/storage correctness pass implemented and successfully built locally;
   save/reload/reboot behavior remains part of hardware acceptance testing:
   - current save endpoints return success only after NVS write/read-back
@@ -323,11 +341,18 @@ Edit/preview mode:
 ## Currently In Work
 
 The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
-and mechanical neutral rename have been successfully built locally.
+mechanical neutral rename, and LED reliability pass have been successfully
+built locally.
 
-Current focus: hardware verification of isolated Data input updates,
-asynchronous Wi-Fi scanning, non-blocking STA, network watchdog transitions,
-controlled AP fallback, plus local build and verification of topology remap.
+Current focus: manual ESP32 verification of the successfully built Stage 3A
+operational diagnostics.
+
+Explicitly deferred from this stage:
+
+- hardware acceptance;
+- Stage 2 encapsulation of `cfg`, `zoneMap`, and `freeZoneConfigs`;
+- extended NVS diagnostics that distinguish missing, invalid, and unavailable
+  storage or report RAM-default recovery.
 
 Known active review topics:
 
@@ -367,6 +392,10 @@ Known active review topics:
   - validate STA connect/reconnect behavior on hardware;
   - decide whether AP fallback default password is acceptable for production;
   - consider reset/clear-network flow only if field testing shows it is needed.
+- Diagnostics follow-up:
+  - distinguish empty, invalid, and unavailable matrix/network/auth NVS;
+  - report whether runtime is using RAM defaults after a storage error;
+  - keep this separate from Stage 3A and do not add a persistent Flash log.
 - Auth hardening follow-up:
   - password hashing, captive portal, HTTPS, signed OTA, physical factory reset,
     and auth reset are intentionally deferred.

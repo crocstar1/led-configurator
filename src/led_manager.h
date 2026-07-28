@@ -38,6 +38,7 @@ struct LedRuntimeState {
     bool mutexReady;
     bool taskStarted;
     bool loopFallback;
+    uint64_t lastRefreshAgeMs;
 };
 
 // Делаем переменные доступными для main.cpp

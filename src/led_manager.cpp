@@ -1,6 +1,7 @@
 ﻿#include "led_manager.h"
 #include <FastLED.h>
 #include <ctype.h>
+#include <esp_timer.h>
 #include "matrix_config_storage.h"
 #include "status_mapper.h"
 #include "station_inputs.h"
@@ -19,6 +20,8 @@ SemaphoreHandle_t ledMutex = NULL;
 static bool ledMutexReady = false;
 static bool ledTaskStarted = false;
 static bool ledLoopFallback = false;
+static uint64_t lastLedRefreshMs = 0;
+static portMUX_TYPE ledRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct StatusLayerCache {
     bool hasColor[NUM_IC_CHIPS];
@@ -439,6 +442,11 @@ void led_refresh_internal() {
         }
     }
     FastLED.show();
+
+    const uint64_t refreshedAt = (uint64_t)esp_timer_get_time() / 1000ULL;
+    portENTER_CRITICAL(&ledRuntimeMux);
+    lastLedRefreshMs = refreshedAt;
+    portEXIT_CRITICAL(&ledRuntimeMux);
 }
 
 static void led_update_step(unsigned long now) {
@@ -523,6 +531,16 @@ void led_get_runtime_state(LedRuntimeState &state) {
     state.mutexReady = ledMutexReady;
     state.taskStarted = ledTaskStarted;
     state.loopFallback = ledLoopFallback;
+
+    uint64_t lastRefreshMs;
+    portENTER_CRITICAL(&ledRuntimeMux);
+    lastRefreshMs = lastLedRefreshMs;
+    portEXIT_CRITICAL(&ledRuntimeMux);
+
+    const uint64_t nowMs = (uint64_t)esp_timer_get_time() / 1000ULL;
+    state.lastRefreshAgeMs = lastRefreshMs > 0 && nowMs >= lastRefreshMs
+        ? nowMs - lastRefreshMs
+        : 0;
 }
 
 static void led_load_config_from_flash() {

@@ -2,6 +2,9 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ctype.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+#include "firmware_version.h"
 #include "gui_html.h"
 #include "led_manager.h"
 #include "matrix_config_storage.h"
@@ -22,12 +25,23 @@ unsigned long otaRestartAt = 0;
 
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
 static bool inputTaskStarted = false;
+static uint64_t lastInputUpdateMs = 0;
+static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
+
+static uint64_t monotonicMillis() {
+    return (uint64_t)esp_timer_get_time() / 1000ULL;
+}
 
 static void updatePortStatusFromInputs() {
     station_inputs_update();
     StationInputState inputs;
     station_inputs_get_snapshot(inputs);
     status_mapper_update(inputs);
+
+    const uint64_t updatedAt = monotonicMillis();
+    portENTER_CRITICAL(&inputRuntimeMux);
+    lastInputUpdateMs = updatedAt;
+    portEXIT_CRITICAL(&inputRuntimeMux);
 }
 
 static void inputTaskWorker(void *) {
@@ -53,6 +67,33 @@ static void startInputTask() {
     inputTaskStarted = result == pdPASS;
     if (!inputTaskStarted) {
         Serial.println("Input task start failed; using loop fallback");
+    }
+}
+
+static uint64_t inputLastUpdateAgeMs() {
+    uint64_t updatedAt;
+    portENTER_CRITICAL(&inputRuntimeMux);
+    updatedAt = lastInputUpdateMs;
+    portEXIT_CRITICAL(&inputRuntimeMux);
+
+    const uint64_t now = monotonicMillis();
+    return updatedAt > 0 && now >= updatedAt ? now - updatedAt : 0;
+}
+
+static const char *resetReasonString() {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON: return "power_on";
+        case ESP_RST_EXT: return "external";
+        case ESP_RST_SW: return "software";
+        case ESP_RST_PANIC: return "panic";
+        case ESP_RST_INT_WDT: return "interrupt_watchdog";
+        case ESP_RST_TASK_WDT: return "task_watchdog";
+        case ESP_RST_WDT: return "watchdog";
+        case ESP_RST_DEEPSLEEP: return "deep_sleep";
+        case ESP_RST_BROWNOUT: return "brownout";
+        case ESP_RST_SDIO: return "sdio";
+        case ESP_RST_UNKNOWN:
+        default: return "unknown";
     }
 }
 
@@ -1027,8 +1068,30 @@ void handleDiagnostics() {
     led_get_runtime_state(ledRuntime);
 
     String json;
-    json.reserve(1400);
-    json += "{\"activePortCount\":";
+    json.reserve(2100);
+    json += "{\"firmware\":{\"version\":\"";
+    json += FIRMWARE_VERSION;
+    json += "\",\"build\":\"";
+    json += FIRMWARE_BUILD_ID;
+    json += "\",\"environment\":\"";
+    json += FIRMWARE_BUILD_ENVIRONMENT;
+    json += "\"},\"system\":{\"uptimeSec\":";
+    json += String((unsigned long long)(esp_timer_get_time() / 1000000LL));
+    json += ",\"freeHeap\":";
+    json += String((unsigned int)ESP.getFreeHeap());
+    json += ",\"minFreeHeap\":";
+    json += String((unsigned int)ESP.getMinFreeHeap());
+    json += ",\"resetReason\":\"";
+    json += resetReasonString();
+    json += "\"},\"inputRuntime\":{\"taskStarted\":";
+    json += inputTaskStarted ? "true" : "false";
+    json += ",\"loopFallback\":";
+    json += inputTaskStarted ? "false" : "true";
+    json += ",\"lastUpdateAgeMs\":";
+    json += String((unsigned long long)inputLastUpdateAgeMs());
+    json += "},\"networkRuntime\":{\"apStartState\":\"";
+    json += network_ap_start_state_string();
+    json += "\"},\"activePortCount\":";
     json += String((int)status.activePortCount);
     json += ",\"runtimeMode\":\"runtime\"";
     json += ",\"ledRuntime\":{\"mutexReady\":";
@@ -1037,6 +1100,8 @@ void handleDiagnostics() {
     json += ledRuntime.taskStarted ? "true" : "false";
     json += ",\"loopFallback\":";
     json += ledRuntime.loopFallback ? "true" : "false";
+    json += ",\"lastRefreshAgeMs\":";
+    json += String((unsigned long long)ledRuntime.lastRefreshAgeMs);
     json += "}";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
     json += String((int)PRIMARY_LED_PIN);

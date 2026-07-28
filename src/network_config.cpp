@@ -25,6 +25,7 @@ static bool fallbackStaRetryEnabled = false;
 static bool scanActive = false;
 static bool scanRestoreApOnly = false;
 static unsigned long scanStartedAt = 0;
+static NetworkApStartState apStartState = NETWORK_AP_NOT_ATTEMPTED;
 
 static IPAddress defaultStaticIp(192, 168, 1, 150);
 static IPAddress defaultGateway(192, 168, 1, 1);
@@ -156,7 +157,11 @@ static void startApFallback(const char *reason, bool allowStaRetry) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(defaultApIp, defaultApIp, defaultApSubnet);
-    WiFi.softAP(networkConfig.apSsid.c_str(), networkConfig.apPassword.c_str());
+    const bool apStarted = WiFi.softAP(networkConfig.apSsid.c_str(), networkConfig.apPassword.c_str());
+    apStartState = apStarted ? NETWORK_AP_START_OK : NETWORK_AP_START_FAILED;
+    if (!apStarted) {
+        Serial.println("AP fallback start failed");
+    }
     runtimeMode = NETWORK_MODE_AP_FALLBACK;
     connectionStatus = reason;
     stateStartedAt = millis();
@@ -378,6 +383,15 @@ const char *network_runtime_mode_string() {
 
 const char *network_connection_status_string() {
     return connectionStatus.c_str();
+}
+
+const char *network_ap_start_state_string() {
+    switch (apStartState) {
+        case NETWORK_AP_START_OK: return "ok";
+        case NETWORK_AP_START_FAILED: return "failed";
+        case NETWORK_AP_NOT_ATTEMPTED:
+        default: return "not_attempted";
+    }
 }
 
 bool network_has_saved_ssid() {

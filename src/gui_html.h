@@ -926,7 +926,30 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <button class="btn" id="refresh_diag_btn" type="button">Обновить данные</button>
                     </div>
                     <div class="hint" id="diagnostics_message"></div>
-                    <div class="diag-grid" id="diag_summary"></div>
+                    <div>
+                        <label>Прошивка</label>
+                        <div class="diag-grid" id="diag_firmware"></div>
+                    </div>
+                    <div class="section-divider"></div>
+                    <div>
+                        <label>Система</label>
+                        <div class="diag-grid" id="diag_system"></div>
+                    </div>
+                    <div class="section-divider"></div>
+                    <div>
+                        <label>Рабочие задачи</label>
+                        <div class="diag-grid" id="diag_tasks"></div>
+                    </div>
+                    <div class="section-divider"></div>
+                    <div>
+                        <label>Сеть</label>
+                        <div class="diag-grid" id="diag_network_runtime"></div>
+                    </div>
+                    <div class="section-divider"></div>
+                    <div>
+                        <label>Общее</label>
+                        <div class="diag-grid" id="diag_summary"></div>
+                    </div>
                     <div class="section-divider"></div>
                     <div>
                         <label>Входы Data1..Data8</label>
@@ -1132,6 +1155,7 @@ const TOPOLOGY_OPTIONS = [
     { value: 2, key: 'horiz_right', label: 'Горизонтальная · старт слева сверху', hint: 'Светодиод 0 слева сверху, далее змейкой по строкам.' },
     { value: 3, key: 'horiz_left', label: 'Горизонтальная · старт справа сверху', hint: 'Светодиод 0 справа сверху, далее змейкой по строкам.' },
 ];
+const RUNTIME_STALE_WARNING_MS = 500;
 
 let COLS = 12;
 let ROWS = 8;
@@ -1272,6 +1296,31 @@ function buildMockDiagnostics() {
     }));
 
     return {
+        firmware: {
+            version: 'локальный предпросмотр',
+            build: 'нет данных',
+            environment: 'браузер',
+        },
+        system: {
+            uptimeSec: null,
+            freeHeap: null,
+            minFreeHeap: null,
+            resetReason: 'unknown',
+        },
+        inputRuntime: {
+            taskStarted: false,
+            loopFallback: false,
+            lastUpdateAgeMs: null,
+        },
+        ledRuntime: {
+            mutexReady: false,
+            taskStarted: false,
+            loopFallback: false,
+            lastRefreshAgeMs: null,
+        },
+        networkRuntime: {
+            apStartState: 'not_attempted',
+        },
         activePortCount: 2,
         runtimeMode: mockMode ? 'локальный предпросмотр' : 'runtime',
         primaryLedOutput: { name: 'LED1', gpio: 22, index: 1 },
@@ -2589,7 +2638,8 @@ async function loadDiagnostics() {
         if (!res.ok) throw new Error(`diagnostics ${res.status}`);
         diagnostics = await res.json();
         renderDiagnostics();
-        setDiagnosticsMessage('');
+        const runtimeWarning = diagnosticsRuntimeWarning();
+        setDiagnosticsMessage(runtimeWarning, Boolean(runtimeWarning));
     } catch (err) {
         setDiagnosticsMessage('Связь с контроллером потеряна. Повторная проверка будет выполнена автоматически.', true);
         document.getElementById('runtime_label').textContent = 'связь с контроллером потеряна';
@@ -2597,6 +2647,81 @@ async function loadDiagnostics() {
     } finally {
         diagnosticsRequestInFlight = false;
     }
+}
+
+function formatUptime(seconds) {
+    if (seconds === null || seconds === undefined) return 'нет данных';
+    const value = Number(seconds);
+    if (!Number.isFinite(value) || value < 0) return 'нет данных';
+    const total = Math.floor(value);
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const parts = [];
+    if (days) parts.push(`${days} д`);
+    if (hours || days) parts.push(`${hours} ч`);
+    if (minutes || hours || days) parts.push(`${minutes} мин`);
+    parts.push(`${secs} с`);
+    return parts.join(' ');
+}
+
+function formatMemoryKb(bytes) {
+    if (bytes === null || bytes === undefined) return 'нет данных';
+    const value = Number(bytes);
+    return Number.isFinite(value) && value >= 0 ? `${(value / 1024).toFixed(1)} КБ` : 'нет данных';
+}
+
+function formatRuntimeAge(milliseconds) {
+    if (milliseconds === null || milliseconds === undefined) return 'нет данных';
+    const value = Number(milliseconds);
+    if (!Number.isFinite(value) || value < 0) return 'нет данных';
+    return value < 1000 ? `${Math.round(value)} мс` : `${(value / 1000).toFixed(1)} с`;
+}
+
+function resetReasonLabel(reason) {
+    const labels = {
+        power_on: 'подача питания',
+        external: 'внешний сигнал сброса',
+        software: 'программная перезагрузка',
+        panic: 'аварийное исключение',
+        interrupt_watchdog: 'сторожевой таймер прерываний',
+        task_watchdog: 'сторожевой таймер задачи',
+        watchdog: 'сторожевой таймер',
+        deep_sleep: 'выход из глубокого сна',
+        brownout: 'просадка питания',
+        sdio: 'сброс через SDIO',
+        unknown: 'неизвестно',
+    };
+    return labels[reason] || labels.unknown;
+}
+
+function apStartStateLabel(state) {
+    const labels = {
+        not_attempted: 'ещё не запускалась',
+        ok: 'запущена успешно',
+        failed: 'ошибка запуска',
+    };
+    return labels[state] || 'нет данных';
+}
+
+function diagnosticsRuntimeWarning() {
+    if (mockMode || !diagnostics) return '';
+
+    const warnings = [];
+    const inputAge = Number(diagnostics.inputRuntime?.lastUpdateAgeMs);
+    const ledAge = Number(diagnostics.ledRuntime?.lastRefreshAgeMs);
+    if (Number.isFinite(inputAge) && inputAge > RUNTIME_STALE_WARNING_MS) {
+        warnings.push('давно не обновлялись Data-входы');
+    }
+    if (Number.isFinite(ledAge) && ledAge > RUNTIME_STALE_WARNING_MS) {
+        warnings.push('давно не обновлялась физическая матрица');
+    }
+    if (diagnostics.networkRuntime?.apStartState === 'failed') {
+        warnings.push('резервная точка доступа не запустилась');
+    }
+
+    return warnings.length ? `Внимание: ${warnings.join('; ')}.` : '';
 }
 
 function setDiagnosticsMessage(text, isError = false) {
@@ -2962,24 +3087,63 @@ function renderDiagnostics() {
     activePortCount = clampActivePortCount(reportedActivePorts);
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
+    const firmware = diagnostics.firmware || {};
+    const system = diagnostics.system || {};
+    const hasInputRuntime = diagnostics.inputRuntime && typeof diagnostics.inputRuntime === 'object';
+    const inputRuntime = diagnostics.inputRuntime || {};
     const hasLedRuntime = diagnostics.ledRuntime && typeof diagnostics.ledRuntime === 'object';
     const ledRuntime = diagnostics.ledRuntime || {};
-    const ledUpdateMode = !hasLedRuntime
-        ? (mockMode ? 'локальный предпросмотр' : 'нет данных')
+    const networkRuntime = diagnostics.networkRuntime || {};
+    const inputUpdateMode = mockMode
+        ? 'локальный предпросмотр'
+        : !hasInputRuntime
+        ? 'нет данных'
+        : (inputRuntime.taskStarted
+            ? 'отдельная задача'
+            : (inputRuntime.loopFallback ? 'основной цикл (резерв)' : 'не запущено'));
+    const ledUpdateMode = mockMode
+        ? 'локальный предпросмотр'
+        : !hasLedRuntime
+        ? 'нет данных'
         : (ledRuntime.taskStarted
             ? 'отдельная задача'
             : (ledRuntime.loopFallback ? 'основной цикл (резерв)' : 'не запущено'));
-    const ledMutexStatus = !hasLedRuntime
+    const ledMutexStatus = mockMode
+        ? 'нет данных'
+        : !hasLedRuntime
         ? 'нет данных'
         : (ledRuntime.mutexReady ? 'готов' : 'не создан');
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
 
+    renderDiagCards('diag_firmware', [
+        ['Версия', firmware.version || 'нет данных'],
+        ['Сборка', firmware.build || 'нет данных'],
+        ['Окружение', firmware.environment || 'нет данных'],
+    ]);
+
+    renderDiagCards('diag_system', [
+        ['Время работы', formatUptime(system.uptimeSec)],
+        ['Свободная память', formatMemoryKb(system.freeHeap)],
+        ['Минимум свободной памяти', formatMemoryKb(system.minFreeHeap)],
+        ['Причина перезапуска', resetReasonLabel(system.resetReason)],
+    ]);
+
+    renderDiagCards('diag_tasks', [
+        ['Чтение Data-входов', inputUpdateMode],
+        ['Последнее чтение входов', formatRuntimeAge(inputRuntime.lastUpdateAgeMs)],
+        ['Обновление матрицы', ledUpdateMode],
+        ['Последний кадр матрицы', formatRuntimeAge(ledRuntime.lastRefreshAgeMs)],
+        ['LED mutex', ledMutexStatus],
+    ]);
+
+    renderDiagCards('diag_network_runtime', [
+        ['Последний запуск резервной точки', apStartStateLabel(networkRuntime.apStartState)],
+    ]);
+
     renderDiagCards('diag_summary', [
         ['Активных портов', diagnostics.activePortCount ?? 1],
         ['Рабочий режим', runtimeModeLabel(mode)],
-        ['Обновление матрицы', ledUpdateMode],
-        ['LED mutex', ledMutexStatus],
         ['Состояние редактора', 'предпросмотр в браузере'],
         ['Основной выход матрицы', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
         ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'контроллер'],

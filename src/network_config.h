@@ -23,6 +23,12 @@ enum NetworkRuntimeMode {
     NETWORK_MODE_RECONNECTING
 };
 
+enum NetworkApStartState {
+    NETWORK_AP_NOT_ATTEMPTED,
+    NETWORK_AP_START_OK,
+    NETWORK_AP_START_FAILED
+};
+
 void network_setup();
 void network_loop();
 bool network_scan_start();
@@ -36,6 +42,7 @@ void network_schedule_apply(unsigned long delayMs);
 NetworkRuntimeMode network_runtime_mode();
 const char *network_runtime_mode_string();
 const char *network_connection_status_string();
+const char *network_ap_start_state_string();
 bool network_has_saved_ssid();
 bool network_sta_connected();
 String network_connected_ssid();

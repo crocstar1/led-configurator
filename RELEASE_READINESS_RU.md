@@ -1,6 +1,6 @@
 # Готовность прошивки к выпуску
 
-Дата актуализации: 27 июля 2026 года.
+Дата актуализации: 28 июля 2026 года.
 
 Этот документ сводит в один план:
 
@@ -291,22 +291,31 @@ renderer, API и NVS.
 
 ### 8.2. Системная диагностика
 
-Сейчас есть Data levels, active flags, статусы портов, GPIO и признаки LED
-runtime. Не хватает:
+Stage 3 разделён на независимые части. Stage 3A реализован и успешно собран
+командой `pio run -e esp32dev`; теперь он ожидает ручную проверку на ESP32. Он
+добавляет:
 
-- firmware version и build identity;
-- uptime;
-- free heap;
-- reset reason;
-- `Input_Task` started/fallback;
-- результата запуска AP fallback;
-- признаков ошибок открытия NVS;
-- последней существенной ошибки storage/network/OTA.
+- firmware version, build identity и environment;
+- 64-битный uptime;
+- текущий и минимальный free heap;
+- стабильную строковую причину reset;
+- `Input_Task` started/fallback и возраст последнего полного обновления входов;
+- возраст последнего LED-кадра вместе с существующими LED runtime flags;
+- результат последней попытки запуска AP fallback.
 
-**Минимальное решение:** добавить фиксированные поля в `/diagnostics` и
-существующие карточки UI. Не вводить отдельную систему журналирования.
+Результат сборки Stage 3A: RAM 49 672 байта (15,2%); Flash 1 002 237 байт
+(76,5%).
 
-**Приоритет:** до пилота.
+Перед подготовкой каждой официальной прошивки разработчик обязан обновить
+`FIRMWARE_VERSION` и `FIRMWARE_BUILD_ID` в `src/firmware_version.h`.
+
+Расширенная диагностика NVS сознательно вынесена в будущий Stage 3B. Пока не
+различаются отсутствующий, несовместимый и недоступный storage, не публикуется
+`usingRamDefaults` и не ведётся журнал ошибок во Flash.
+
+**Приоритет:** вручную проверить успешно собранный Stage 3A на ESP32; Stage 3B
+требуется отдельно до unattended production и оценивается перед пилотом по
+результатам испытаний.
 
 ### 8.3. Стандартные credentials
 
@@ -369,14 +378,15 @@ Signed OTA и rollback остаются отложенными до отдель
 Подтверждено:
 
 - часть load-path вызывает `Preferences.begin()` без проверки результата;
-- `WiFi.softAP()` запускается без проверки возвращаемого `bool`;
-- Input task имеет fallback, но его состояние не видно в diagnostics;
-- LED task/mutex уже получили проверку и diagnostics в текущем reliability pass;
+- результат `WiFi.softAP()` теперь сохраняется для диагностики как
+  `not_attempted`, `ok` или `failed`, без изменения recovery-архитектуры;
+- Input task/fallback и возраст последнего обновления теперь доступны в
+  diagnostics;
+- LED task/mutex/fallback и возраст последнего кадра доступны в diagnostics;
 - save-path в основном проверяет запись и read-back.
 
-**Минимальное решение:** не смешивая модули, добавить result checks, компактные
-error flags и безопасные defaults. Ошибка NVS load должна отличаться от
-«настроек ещё нет».
+Оставшаяся работа Stage 3B: не смешивая storage-модули, различить ошибку NVS
+load и нормальное отсутствие настроек. Она не входит в текущий Stage 3A.
 
 **Приоритет:** до пилота для diagnostics/critical startup flags; подробный журнал
 не обязателен.
@@ -753,28 +763,39 @@ apply/snapshot methods под mutex.
 
 **Не смешивать:** новый JSON API, NVS format, renderer refactor, ArduinoJson.
 
-### Stage 3 — system/task/network/storage diagnostics
+### Stage 3A — system/task/network diagnostics
 
 **Цель:** инженер видит состояние устройства и причины деградации без Serial.
 
-**Вероятные файлы:** `src/main.cpp`, `src/gui_html.h`, `src/network_config.h/.cpp`,
-`src/auth_config.cpp`, `src/matrix_config_storage.cpp`; возможно небольшой
-`system_diagnostics.h/.cpp`.
+**Файлы:** `src/main.cpp`, `src/gui_html.h`, `src/led_manager.h/.cpp`,
+`src/network_config.h/.cpp`, `src/firmware_version.h`.
+
+**Статус:** сборка `pio run -e esp32dev` успешна; RAM 49 672 байта (15,2%),
+Flash 1 002 237 байт (76,5%); ожидается ручная проверка на ESP32.
 
 **Риск:** низкий/средний. Нельзя превращать diagnostics в частый тяжёлый log.
 
 **Flash/RAM:** малое увеличение строк JSON и фиксированных flags; polling уже
 ограничен открытой вкладкой. Точный рост измеряется build report.
 
-**Тесты:** normal/fallback task states, AP success/failure simulation, NVS open
-failure path, uptime/free heap/reset reason, reconnect UI.
+**Тесты:** normal/fallback task states, AP success/failure simulation,
+uptime/free heap/reset reason, stale-update warning и reconnect UI.
 
 **Критерий завершения:** diagnostics показывает version/build, uptime, free
-heap, reset reason, Input/LED task mode, AP result и последние NVS startup
-errors; отсутствие данных не маскируется как OK.
+heap, reset reason, Input/LED task mode, возраст обновлений и AP result; сборка
+и desktop/mobile проверка успешны.
 
 **Не смешивать:** постоянный журнал во flash, frontend redesign, network state
-machine rewrite.
+
+### Stage 3B — storage diagnostics
+
+**Цель:** различать пустую, несовместимую и недоступную NVS и явно показывать
+использование RAM defaults.
+
+**Статус:** отложено. Не входит в текущий diff и не должно менять NVS format.
+
+**Не смешивать:** Stage 2 LED snapshot/apply, storage migration, постоянный
+журнал во Flash.
 
 ### Stage 4 — commissioning credentials policy
 
@@ -997,10 +1018,9 @@ README не содержит критически ложных утвержде�
 длительного soak, уникальных credentials, полной task/network/storage
 диагностики, OTA product identity и проверенной процедуры восстановления.
 
-**Следующий один рекомендуемый этап:** Stage 0 — отдельным чистым commit
-зафиксировать уже собранный LED reliability pass, не включая несвязанное
-форматирование `status_mapper.h`. Сразу после него выполнять Stage 1 — hardware
-validation без добавления новых функций.
+**Следующий один рекомендуемый этап:** вручную проверить текущий успешно
+собранный Stage 3A на ESP32. Stage 2, Stage 3B и hardware acceptance остаются
+отдельными последующими решениями и не должны попадать в этот diff.
 
 ## Заключение для передачи другому диалогу
 
