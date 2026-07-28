@@ -44,6 +44,7 @@ const char *network_runtime_mode_string();
 const char *network_connection_status_string();
 const char *network_ap_start_state_string();
 bool network_has_saved_ssid();
+bool network_uses_default_ap_password();
 bool network_sta_connected();
 String network_connected_ssid();
 String network_local_ip_string();

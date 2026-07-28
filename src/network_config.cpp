@@ -398,6 +398,10 @@ bool network_has_saved_ssid() {
     return networkConfig.ssid.length() > 0;
 }
 
+bool network_uses_default_ap_password() {
+    return networkConfig.apPassword == DEFAULT_AP_PASSWORD;
+}
+
 bool network_sta_connected() {
     return WiFi.status() == WL_CONNECTED && runtimeMode == NETWORK_MODE_STA;
 }

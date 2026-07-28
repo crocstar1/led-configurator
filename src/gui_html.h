@@ -1014,8 +1014,12 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             </div>
                             <div>
                                 <label for="network_ap_password">Пароль резервной точки доступа</label>
-                                <input id="network_ap_password" name="ap_password" type="password">
+                                <input id="network_ap_password" name="ap_password" type="password" autocomplete="new-password">
+                                <div class="hint">Оставьте пустым, чтобы сохранить текущий пароль. Новый пароль: от 8 до 64 символов.</div>
                             </div>
+                        </div>
+                        <div class="notice safety-warning field-hidden" id="network_ap_password_warning">
+                            Используется стандартный пароль резервной точки доступа. Измените его перед установкой контроллера.
                         </div>
                         <div class="btn-row">
                             <button class="btn" id="scan_network_btn" type="button">Сканировать сети</button>
@@ -1358,6 +1362,7 @@ function buildMockNetworkStatus() {
         apSsid: 'LED_MATRIX_A1B2C3',
         apIp: '192.168.4.1',
         apClients: 1,
+        defaultApPassword: false,
     };
 }
 
@@ -2786,6 +2791,11 @@ async function loadNetworkStatus() {
 
 function renderNetworkStatus() {
     if (!networkStatus) return;
+    const defaultApPasswordWarning = document.getElementById('network_ap_password_warning');
+    defaultApPasswordWarning.classList.toggle(
+        'field-hidden',
+        mockMode || !backendAvailable || networkStatus.defaultApPassword !== true
+    );
     renderDiagCards('network_summary', [
         ['Режим', networkModeLabel(networkStatus.mode)],
         ['Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)],
@@ -2797,6 +2807,13 @@ function renderNetworkStatus() {
         ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Статический IP'],
     ]);
     fillNetworkForm(networkStatus);
+}
+
+function networkSaveErrorLabel(code) {
+    const labels = {
+        BAD_AP_PASSWORD: 'Пароль резервной точки доступа должен содержать от 8 до 64 символов.',
+    };
+    return labels[code] || code || 'неизвестная ошибка';
 }
 
 async function scanNetworks() {
@@ -2872,6 +2889,7 @@ async function saveNetworkConfig() {
             body,
         });
         if (!res.ok) throw new Error(await res.text());
+        document.getElementById('network_ap_password').value = '';
 
         const reconnect = await fetch('/network_reconnect', { method: 'POST' });
         if (!reconnect.ok) throw new Error(await reconnect.text());
@@ -2879,7 +2897,7 @@ async function saveNetworkConfig() {
         setNetworkMessage('Настройки сохранены. Переподключение запущено, интерфейс может временно пропасть.');
         setTimeout(loadNetworkStatus, 4000);
     } catch (err) {
-        setNetworkMessage(`Не удалось сохранить или применить сеть: ${err.message}`, true);
+        setNetworkMessage(`Не удалось сохранить или применить сеть: ${networkSaveErrorLabel(err.message)}`, true);
     } finally {
         button.disabled = false;
     }

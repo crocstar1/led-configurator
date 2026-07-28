@@ -165,6 +165,25 @@ Edit/preview mode:
     in use;
   - endpoints added: `/auth_status`, `/save_auth`.
   - local build passed after this stage.
+- Stage 4 commissioning credentials policy implemented and successfully built
+  locally; manual ESP32 verification remains:
+  - standard web and AP credentials are allowed only for initial setup and both
+    must be changed before controller installation;
+  - the existing web-credentials warning remains non-blocking;
+  - `/network_status` reports only the boolean `defaultApPassword`, never the
+    AP password itself;
+  - the Network section shows a separate non-blocking warning while the default
+    AP password is in use and explains that an empty AP-password field preserves
+    the current password;
+  - the commissioning checklist is documented in `README.md`;
+  - `pio run -e esp32dev` completed successfully: RAM 49,672 bytes (15.2%);
+    Flash 1,003,613 bytes (76.6%);
+  - firmware build ID is `stage4-20260728`;
+  - passwords are not returned in HTTP responses, but password submission and
+    Basic Auth remain unencrypted over ordinary HTTP in the accepted local
+    engineering-network model;
+  - physical reset, auth reset, HTTPS, and password hashing remain intentionally
+    deferred.
 - Network config MVP added:
   - hardcoded AP-only startup was replaced with STA-first / AP fallback logic;
   - STA startup is non-blocking, so the main loop continues reading Data inputs
@@ -344,8 +363,9 @@ The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
 mechanical neutral rename, and LED reliability pass have been successfully
 built locally.
 
-Current focus: manual ESP32 verification of the successfully built Stage 3A
-operational diagnostics.
+Current focus: manual ESP32 verification of the successfully built Stage 4
+credentials warnings; manual verification of the successfully built Stage 3A
+diagnostics also remains part of hardware testing.
 
 Explicitly deferred from this stage:
 
@@ -432,7 +452,8 @@ Known active review topics:
     safer credential format;
   - define a safe settings reset flow;
   - add factory reset / auth reset procedure;
-  - review whether AP fallback may keep a default password in production.
+  - keep standard web/AP credentials limited to initial setup and verify their
+    replacement through the Stage 4 commissioning checklist.
 
 ## Build
 

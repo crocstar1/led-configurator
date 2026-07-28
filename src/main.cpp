@@ -890,7 +890,9 @@ void handleNetworkStatus() {
     json += network_ip_to_string(net.subnet);
     json += "\",\"dns\":\"";
     json += network_ip_to_string(net.dns);
-    json += "\",\"apSsid\":\"";
+    json += "\",\"defaultApPassword\":";
+    json += network_uses_default_ap_password() ? "true" : "false";
+    json += ",\"apSsid\":\"";
     json += jsonEscape(net.apSsid);
     json += "\",\"apIp\":\"";
     json += network_ap_ip_string();
