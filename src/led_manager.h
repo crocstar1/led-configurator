@@ -34,6 +34,12 @@ struct FreeZoneConfig {
     uint8_t brightness;
 };
 
+struct LedRuntimeState {
+    bool mutexReady;
+    bool taskStarted;
+    bool loopFallback;
+};
+
 // Делаем переменные доступными для main.cpp
 extern MatrixConfig cfg;
 extern FreeZoneConfig freeZoneConfigs[FREE_ZONE_COUNT];
@@ -41,6 +47,8 @@ extern uint8_t zoneMap[NUM_IC_CHIPS];
 
 // Инициализация и запуск фонового таска FreeRTOS на Core 1
 void led_setup();
+void led_loop();
+void led_get_runtime_state(LedRuntimeState &state);
 
 // Thread-safe LED and zone update helpers.
 void led_refresh_safe();

@@ -812,7 +812,6 @@ void handleSaveFreeZone() {
         for (size_t i = 0; i < FREE_ZONE_COUNT; i++) freeZoneConfigs[i] = nextConfigs[i];
     }
     led_reload_free_zone_layers_safe();
-    led_refresh_safe();
     server.send(200, "text/plain", "OK");
 }
 
@@ -1022,14 +1021,23 @@ void handleDiagnostics() {
 
     StationInputState inputs;
     StatusMapperState status;
+    LedRuntimeState ledRuntime;
     station_inputs_get_snapshot(inputs);
     status_mapper_get_snapshot(status);
+    led_get_runtime_state(ledRuntime);
 
     String json;
     json.reserve(1400);
     json += "{\"activePortCount\":";
     json += String((int)status.activePortCount);
     json += ",\"runtimeMode\":\"runtime\"";
+    json += ",\"ledRuntime\":{\"mutexReady\":";
+    json += ledRuntime.mutexReady ? "true" : "false";
+    json += ",\"taskStarted\":";
+    json += ledRuntime.taskStarted ? "true" : "false";
+    json += ",\"loopFallback\":";
+    json += ledRuntime.loopFallback ? "true" : "false";
+    json += "}";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
     json += String((int)PRIMARY_LED_PIN);
     json += ",\"index\":";
@@ -1190,6 +1198,7 @@ void setup() {
 void loop() {
     server.handleClient();
     network_loop();
+    led_loop();
     if (!inputTaskStarted) {
         static unsigned long lastFallbackInputUpdate = 0;
         const unsigned long now = millis();

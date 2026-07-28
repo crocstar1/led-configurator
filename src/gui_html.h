@@ -2962,12 +2962,24 @@ function renderDiagnostics() {
     activePortCount = clampActivePortCount(reportedActivePorts);
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
+    const hasLedRuntime = diagnostics.ledRuntime && typeof diagnostics.ledRuntime === 'object';
+    const ledRuntime = diagnostics.ledRuntime || {};
+    const ledUpdateMode = !hasLedRuntime
+        ? (mockMode ? 'локальный предпросмотр' : 'нет данных')
+        : (ledRuntime.taskStarted
+            ? 'отдельная задача'
+            : (ledRuntime.loopFallback ? 'основной цикл (резерв)' : 'не запущено'));
+    const ledMutexStatus = !hasLedRuntime
+        ? 'нет данных'
+        : (ledRuntime.mutexReady ? 'готов' : 'не создан');
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
 
     renderDiagCards('diag_summary', [
         ['Активных портов', diagnostics.activePortCount ?? 1],
         ['Рабочий режим', runtimeModeLabel(mode)],
+        ['Обновление матрицы', ledUpdateMode],
+        ['LED mutex', ledMutexStatus],
         ['Состояние редактора', 'предпросмотр в браузере'],
         ['Основной выход матрицы', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
         ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'контроллер'],

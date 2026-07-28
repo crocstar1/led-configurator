@@ -16,6 +16,9 @@ bool breatheDirectionUp = true;
 unsigned long lastBreatheTime = 0;
 
 SemaphoreHandle_t ledMutex = NULL;
+static bool ledMutexReady = false;
+static bool ledTaskStarted = false;
+static bool ledLoopFallback = false;
 
 struct StatusLayerCache {
     bool hasColor[NUM_IC_CHIPS];
@@ -438,23 +441,26 @@ void led_refresh_internal() {
     FastLED.show();
 }
 
+static void led_update_step(unsigned long now) {
+    if (now - lastBreatheTime <= 25) {
+        return;
+    }
+
+    lastBreatheTime = now;
+    if (breatheDirectionUp) {
+        breatheScale += 0.012;
+        if (breatheScale >= 1.0) breatheDirectionUp = false;
+    } else {
+        breatheScale -= 0.012;
+        if (breatheScale <= 0.15) breatheDirectionUp = true;
+    }
+    led_refresh_internal();
+}
+
 void ledTaskWorker(void * parameter) {
     while (true) {
-        unsigned long now = millis();
-        if (xSemaphoreTake(ledMutex, (TickType_t)10) == pdTRUE) {
-
-            if (now - lastBreatheTime > 25) {
-                lastBreatheTime = now;
-                if (breatheDirectionUp) {
-                    breatheScale += 0.012;
-                    if (breatheScale >= 1.0) breatheDirectionUp = false;
-                } else {
-                    breatheScale -= 0.012;
-                    if (breatheScale <= 0.15) breatheDirectionUp = true;
-                }
-                led_refresh_internal();
-            }
-
+        if (xSemaphoreTake(ledMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            led_update_step(millis());
             xSemaphoreGive(ledMutex);
         }
         vTaskDelay(15 / portTICK_PERIOD_MS);
@@ -463,6 +469,10 @@ void ledTaskWorker(void * parameter) {
 
 void led_setup() {
     ledMutex = xSemaphoreCreateMutex();
+    ledMutexReady = ledMutex != NULL;
+    if (!ledMutexReady) {
+        Serial.println("LED mutex creation failed; LED task will not start");
+    }
     
     FastLED.addLeds<WS2811, LED_PIN, BRG>(leds, NUM_IC_CHIPS); 
     FastLED.setMaxPowerInVoltsAndMilliamps(MAX_LED_VOLTS, MAX_LED_MILLIAMPS);
@@ -471,7 +481,48 @@ void led_setup() {
     led_run_startup_animation();
     led_refresh_internal();
 
-    xTaskCreatePinnedToCore(ledTaskWorker, "LED_Task", 4096, NULL, 1, NULL, 1);
+    BaseType_t taskResult = pdFAIL;
+    if (ledMutexReady) {
+        taskResult = xTaskCreatePinnedToCore(ledTaskWorker, "LED_Task", 4096, NULL, 1, NULL, 1);
+    }
+
+    ledTaskStarted = taskResult == pdPASS;
+    ledLoopFallback = !ledTaskStarted;
+
+    if (ledTaskStarted) {
+        Serial.println("LED task started normally");
+    } else {
+        Serial.println("LED task not started");
+        Serial.println("LED loop fallback enabled");
+    }
+}
+
+void led_loop() {
+    if (!ledLoopFallback) {
+        return;
+    }
+
+    const unsigned long now = millis();
+    if (now - lastBreatheTime <= 25) {
+        return;
+    }
+
+    if (ledMutexReady) {
+        if (xSemaphoreTake(ledMutex, 0) != pdTRUE) {
+            return;
+        }
+        led_update_step(now);
+        xSemaphoreGive(ledMutex);
+        return;
+    }
+
+    led_update_step(now);
+}
+
+void led_get_runtime_state(LedRuntimeState &state) {
+    state.mutexReady = ledMutexReady;
+    state.taskStarted = ledTaskStarted;
+    state.loopFallback = ledLoopFallback;
 }
 
 static void led_load_config_from_flash() {
