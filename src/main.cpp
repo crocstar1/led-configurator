@@ -861,7 +861,7 @@ void handleNetworkStatus() {
 
     const NetworkConfig &net = network_config_get();
     String json;
-    json.reserve(900);
+    json.reserve(940);
     json += "{\"mode\":\"";
     json += network_runtime_mode_string();
     json += "\",\"status\":\"";
@@ -878,6 +878,8 @@ void handleNetworkStatus() {
     json += jsonEscape(network_connected_ssid());
     json += "\",\"ip\":\"";
     json += network_local_ip_string();
+    json += "\",\"staMac\":\"";
+    json += jsonEscape(network_sta_mac_string());
     json += "\",\"rssi\":";
     json += String((int)network_rssi());
     json += ",\"dhcp\":";

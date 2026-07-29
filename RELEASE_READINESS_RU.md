@@ -247,7 +247,7 @@ compile-time hardware config, отдельные input/LED tasks, NVS и лок�
 
 | Возможность | Когда полезна | Минимальная реализация для Test-led |
 |---|---|---|
-| mDNS/hostname | Если инженеру сложно находить DHCP IP | Уникальный hostname вида `led-matrix-xxxxxx.local`, без переноса Wi-Fi manager `proj1`. |
+| mDNS | Если DHCP hostname и reservation окажутся недостаточными | Hostname `led-controller-xxxxxx` уже уникален, но не гарантирует доступ по имени; `.local` потребует отдельного mDNS-этапа. |
 | Captive portal | Если ввод в эксплуатацию через `192.168.4.1` вызывает ошибки | Небольшой DNS redirect только в AP fallback. |
 | Version/build/free heap/reset reason | До пилота | Добавить поля в существующий `/diagnostics` и текущую вкладку. |
 | Журнал последних ошибок | После пилота, если диагностики снимка недостаточно | Маленькое кольцо последних событий в RAM, без постоянной записи каждого события во flash. |
@@ -354,6 +354,13 @@ commissioning checklist из `README.md`. Устройство нельзя сч
 **Минимальная политика пилота:** DHCP плюс reservation на роутере объекта,
 известный IP в паспорте устройства. Static IP в UI не использовать без данных
 сетевого инженера.
+
+Полный MAC STA-интерфейса теперь возвращается строкой `staMac` через защищённый
+`/network_status` и показывается в разделе «Сеть». DHCP reservation создаётся
+на роутере по этому полному STA MAC, а не внутри ESP32. Уникальный DHCP hostname
+имеет вид `led-controller-xxxxxx`; его suffix совпадает без учёта регистра с
+suffix автоматически созданного default AP SSID. Hostname не заменяет MAC и не
+гарантирует доступ к web UI по имени. mDNS не добавлялся.
 
 **Минимальное будущее исправление:** проверять очевидно невозможные комбинации и
 показывать предупреждение до сохранения. Полный автоматический rollback не нужен,
@@ -836,6 +843,23 @@ credentials; `/auth_status`, `/network_status` и соответствующие
 
 **Не смешивать:** HTTPS, password hashing migration, physical reset и новый
 recovery flow.
+
+### Отдельный минимальный этап — network identity
+
+**Статус:** реализация завершена, ожидает локальной сборки и ручной проверки на
+ESP32 и в DHCP-клиентах роутера.
+
+**Результат:** `/network_status.staMac` всегда является строкой полного STA MAC;
+раздел «Сеть» показывает это значение. Hostname изменён с одинакового
+`led-controller` на стабильный `led-controller-xxxxxx`. Шесть строчных
+hex-символов берутся из тех же младших 24 бит eFuse/chip ID, что и uppercase
+suffix default AP SSID. DHCP reservation остаётся настройкой роутера.
+
+**Границы:** network state machine, DHCP/static-IP policy, AP fallback, AP SSID,
+NVS, auth, OTA и пароли не изменялись. Hostname не публикуется через mDNS и не
+гарантирует доступ по имени.
+
+**Build ID:** `network-identity-20260729`.
 
 ### Stage 5 — OTA product identity
 

@@ -209,6 +209,17 @@ Edit/preview mode:
   - temporary Network status request failures preserve the last real status
     instead of displaying mock AP data;
   - network watchdog changes are pending local build and hardware verification.
+- Minimal network identity stage implemented, pending local build and manual
+  ESP32/router verification:
+  - `/network_status` returns the full STA-interface MAC as the `staMac` string;
+  - the Network section shows the STA MAC for DHCP reservation, which is
+    configured on the router rather than stored as a reservation on ESP32;
+  - the DHCP hostname is `led-controller-xxxxxx`, where the lowercase suffix
+    uses the same low 24 eFuse/chip-ID bits as the uppercase default AP SSID;
+  - the hostname is stable across reboot, is not stored in NVS, does not replace
+    the full STA MAC, and does not guarantee access by name;
+  - mDNS and the existing static-IP policy were not changed;
+  - firmware build ID is `network-identity-20260729`.
 - Runtime input isolation and non-blocking network scan stage added and
   successfully built locally; hardware verification remains pending:
   - Data1..Data8 and `status_mapper` are updated by a dedicated 50 ms FreeRTOS

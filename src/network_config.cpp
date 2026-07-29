@@ -48,12 +48,18 @@ static String loadString(Preferences &preferences, const char *key, const String
     return preferences.getString(key, fallback);
 }
 
+static uint32_t deviceSuffix() {
+    return (uint32_t)(ESP.getEfuseMac() & 0xFFFFFF);
+}
+
 static String defaultApSsid() {
-    const uint64_t chipId = ESP.getEfuseMac();
-    const uint32_t suffix = (uint32_t)(chipId & 0xFFFFFF);
     char ssid[24];
-    snprintf(ssid, sizeof(ssid), "%s_%06X", DEFAULT_AP_SSID_PREFIX, suffix);
+    snprintf(ssid, sizeof(ssid), "%s_%06X", DEFAULT_AP_SSID_PREFIX, deviceSuffix());
     return String(ssid);
+}
+
+static void formatDefaultHostname(char *hostname, size_t hostnameSize) {
+    snprintf(hostname, hostnameSize, "led-controller-%06x", deviceSuffix());
 }
 
 static void setDefaults(NetworkConfig &config) {
@@ -178,10 +184,12 @@ static void startStaAttempt(NetworkRuntimeMode mode, bool fromFallback) {
     if (scanActive) network_scan_finish();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(true);
+    char hostname[32];
+    formatDefaultHostname(hostname, sizeof(hostname));
+    WiFi.setHostname(hostname);
     WiFi.mode(WIFI_STA);
     WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
-    WiFi.setHostname("led-controller");
 
     if (!networkConfig.dhcp) {
         WiFi.config(networkConfig.staticIp, networkConfig.gateway, networkConfig.subnet, networkConfig.dns);
@@ -404,6 +412,10 @@ bool network_uses_default_ap_password() {
 
 bool network_sta_connected() {
     return WiFi.status() == WL_CONNECTED && runtimeMode == NETWORK_MODE_STA;
+}
+
+String network_sta_mac_string() {
+    return WiFi.macAddress();
 }
 
 String network_connected_ssid() {

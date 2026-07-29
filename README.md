@@ -68,6 +68,11 @@ Detailed Russian guide to the current C++/JavaScript methods and call flow:
   custom pixel layers in NVS.
 - Network STA/AP fallback, Basic Auth, diagnostics, and local web OTA are
   available through the service menu.
+- `/network_status` returns the full STA MAC and the Network section shows it
+  for DHCP reservation configured on the router.
+- The DHCP hostname is unique per controller (`led-controller-xxxxxx`) and uses
+  the same chip suffix as the default AP SSID. It does not replace the STA MAC
+  or guarantee access by name; mDNS is not enabled.
 
 ## Ввод в эксплуатацию
 
