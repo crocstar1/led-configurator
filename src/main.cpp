@@ -2,6 +2,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <esp_system.h>
 #include <esp_timer.h>
 #include "firmware_version.h"
@@ -30,6 +31,12 @@ static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
 
 static uint64_t monotonicMillis() {
     return (uint64_t)esp_timer_get_time() / 1000ULL;
+}
+
+static String uint64ToString(uint64_t value) {
+    char buffer[21];
+    snprintf(buffer, sizeof(buffer), "%" PRIu64, value);
+    return String(buffer);
 }
 
 static void updatePortStatusFromInputs() {
@@ -1080,7 +1087,7 @@ void handleDiagnostics() {
     json += "\",\"environment\":\"";
     json += FIRMWARE_BUILD_ENVIRONMENT;
     json += "\"},\"system\":{\"uptimeSec\":";
-    json += String((unsigned long long)(esp_timer_get_time() / 1000000LL));
+    json += uint64ToString((uint64_t)(esp_timer_get_time() / 1000000LL));
     json += ",\"freeHeap\":";
     json += String((unsigned int)ESP.getFreeHeap());
     json += ",\"minFreeHeap\":";
@@ -1092,7 +1099,7 @@ void handleDiagnostics() {
     json += ",\"loopFallback\":";
     json += inputTaskStarted ? "false" : "true";
     json += ",\"lastUpdateAgeMs\":";
-    json += String((unsigned long long)inputLastUpdateAgeMs());
+    json += uint64ToString(inputLastUpdateAgeMs());
     json += "},\"networkRuntime\":{\"apStartState\":\"";
     json += network_ap_start_state_string();
     json += "\"},\"activePortCount\":";
@@ -1105,7 +1112,7 @@ void handleDiagnostics() {
     json += ",\"loopFallback\":";
     json += ledRuntime.loopFallback ? "true" : "false";
     json += ",\"lastRefreshAgeMs\":";
-    json += String((unsigned long long)ledRuntime.lastRefreshAgeMs);
+    json += uint64ToString(ledRuntime.lastRefreshAgeMs);
     json += "}";
     json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
     json += String((int)PRIMARY_LED_PIN);
