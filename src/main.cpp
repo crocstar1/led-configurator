@@ -8,7 +8,7 @@
 #include "firmware_version.h"
 #include "gui_html.h"
 #include "led_manager.h"
-#include "matrix_config_storage.h"
+#include "matrix_state_storage.h"
 #include "board_config.h"
 #include "station_inputs.h"
 #include "status_mapper.h"
@@ -17,6 +17,7 @@
 #include "auth_config.h"
 
 WebServer server(80);
+static MatrixStateV2 matrixStateCandidate;
 
 bool otaUploadAuthorized = false;
 bool otaUpdateSuccess = false;
@@ -266,29 +267,6 @@ bool extractJsonObjectField(const String &json, const char *fieldName, String &r
     return false;
 }
 
-bool findFirstHexColor(const String &json, String &hexColor) {
-    int hashPos = json.indexOf("#");
-    while (hashPos >= 0) {
-        if (hashPos + 7 <= json.length()) {
-            String candidate = json.substring(hashPos, hashPos + 7);
-            bool valid = true;
-            for (int i = 1; i < 7; i++) {
-                char c = candidate[i];
-                if (!isxdigit((unsigned char)c)) {
-                    valid = false;
-                    break;
-                }
-            }
-            if (valid) {
-                hexColor = candidate;
-                return true;
-            }
-        }
-        hashPos = json.indexOf("#", hashPos + 1);
-    }
-    return false;
-}
-
 bool parseFreeZoneMode(String mode, FreeZoneMode &result) {
     mode.toLowerCase();
     if (mode == "static") result = FREE_ZONE_STATIC;
@@ -310,16 +288,41 @@ bool isStorageError(const String &error) {
     return error.startsWith("NVS_");
 }
 
-void appendHardwareMapJson(String &json) {
+bool storedLayerHasPixel(const MatrixStateStoredLayer &layer, size_t index) {
+    return (layer.present[index / 8U] & (1U << (index % 8U))) != 0;
+}
+
+void appendStoredLayerJson(String &json, const MatrixStateV2 &state, size_t layerIndex) {
+    json += "{";
+    bool first = true;
+    const size_t ledCount = (size_t)state.rows * state.cols;
+    const MatrixStateStoredLayer &layer = state.layers[layerIndex];
+
+    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+        if (!storedLayerHasPixel(layer, logicalIndex)) continue;
+        if (!first) json += ",";
+        first = false;
+
+        const size_t rgbOffset = logicalIndex * 3U;
+        json += "\"";
+        json += String((int)(logicalIndex % state.cols));
+        json += "-";
+        json += String((int)(logicalIndex / state.cols));
+        json += "\":\"";
+        json += rgbToHex(&layer.rgb[rgbOffset]);
+        json += "\"";
+    }
+    json += "}";
+}
+
+void appendHardwareMapJson(String &json, const MatrixStateV2 &state) {
     json += ",\"hardware_map\":{";
     bool first = true;
 
-    for (int y = 0; y < VIRTUAL_Y; y++) {
-        for (int x = 0; x < MATRIX_X; x++) {
-            int index = getLEDIndex(x, y);
-            if (index < 0) continue;
-
-            uint8_t zoneId = zoneMap[index];
+    for (uint16_t y = 0; y < state.rows; y++) {
+        for (uint16_t x = 0; x < state.cols; x++) {
+            const size_t logicalIndex = (size_t)y * state.cols + x;
+            const uint8_t zoneId = state.zoneMap[logicalIndex];
             if (zoneId == 0) continue;
 
             if (!first) json += ",";
@@ -338,52 +341,52 @@ void appendHardwareMapJson(String &json) {
     json += "}";
 }
 
-void appendStatusLayersJson(String &json) {
+void appendStatusLayersJson(String &json, const MatrixStateV2 &state) {
     json += ",\"layers\":{\"wait\":";
-    json += matrix_config_load_status_layer("waiting");
+    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_WAITING);
     json += ",\"charge\":";
-    json += matrix_config_load_status_layer("charging");
+    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_CHARGING);
     json += ",\"err\":";
-    json += matrix_config_load_status_layer("error");
+    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_ERROR);
     json += "}";
 }
 
-FreeZoneMode currentFreeZoneMode(uint8_t zoneId) {
+FreeZoneMode currentFreeZoneMode(const MatrixStateV2 &state, uint8_t zoneId) {
     const int index = free_zone_index(zoneId);
     if (index >= 0) {
-        return freeZoneConfigs[index].mode;
+        return (FreeZoneMode)state.freeZones[index].mode;
     }
 
     const ZoneMetadata *metadata = zone_metadata_for(zoneId);
     return metadata ? metadata->defaultMode : FREE_ZONE_STATIC;
 }
 
-void appendFreeZoneConfigsJson(String &json) {
+void appendFreeZoneConfigsJson(String &json, const MatrixStateV2 &state) {
     json += ",\"free_zones\":[";
 
     for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
         if (i > 0) json += ",";
 
-        const FreeZoneConfig &freeZone = freeZoneConfigs[i];
+        const MatrixStateStoredFreeZone &freeZone = state.freeZones[i];
         json += "{\"zoneId\":";
         json += String((int)freeZone.zoneId);
         json += ",\"enabled\":";
         json += (freeZone.enabled ? "true" : "false");
         json += ",\"mode\":\"";
-        json += free_zone_mode_to_string(freeZone.mode);
+        json += free_zone_mode_to_string((FreeZoneMode)freeZone.mode);
         json += "\",\"staticColor\":\"";
         json += rgbToHex(freeZone.staticColor);
         json += "\",\"brightness\":";
         json += String((int)freeZone.brightness);
         json += ",\"customLayer\":";
-        json += matrix_config_load_free_zone_layer(freeZone.zoneId);
+        appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_LOGO + i);
         json += "}";
     }
 
     json += "]";
 }
 
-void appendZoneMetadataJson(String &json) {
+void appendZoneMetadataJson(String &json, const MatrixStateV2 &state) {
     StatusMapperState status;
     status_mapper_get_snapshot(status);
     const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
@@ -425,7 +428,7 @@ void appendZoneMetadataJson(String &json) {
 
         if (zone.type == ZONE_TYPE_FREE) {
             json += ",\"mode\":\"";
-            json += free_zone_mode_to_string(currentFreeZoneMode(zone.id));
+            json += free_zone_mode_to_string(currentFreeZoneMode(state, zone.id));
             json += "\"";
         } else {
             json += ",\"mode\":null";
@@ -437,33 +440,29 @@ void appendZoneMetadataJson(String &json) {
     json += "]";
 }
 
-bool zoneMapHasRequiredActivePortZones(const uint8_t *zones, size_t zoneCount) {
-    if (zones == nullptr || zoneCount != NUM_IC_CHIPS) {
+bool activeLedCountForState(const MatrixStateV2 &state, size_t &ledCount) {
+    if (state.rows == 0 || state.cols == 0 || state.rows > MAX_LED_COUNT / state.cols) {
         return false;
     }
+    ledCount = (size_t)state.rows * state.cols;
+    return ledCount > 0 && ledCount <= MAX_LED_COUNT;
+}
 
-    StatusMapperState status;
-    status_mapper_get_snapshot(status);
-    const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
-        ? MAX_PORT_COUNT
-        : status.activePortCount;
+bool zoneMapHasRequiredActivePortZones(const MatrixStateV2 &state) {
+    size_t ledCount = 0;
+    if (!activeLedCountForState(state, ledCount)) return false;
 
-    for (uint8_t portIndex = 0; portIndex < activePortCount; portIndex++) {
+    for (uint8_t portIndex = 0; portIndex < DEFAULT_ACTIVE_PORT_COUNT; portIndex++) {
         const uint8_t requiredZoneId = (uint8_t)(ZONE_ID_PORT1 + portIndex);
         bool found = false;
-
-        for (size_t i = 0; i < zoneCount; i++) {
-            if (zones[i] == requiredZoneId) {
+        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+            if (state.zoneMap[logicalIndex] == requiredZoneId) {
                 found = true;
                 break;
             }
         }
-
-        if (!found) {
-            return false;
-        }
+        if (!found) return false;
     }
-
     return true;
 }
 
@@ -471,22 +470,28 @@ void skipJsonWhitespace(const String &value, int &position) {
     while (position < value.length() && isspace((unsigned char)value[position])) position++;
 }
 
-bool parseZoneCoordinate(const String &coordinate, int &x, int &y) {
+bool parseMatrixCoordinate(
+    const String &coordinate,
+    const MatrixStateV2 &state,
+    int &x,
+    int &y) {
     const int dash = coordinate.indexOf('-');
     if (dash <= 0 || dash != coordinate.lastIndexOf('-') || dash >= coordinate.length() - 1) return false;
     return parseStrictInt(coordinate.substring(0, dash), x) &&
         parseStrictInt(coordinate.substring(dash + 1), y) &&
-        x >= 0 && x < MATRIX_X && y >= 0 && y < VIRTUAL_Y;
+        x >= 0 && x < state.cols && y >= 0 && y < state.rows;
 }
 
-bool parseZoneMapPayload(const String &body, uint8_t *zones, size_t zoneCount) {
-    if (zones == nullptr || zoneCount != NUM_IC_CHIPS || body.length() < 2 ||
-        body.length() > (2 + (NUM_IC_CHIPS * 24)) || body[0] != '{' || body[body.length() - 1] != '}') {
+bool parseZoneMapPayload(const String &body, MatrixStateV2 &state) {
+    size_t ledCount = 0;
+    if (!activeLedCountForState(state, ledCount) || body.length() < 2 ||
+        body.length() > (2 + (ledCount * 24)) || body[0] != '{' ||
+        body[body.length() - 1] != '}') {
         return false;
     }
 
-    for (size_t i = 0; i < zoneCount; i++) zones[i] = ZONE_ID_OFF;
-    bool seen[NUM_IC_CHIPS] = {};
+    memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
+    uint8_t seen[MATRIX_STATE_LAYER_MASK_BYTES] = {};
     size_t entryCount = 0;
     int position = 1;
     skipJsonWhitespace(body, position);
@@ -522,14 +527,17 @@ bool parseZoneMapPayload(const String &body, uint8_t *zones, size_t zoneCount) {
         int x = -1;
         int y = -1;
         int zoneId = -1;
-        if (!parseZoneCoordinate(coordinate, x, y) || !parseStrictInt(zoneValue, zoneId) ||
-            zoneId < ZONE_ID_OFF || zoneId > ZONE_ID_MAX || !zone_id_is_valid((uint8_t)zoneId)) {
+        const int highestActivePortZone = ZONE_ID_PORT1 + DEFAULT_ACTIVE_PORT_COUNT - 1;
+        if (!parseMatrixCoordinate(coordinate, state, x, y) || !parseStrictInt(zoneValue, zoneId) ||
+            zoneId < ZONE_ID_OFF || zoneId > ZONE_ID_MAX || !zone_id_is_valid((uint8_t)zoneId) ||
+            (zone_is_port((uint8_t)zoneId) && zoneId > highestActivePortZone)) {
             return false;
         }
-        const int index = getLEDIndex(x, y);
-        if (index < 0 || index >= NUM_IC_CHIPS || seen[index] || entryCount >= NUM_IC_CHIPS) return false;
-        seen[index] = true;
-        zones[index] = (uint8_t)zoneId;
+        const size_t logicalIndex = (size_t)y * state.cols + x;
+        const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
+        if ((seen[logicalIndex / 8U] & bit) != 0 || entryCount >= ledCount) return false;
+        seen[logicalIndex / 8U] |= bit;
+        state.zoneMap[logicalIndex] = (uint8_t)zoneId;
         entryCount++;
 
         skipJsonWhitespace(body, position);
@@ -543,6 +551,113 @@ bool parseZoneMapPayload(const String &body, uint8_t *zones, size_t zoneCount) {
     return false;
 }
 
+bool parseStoredLayerPayload(
+    const String &payload,
+    const MatrixStateV2 &state,
+    MatrixStateStoredLayer &layer,
+    uint8_t firstColor[3],
+    bool &hasFirstColor) {
+    size_t ledCount = 0;
+    if (!activeLedCountForState(state, ledCount)) return false;
+
+    String body = payload;
+    body.trim();
+    if (body.length() < 2 || body.length() > (2 + (ledCount * 32)) ||
+        body[0] != '{' || body[body.length() - 1] != '}') {
+        return false;
+    }
+
+    memset(&layer, 0, sizeof(layer));
+    hasFirstColor = false;
+    size_t entryCount = 0;
+    int position = 1;
+    skipJsonWhitespace(body, position);
+    if (position == body.length() - 1) return true;
+
+    while (position < body.length() - 1) {
+        if (body[position] != '"') return false;
+        const int keyEnd = body.indexOf('"', position + 1);
+        if (keyEnd < 0) return false;
+        const String coordinate = body.substring(position + 1, keyEnd);
+        position = keyEnd + 1;
+
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] != ':') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] != '"') return false;
+        const int colorEnd = body.indexOf('"', position + 1);
+        if (colorEnd < 0) return false;
+        const String colorText = body.substring(position + 1, colorEnd);
+        if (!isValidHexColor(colorText)) return false;
+        position = colorEnd + 1;
+
+        int x = -1;
+        int y = -1;
+        if (!parseMatrixCoordinate(coordinate, state, x, y)) return false;
+        const size_t logicalIndex = (size_t)y * state.cols + x;
+        const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
+        if ((layer.present[logicalIndex / 8U] & bit) != 0 || entryCount >= ledCount) return false;
+
+        uint8_t parsedColor[3] = {};
+        parseHexColor(colorText, parsedColor);
+        layer.present[logicalIndex / 8U] |= bit;
+        memcpy(&layer.rgb[logicalIndex * 3U], parsedColor, sizeof(parsedColor));
+        if (!hasFirstColor) {
+            memcpy(firstColor, parsedColor, sizeof(parsedColor));
+            hasFirstColor = true;
+        }
+        entryCount++;
+
+        skipJsonWhitespace(body, position);
+        if (position == body.length() - 1) return true;
+        if (body[position] != ',') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() - 1) return false;
+    }
+    return false;
+}
+
+const char *matrixSaveResultName(MatrixStateSaveResult result) {
+    switch (result) {
+        case MatrixStateSaveResult::SAVED: return "SAVED";
+        case MatrixStateSaveResult::INVALID_STATE: return "INVALID_STATE";
+        case MatrixStateSaveResult::VERIFY_FAILED: return "VERIFY_FAILED";
+        case MatrixStateSaveResult::STORAGE_ERROR:
+        default: return "STORAGE_ERROR";
+    }
+}
+
+bool snapshotMatrixState() {
+    if (led_get_matrix_state_snapshot(matrixStateCandidate)) return true;
+    Serial.println("Matrix state snapshot failed");
+    server.send(500, "text/plain", "STATE_UNAVAILABLE");
+    return false;
+}
+
+bool saveAndApplyMatrixState(const char *saveError) {
+    if (matrix_state_storage_validate(matrixStateCandidate) != MatrixStateValidationResult::VALID) {
+        Serial.println("Matrix state candidate validation failed");
+        server.send(500, "text/plain", saveError);
+        return false;
+    }
+
+    const MatrixStateSaveResult saveResult = matrix_state_storage_save(matrixStateCandidate);
+    if (saveResult != MatrixStateSaveResult::SAVED) {
+        Serial.printf("Matrix state save failed: %s\n", matrixSaveResultName(saveResult));
+        server.send(500, "text/plain", saveError);
+        return false;
+    }
+
+    if (!led_apply_matrix_state_safe(matrixStateCandidate)) {
+        Serial.println("Matrix state saved but runtime apply failed; saved state will load after reboot");
+        server.send(500, "text/plain", "APPLY_FAILED_REBOOT_REQUIRED");
+        return false;
+    }
+    return true;
+}
+
 void handleRoot() {
     if (!requireHttpAuth()) return;
     server.send_P(200, "text/html", PAGE_MAIN); 
@@ -550,42 +665,50 @@ void handleRoot() {
 
 void handleGetMatrixSize() {
     if (!requireHttpAuth()) return;
-    String sizeStr = String(MATRIX_X) + ":" + String(VIRTUAL_Y);
+    if (!snapshotMatrixState()) return;
+    String sizeStr = String(matrixStateCandidate.cols) + ":" + String(matrixStateCandidate.rows);
     server.send(200, "text/plain", sizeStr);
 }
 
 void handleGetConfig() {
     if (!requireHttpAuth()) return;
+    if (!snapshotMatrixState()) return;
+
+    size_t ledCount = 0;
+    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
+        server.send(500, "text/plain", "STATE_INVALID");
+        return;
+    }
 
     String json;
     json.reserve(7600);
     json += "{\"topo\":";
-    json += String((int)cfg.topology);
+    json += String((int)matrixStateCandidate.topology);
     json += ",\"b_ports\":";
-    json += String((int)cfg.bright_ports);
+    json += String((int)matrixStateCandidate.portBrightness);
     json += ",\"c_wait\":\"";
-    json += rgbToHex(cfg.color_wait);
+    json += rgbToHex(matrixStateCandidate.waitingColor);
     json += "\",\"c_charge\":\"";
-    json += rgbToHex(cfg.color_charge);
+    json += rgbToHex(matrixStateCandidate.chargingColor);
     json += "\",\"c_error\":\"";
-    json += rgbToHex(cfg.color_error);
+    json += rgbToHex(matrixStateCandidate.errorColor);
     json += "\",\"activePortCount\":";
     StatusMapperState status;
     status_mapper_get_snapshot(status);
     json += String((int)status.activePortCount);
     json += ",\"matrix\":{\"cols\":";
-    json += String((int)MATRIX_X);
+    json += String((int)matrixStateCandidate.cols);
     json += ",\"rows\":";
-    json += String((int)VIRTUAL_Y);
+    json += String((int)matrixStateCandidate.rows);
     json += ",\"total\":";
-    json += String((int)NUM_IC_CHIPS);
+    json += String((int)ledCount);
     json += ",\"topology\":";
-    json += String((int)cfg.topology);
+    json += String((int)matrixStateCandidate.topology);
     json += "}";
-    appendStatusLayersJson(json);
-    appendHardwareMapJson(json);
-    appendZoneMetadataJson(json);
-    appendFreeZoneConfigsJson(json);
+    appendStatusLayersJson(json, matrixStateCandidate);
+    appendHardwareMapJson(json, matrixStateCandidate);
+    appendZoneMetadataJson(json, matrixStateCandidate);
+    appendFreeZoneConfigsJson(json, matrixStateCandidate);
     json += "}";
 
     server.send(200, "application/json", json);
@@ -596,24 +719,18 @@ void handleSaveZones() {
 
     String body = server.arg("plain");
     body.trim();
-    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
-    if (!parseZoneMapPayload(body, nextZoneMap, sizeof(nextZoneMap))) {
+    if (!snapshotMatrixState()) return;
+    if (!parseZoneMapPayload(body, matrixStateCandidate)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
 
-    if (!zoneMapHasRequiredActivePortZones(nextZoneMap, sizeof(nextZoneMap))) {
+    if (!zoneMapHasRequiredActivePortZones(matrixStateCandidate)) {
         server.send(400, "text/plain", "ACTIVE_PORT_ZONE_EMPTY");
         return;
     }
 
-    if (!matrix_config_save(cfg, nextZoneMap, sizeof(nextZoneMap))) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
-
-    led_replace_zone_map_safe(nextZoneMap, sizeof(nextZoneMap));
-    led_reload_free_zone_layers_safe();
+    if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");
 }
 
@@ -633,26 +750,9 @@ void handleSaveTopology() {
         return;
     }
 
-    MatrixConfig nextConfig = cfg;
-    nextConfig.topology = (uint8_t)topology;
-    uint8_t nextZoneMap[NUM_IC_CHIPS] = {};
-    if (!led_remap_zone_map_for_topology(
-            zoneMap,
-            sizeof(zoneMap),
-            cfg.topology,
-            nextConfig.topology,
-            nextZoneMap,
-            sizeof(nextZoneMap))) {
-        server.send(500, "text/plain", "REMAP_FAILED");
-        return;
-    }
-
-    if (!matrix_config_save(nextConfig, nextZoneMap, sizeof(nextZoneMap))) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
-
-    led_apply_matrix_config_safe(nextConfig, nextZoneMap, sizeof(nextZoneMap));
+    if (!snapshotMatrixState()) return;
+    matrixStateCandidate.topology = (uint8_t)topology;
+    if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");
 }
 
@@ -671,20 +771,15 @@ void handleSetBright() {
         return;
     }
 
-    MatrixConfig nextConfig = cfg;
+    if (!snapshotMatrixState()) return;
     if (type == "ports") {
-        nextConfig.bright_ports = (uint8_t)parsedValue;
+        matrixStateCandidate.portBrightness = (uint8_t)parsedValue;
     } else {
         server.send(400, "text/plain", "BAD_TYPE");
         return;
     }
 
-    if (!matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
-    cfg = nextConfig;
-    led_refresh_safe();
+    if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");
 }
 
@@ -693,8 +788,14 @@ void handleSaveStatusColors() {
 
     String body = server.arg("plain");
     body.trim();
+    if (!snapshotMatrixState()) return;
+    size_t ledCount = 0;
+    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
+        server.send(500, "text/plain", "STATE_INVALID");
+        return;
+    }
     if (!body.startsWith("{") || !body.endsWith("}") ||
-        body.length() > (2 + (NUM_IC_CHIPS * 32) + 128)) {
+        body.length() > (2 + (ledCount * 32) + 128)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
@@ -706,51 +807,35 @@ void handleSaveStatusColors() {
     }
 
     String colorsJson;
-    String normalizedLayer;
-    if (!extractJsonObjectField(body, "colors", colorsJson) ||
-        !matrix_config_normalize_status_layer(colorsJson, normalizedLayer)) {
+    if (!extractJsonObjectField(body, "colors", colorsJson)) {
         server.send(400, "text/plain", "BAD_LAYER");
         return;
     }
 
-    MatrixConfig nextConfig = cfg;
-    bool configChanged = false;
-    String firstColor;
-    if (findFirstHexColor(normalizedLayer, firstColor)) {
-        uint8_t parsedColor[3] = {};
-        parseHexColor(firstColor, parsedColor);
-        uint8_t *target = nullptr;
-        if (status == "waiting") {
-            target = nextConfig.color_wait;
-        } else if (status == "charging") {
-            target = nextConfig.color_charge;
-        } else if (status == "error") {
-            target = nextConfig.color_error;
-        }
-        if (target != nullptr) {
-            configChanged = target[0] != parsedColor[0] || target[1] != parsedColor[1] || target[2] != parsedColor[2];
-            target[0] = parsedColor[0];
-            target[1] = parsedColor[1];
-            target[2] = parsedColor[2];
-        }
+    size_t layerIndex = MATRIX_STATE_LAYER_WAITING;
+    uint8_t *fallbackColor = matrixStateCandidate.waitingColor;
+    if (status == "charging") {
+        layerIndex = MATRIX_STATE_LAYER_CHARGING;
+        fallbackColor = matrixStateCandidate.chargingColor;
+    } else if (status == "error") {
+        layerIndex = MATRIX_STATE_LAYER_ERROR;
+        fallbackColor = matrixStateCandidate.errorColor;
     }
 
-    const String previousLayer = matrix_config_load_status_layer(status.c_str());
-    if (!matrix_config_save_status_layer(status.c_str(), normalizedLayer)) {
-        server.send(500, "text/plain", "SAVE_LAYER_FAILED");
+    uint8_t firstColor[3] = {};
+    bool hasFirstColor = false;
+    if (!parseStoredLayerPayload(
+            colorsJson,
+            matrixStateCandidate,
+            matrixStateCandidate.layers[layerIndex],
+            firstColor,
+            hasFirstColor)) {
+        server.send(400, "text/plain", "BAD_LAYER");
         return;
     }
+    if (hasFirstColor) memcpy(fallbackColor, firstColor, sizeof(firstColor));
 
-    if (configChanged && !matrix_config_save(nextConfig, zoneMap, sizeof(zoneMap))) {
-        const bool rollbackSucceeded = matrix_config_save_status_layer(status.c_str(), previousLayer);
-        server.send(500, "text/plain", rollbackSucceeded
-            ? "SAVE_CONFIG_FAILED"
-            : "SAVE_CONFIG_FAILED_ROLLBACK_FAILED");
-        return;
-    }
-
-    if (configChanged) cfg = nextConfig;
-    led_reload_status_layers_safe();
+    if (!saveAndApplyMatrixState("SAVE_LAYER_FAILED")) return;
     server.send(200, "text/plain", "OK");
 }
 
@@ -759,8 +844,14 @@ void handleSaveFreeZone() {
 
     String body = server.arg("plain");
     body.trim();
+    if (!snapshotMatrixState()) return;
+    size_t ledCount = 0;
+    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
+        server.send(500, "text/plain", "STATE_INVALID");
+        return;
+    }
     if (!body.startsWith("{") || !body.endsWith("}") ||
-        body.length() > (2 + (NUM_IC_CHIPS * 32) + 512)) {
+        body.length() > (2 + (ledCount * 32) + 512)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
@@ -778,9 +869,7 @@ void handleSaveFreeZone() {
         return;
     }
 
-    FreeZoneConfig nextConfigs[FREE_ZONE_COUNT];
-    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) nextConfigs[i] = freeZoneConfigs[i];
-    FreeZoneConfig &nextZone = nextConfigs[zoneIndex];
+    MatrixStateStoredFreeZone &nextZone = matrixStateCandidate.freeZones[zoneIndex];
     bool hasConfigPayload = false;
 
     if (jsonHasField(body, "enabled")) {
@@ -794,10 +883,12 @@ void handleSaveFreeZone() {
     }
 
     if (jsonHasField(body, "mode")) {
-        if (!parseFreeZoneMode(extractJsonStringField(body, "mode"), nextZone.mode)) {
+        FreeZoneMode parsedMode = FREE_ZONE_STATIC;
+        if (!parseFreeZoneMode(extractJsonStringField(body, "mode"), parsedMode)) {
             server.send(400, "text/plain", "BAD_MODE");
             return;
         }
+        nextZone.mode = (uint8_t)parsedMode;
         hasConfigPayload = true;
     }
 
@@ -822,44 +913,39 @@ void handleSaveFreeZone() {
     }
 
     const bool hasCustomLayer = jsonHasField(body, "customLayer");
-    String normalizedLayer;
     if (hasCustomLayer) {
         String customLayer;
+        uint8_t ignoredFirstColor[3] = {};
+        bool ignoredHasFirstColor = false;
         if (!extractJsonObjectField(body, "customLayer", customLayer) ||
-            !matrix_config_normalize_free_zone_layer(nextZone.zoneId, customLayer, zoneMap, sizeof(zoneMap), normalizedLayer)) {
+            !parseStoredLayerPayload(
+                customLayer,
+                matrixStateCandidate,
+                matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex],
+                ignoredFirstColor,
+                ignoredHasFirstColor)) {
             server.send(400, "text/plain", "BAD_LAYER");
             return;
         }
+
+        const MatrixStateStoredLayer &newLayer =
+            matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
+        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+            if (storedLayerHasPixel(newLayer, logicalIndex) &&
+                matrixStateCandidate.zoneMap[logicalIndex] != nextZone.zoneId) {
+                server.send(400, "text/plain", "BAD_LAYER");
+                return;
+            }
+        }
     }
 
-    const bool saveCustomLayer = hasCustomLayer && nextZone.mode == FREE_ZONE_CUSTOM;
-    if (!hasConfigPayload && !saveCustomLayer) {
+    if (!hasConfigPayload && !hasCustomLayer) {
         server.send(400, "text/plain", "NO_CHANGES");
         return;
     }
 
-    String previousLayer;
-    if (saveCustomLayer) {
-        previousLayer = matrix_config_load_free_zone_layer(nextZone.zoneId);
-        if (!matrix_config_save_free_zone_layer(nextZone.zoneId, normalizedLayer, zoneMap, sizeof(zoneMap))) {
-            server.send(500, "text/plain", "SAVE_LAYER_FAILED");
-            return;
-        }
-    }
-
-    if (hasConfigPayload && !matrix_config_save_free_zones(nextConfigs, FREE_ZONE_COUNT)) {
-        const bool rollbackSucceeded = !saveCustomLayer ||
-            matrix_config_save_free_zone_layer(nextZone.zoneId, previousLayer, zoneMap, sizeof(zoneMap));
-        server.send(500, "text/plain", rollbackSucceeded
-            ? "SAVE_CONFIG_FAILED"
-            : "SAVE_CONFIG_FAILED_ROLLBACK_FAILED");
-        return;
-    }
-
-    if (hasConfigPayload) {
-        for (size_t i = 0; i < FREE_ZONE_COUNT; i++) freeZoneConfigs[i] = nextConfigs[i];
-    }
-    led_reload_free_zone_layers_safe();
+    const char *saveError = hasConfigPayload ? "SAVE_CONFIG_FAILED" : "SAVE_LAYER_FAILED";
+    if (!saveAndApplyMatrixState(saveError)) return;
     server.send(200, "text/plain", "OK");
 }
 
