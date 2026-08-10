@@ -14,11 +14,11 @@ enum class LedProtocol : uint8_t {
 
 enum class LedColorOrder : uint8_t {
   RGB = 0,
-  RBG,
-  GRB,
-  GBR,
-  BRG,
-  BGR,
+  RBG = 1,
+  GRB = 2,
+  GBR = 3,
+  BRG = 4,
+  BGR = 5,
 };
 
 struct HardwareConfig {
@@ -33,6 +33,9 @@ HardwareConfig hardware_config_factory_defaults();
 
 bool hardware_config_calculate_led_count(const HardwareConfig &config,
                                          size_t &activeLedCount);
+
+bool hardware_config_led_output_supported(LedProtocol protocol,
+                                          LedColorOrder colorOrder);
 
 bool hardware_config_validate(const HardwareConfig &config);
 

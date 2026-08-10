@@ -14,6 +14,7 @@ static CRGB leds[MAX_LED_COUNT];
 static MatrixStateV2 activeState;
 static size_t activeLedCount = 0;
 static bool activeStateReady = false;
+static bool ledControllerRegistered = false;
 
 static float breatheScale = 0.2f;
 static bool breatheDirectionUp = true;
@@ -44,6 +45,49 @@ bool calculateActiveLedCount(const MatrixStateV2 &state, size_t &ledCount) {
 
   ledCount = rows * cols;
   return ledCount > 0 && ledCount <= MAX_LED_COUNT;
+}
+
+bool registerLedController(const MatrixStateV2 &state) {
+  const LedProtocol protocol = static_cast<LedProtocol>(state.ledProtocol);
+  const LedColorOrder colorOrder =
+      static_cast<LedColorOrder>(state.colorOrder);
+  if (!hardware_config_led_output_supported(protocol, colorOrder)) {
+    return false;
+  }
+
+  switch (protocol) {
+    case LedProtocol::WS2811_800K:
+      switch (colorOrder) {
+        case LedColorOrder::RGB:
+          FastLED.addLeds<WS2811, LED_PIN, RGB>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        case LedColorOrder::RBG:
+          FastLED.addLeds<WS2811, LED_PIN, RBG>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        case LedColorOrder::GRB:
+          FastLED.addLeds<WS2811, LED_PIN, GRB>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        case LedColorOrder::GBR:
+          FastLED.addLeds<WS2811, LED_PIN, GBR>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        case LedColorOrder::BRG:
+          FastLED.addLeds<WS2811, LED_PIN, BRG>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        case LedColorOrder::BGR:
+          FastLED.addLeds<WS2811, LED_PIN, BGR>(
+              leds, static_cast<int>(activeLedCount));
+          return true;
+        default:
+          return false;
+      }
+    default:
+      return false;
+  }
 }
 
 bool startupErrorActive() {
@@ -329,14 +373,19 @@ void led_setup(const MatrixStateV2 &initialState) {
   memcpy(&activeState, &initialState, sizeof(activeState));
   activeStateReady = true;
 
+  ledControllerRegistered = registerLedController(activeState);
+  if (!ledControllerRegistered) {
+    Serial.printf("Unsupported LED protocol/order: %u/%u; LED output disabled\n",
+                  activeState.ledProtocol, activeState.colorOrder);
+    return;
+  }
+
   ledMutex = xSemaphoreCreateMutex();
   ledMutexReady = ledMutex != nullptr;
   if (!ledMutexReady) {
     Serial.println("LED mutex creation failed; LED task will not start");
   }
 
-  FastLED.addLeds<WS2811, LED_PIN, BRG>(
-      leds, static_cast<int>(activeLedCount));
   FastLED.setMaxPowerInVoltsAndMilliamps(MAX_LED_VOLTS,
                                          MAX_LED_MILLIAMPS);
 
@@ -362,7 +411,7 @@ void led_setup(const MatrixStateV2 &initialState) {
 }
 
 void led_loop() {
-  if (!activeStateReady || !ledLoopFallback) {
+  if (!activeStateReady || !ledControllerRegistered || !ledLoopFallback) {
     return;
   }
 
@@ -432,7 +481,9 @@ bool led_apply_matrix_state_safe(const MatrixStateV2 &state) {
 
   if (!ledMutexReady) {
     memcpy(&activeState, &state, sizeof(activeState));
-    refreshInternal();
+    if (ledControllerRegistered) {
+      refreshInternal();
+    }
     return true;
   }
 

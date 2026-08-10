@@ -15,29 +15,15 @@ static_assert(static_cast<size_t>(FACTORY_ROWS) * FACTORY_COLS <=
 static_assert(static_cast<size_t>(FACTORY_ROWS) * FACTORY_COLS >=
                   DEFAULT_ACTIVE_PORT_COUNT,
               "The factory matrix has fewer pixels than active ports");
-
-bool led_protocol_is_valid(LedProtocol protocol) {
-  switch (protocol) {
-    case LedProtocol::WS2811_800K:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool color_order_is_valid(LedColorOrder colorOrder) {
-  switch (colorOrder) {
-    case LedColorOrder::RGB:
-    case LedColorOrder::RBG:
-    case LedColorOrder::GRB:
-    case LedColorOrder::GBR:
-    case LedColorOrder::BRG:
-    case LedColorOrder::BGR:
-      return true;
-    default:
-      return false;
-  }
-}
+static_assert(static_cast<uint8_t>(LedProtocol::WS2811_800K) == 1,
+              "The persisted WS2811 protocol ID must remain stable");
+static_assert(static_cast<uint8_t>(LedColorOrder::RGB) == 0 &&
+                  static_cast<uint8_t>(LedColorOrder::RBG) == 1 &&
+                  static_cast<uint8_t>(LedColorOrder::GRB) == 2 &&
+                  static_cast<uint8_t>(LedColorOrder::GBR) == 3 &&
+                  static_cast<uint8_t>(LedColorOrder::BRG) == 4 &&
+                  static_cast<uint8_t>(LedColorOrder::BGR) == 5,
+              "The persisted color-order IDs must remain stable");
 
 }  // namespace
 
@@ -73,6 +59,25 @@ bool hardware_config_calculate_led_count(const HardwareConfig &config,
   return true;
 }
 
+bool hardware_config_led_output_supported(LedProtocol protocol,
+                                          LedColorOrder colorOrder) {
+  if (protocol != LedProtocol::WS2811_800K) {
+    return false;
+  }
+
+  switch (colorOrder) {
+    case LedColorOrder::RGB:
+    case LedColorOrder::RBG:
+    case LedColorOrder::GRB:
+    case LedColorOrder::GBR:
+    case LedColorOrder::BRG:
+    case LedColorOrder::BGR:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool hardware_config_validate(const HardwareConfig &config) {
   if (config.activePortCount < 1 ||
       config.activePortCount > MAX_PORT_COUNT) {
@@ -81,6 +86,6 @@ bool hardware_config_validate(const HardwareConfig &config) {
 
   size_t activeLedCount = 0;
   return hardware_config_calculate_led_count(config, activeLedCount) &&
-         led_protocol_is_valid(config.ledProtocol) &&
-         color_order_is_valid(config.colorOrder);
+         hardware_config_led_output_supported(config.ledProtocol,
+                                              config.colorOrder);
 }
