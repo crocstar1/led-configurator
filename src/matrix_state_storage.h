@@ -76,7 +76,10 @@ struct MatrixStateV2 {
   uint8_t waitingColor[3];
   uint8_t chargingColor[3];
   uint8_t errorColor[3];
-  uint8_t reservedHeader[9];
+  uint8_t activePortCount;
+  uint8_t ledProtocol;
+  uint8_t colorOrder;
+  uint8_t reservedHeader[6];
   MatrixStateStoredFreeZone freeZones[FREE_ZONE_COUNT];
   uint8_t zoneMap[MAX_LED_COUNT];
   MatrixStateStoredLayer layers[MATRIX_STATE_LAYER_COUNT];
@@ -87,6 +90,8 @@ static constexpr size_t MATRIX_STATE_STORAGE_BYTES = 11508;
 
 static_assert(MAX_LED_COUNT == 500,
               "The V2 storage layout is defined for 500 LEDs");
+static_assert(MAX_PORT_COUNT == 4,
+              "The V2 storage layout is defined for four ports");
 static_assert(FREE_ZONE_COUNT == 4,
               "The V2 storage layout is defined for four free zones");
 static_assert(MATRIX_STATE_LAYER_CUSTOM + 1U == MATRIX_STATE_LAYER_COUNT,
@@ -94,13 +99,21 @@ static_assert(MATRIX_STATE_LAYER_CUSTOM + 1U == MATRIX_STATE_LAYER_COUNT,
 static_assert(sizeof(uint8_t) == 1 && sizeof(uint16_t) == 2 &&
                   sizeof(uint32_t) == 4,
               "Unexpected fixed-width integer sizes");
+static_assert(sizeof(LedProtocol) == 1 && sizeof(LedColorOrder) == 1,
+              "Unexpected hardware enum sizes");
 static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
               "The V2 storage layout requires a little-endian target");
 static_assert(sizeof(MatrixStateStoredFreeZone) == 8,
               "Unexpected free-zone storage layout");
 static_assert(sizeof(MatrixStateStoredLayer) == 1563,
               "Unexpected layer storage layout");
-static_assert(offsetof(MatrixStateV2, reservedHeader) == 23,
+static_assert(offsetof(MatrixStateV2, activePortCount) == 23,
+              "Unexpected V2 active-port layout");
+static_assert(offsetof(MatrixStateV2, ledProtocol) == 24,
+              "Unexpected V2 LED-protocol layout");
+static_assert(offsetof(MatrixStateV2, colorOrder) == 25,
+              "Unexpected V2 color-order layout");
+static_assert(offsetof(MatrixStateV2, reservedHeader) == 26,
               "Unexpected V2 reserved-header layout");
 static_assert(offsetof(MatrixStateV2, freeZones) == 32,
               "Unexpected V2 metadata layout");

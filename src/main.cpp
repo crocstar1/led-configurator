@@ -387,11 +387,7 @@ void appendFreeZoneConfigsJson(String &json, const MatrixStateV2 &state) {
 }
 
 void appendZoneMetadataJson(String &json, const MatrixStateV2 &state) {
-    StatusMapperState status;
-    status_mapper_get_snapshot(status);
-    const uint8_t activePortCount = status.activePortCount > MAX_PORT_COUNT
-        ? MAX_PORT_COUNT
-        : status.activePortCount;
+    const uint8_t activePortCount = state.activePortCount;
 
     json += ",\"zones\":[";
 
@@ -450,9 +446,12 @@ bool activeLedCountForState(const MatrixStateV2 &state, size_t &ledCount) {
 
 bool zoneMapHasRequiredActivePortZones(const MatrixStateV2 &state) {
     size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount)) return false;
+    if (!activeLedCountForState(state, ledCount) ||
+        state.activePortCount < 1 || state.activePortCount > MAX_PORT_COUNT) {
+        return false;
+    }
 
-    for (uint8_t portIndex = 0; portIndex < DEFAULT_ACTIVE_PORT_COUNT; portIndex++) {
+    for (uint8_t portIndex = 0; portIndex < state.activePortCount; portIndex++) {
         const uint8_t requiredZoneId = (uint8_t)(ZONE_ID_PORT1 + portIndex);
         bool found = false;
         for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
@@ -484,7 +483,9 @@ bool parseMatrixCoordinate(
 
 bool parseZoneMapPayload(const String &body, MatrixStateV2 &state) {
     size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount) || body.length() < 2 ||
+    if (!activeLedCountForState(state, ledCount) ||
+        state.activePortCount < 1 || state.activePortCount > MAX_PORT_COUNT ||
+        body.length() < 2 ||
         body.length() > (2 + (ledCount * 24)) || body[0] != '{' ||
         body[body.length() - 1] != '}') {
         return false;
@@ -527,7 +528,7 @@ bool parseZoneMapPayload(const String &body, MatrixStateV2 &state) {
         int x = -1;
         int y = -1;
         int zoneId = -1;
-        const int highestActivePortZone = ZONE_ID_PORT1 + DEFAULT_ACTIVE_PORT_COUNT - 1;
+        const int highestActivePortZone = ZONE_ID_PORT1 + state.activePortCount - 1;
         if (!parseMatrixCoordinate(coordinate, state, x, y) || !parseStrictInt(zoneValue, zoneId) ||
             zoneId < ZONE_ID_OFF || zoneId > ZONE_ID_MAX || !zone_id_is_valid((uint8_t)zoneId) ||
             (zone_is_port((uint8_t)zoneId) && zoneId > highestActivePortZone)) {
@@ -629,6 +630,17 @@ const char *matrixSaveResultName(MatrixStateSaveResult result) {
     }
 }
 
+const char *matrixLoadResultName(MatrixStateLoadResult result) {
+    switch (result) {
+        case MatrixStateLoadResult::LOADED: return "LOADED";
+        case MatrixStateLoadResult::NOT_FOUND: return "NOT_FOUND";
+        case MatrixStateLoadResult::INCOMPATIBLE: return "INCOMPATIBLE";
+        case MatrixStateLoadResult::CORRUPT: return "CORRUPT";
+        case MatrixStateLoadResult::STORAGE_ERROR:
+        default: return "STORAGE_ERROR";
+    }
+}
+
 bool snapshotMatrixState() {
     if (led_get_matrix_state_snapshot(matrixStateCandidate)) return true;
     Serial.println("Matrix state snapshot failed");
@@ -693,9 +705,7 @@ void handleGetConfig() {
     json += "\",\"c_error\":\"";
     json += rgbToHex(matrixStateCandidate.errorColor);
     json += "\",\"activePortCount\":";
-    StatusMapperState status;
-    status_mapper_get_snapshot(status);
-    json += String((int)status.activePortCount);
+    json += String((int)matrixStateCandidate.activePortCount);
     json += ",\"matrix\":{\"cols\":";
     json += String((int)matrixStateCandidate.cols);
     json += ",\"rows\":";
@@ -1257,10 +1267,24 @@ void handleDiagnostics() {
 void setup() {
     Serial.begin(115200);
     auth_config_setup();
+
+    matrix_state_storage_set_factory_defaults(matrixStateCandidate);
+    const MatrixStateLoadResult matrixLoadResult =
+        matrix_state_storage_load(matrixStateCandidate);
+    if (matrixLoadResult == MatrixStateLoadResult::LOADED) {
+        Serial.println("Matrix state V2 loaded");
+    } else {
+        Serial.printf("Matrix state V2 %s; using factory defaults without saving\n",
+            matrixLoadResultName(matrixLoadResult));
+    }
+
     station_inputs_setup();
-    status_mapper_setup();
+    if (!status_mapper_setup(matrixStateCandidate.activePortCount)) {
+        Serial.println("Matrix active port count is invalid; startup stopped");
+        return;
+    }
     updatePortStatusFromInputs();
-    led_setup();
+    led_setup(matrixStateCandidate);
     startInputTask();
     network_setup();
 

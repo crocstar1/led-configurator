@@ -28,7 +28,7 @@ struct StatusMapperState
     PortStatus statuses[MAX_PORT_COUNT];
 };
 
-void status_mapper_setup();
+bool status_mapper_setup(uint8_t activePortCount);
 void status_mapper_update(const StationInputState &inputs);
 void status_mapper_get_snapshot(StatusMapperState &snapshot);
 const char *status_mapper_status_to_string(PortStatus status);

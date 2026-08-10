@@ -19,7 +19,7 @@ struct LedRuntimeState {
   uint64_t lastRefreshAgeMs;
 };
 
-void led_setup();
+void led_setup(const MatrixStateV2 &initialState);
 void led_loop();
 void led_get_runtime_state(LedRuntimeState &state);
 

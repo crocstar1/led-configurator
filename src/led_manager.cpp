@@ -46,22 +46,6 @@ bool calculateActiveLedCount(const MatrixStateV2 &state, size_t &ledCount) {
   return ledCount > 0 && ledCount <= MAX_LED_COUNT;
 }
 
-const char *loadResultName(MatrixStateLoadResult result) {
-  switch (result) {
-    case MatrixStateLoadResult::LOADED:
-      return "LOADED";
-    case MatrixStateLoadResult::NOT_FOUND:
-      return "NOT_FOUND";
-    case MatrixStateLoadResult::INCOMPATIBLE:
-      return "INCOMPATIBLE";
-    case MatrixStateLoadResult::CORRUPT:
-      return "CORRUPT";
-    case MatrixStateLoadResult::STORAGE_ERROR:
-    default:
-      return "STORAGE_ERROR";
-  }
-}
-
 bool startupErrorActive() {
   station_inputs_update();
   StationInputState inputs;
@@ -337,21 +321,12 @@ void ledTaskWorker(void *) {
 
 }  // namespace
 
-void led_setup() {
-  matrix_state_storage_set_factory_defaults(activeState);
-  const MatrixStateLoadResult loadResult =
-      matrix_state_storage_load(activeState);
-  if (loadResult == MatrixStateLoadResult::LOADED) {
-    Serial.println("Matrix state V2 loaded");
-  } else {
-    Serial.printf("Matrix state V2 %s; using factory defaults without saving\n",
-                  loadResultName(loadResult));
-  }
-
-  if (!calculateActiveLedCount(activeState, activeLedCount)) {
-    Serial.println("Factory matrix state is invalid; LED runtime not started");
+void led_setup(const MatrixStateV2 &initialState) {
+  if (!calculateActiveLedCount(initialState, activeLedCount)) {
+    Serial.println("Initial matrix state is invalid; LED runtime not started");
     return;
   }
+  memcpy(&activeState, &initialState, sizeof(activeState));
   activeStateReady = true;
 
   ledMutex = xSemaphoreCreateMutex();
@@ -448,7 +423,10 @@ bool led_apply_matrix_state_safe(const MatrixStateV2 &state) {
   size_t nextLedCount = 0;
   if (!activeStateReady || !calculateActiveLedCount(state, nextLedCount) ||
       nextLedCount != activeLedCount || state.rows != activeState.rows ||
-      state.cols != activeState.cols) {
+      state.cols != activeState.cols ||
+      state.activePortCount != activeState.activePortCount ||
+      state.ledProtocol != activeState.ledProtocol ||
+      state.colorOrder != activeState.colorOrder) {
     return false;
   }
 

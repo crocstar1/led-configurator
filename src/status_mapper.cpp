@@ -3,9 +3,16 @@
 static StatusMapperState mapperState = {};
 static portMUX_TYPE mapperStateMux = portMUX_INITIALIZER_UNLOCKED;
 
-void status_mapper_setup() {
+static_assert(BOARD_INPUT_COUNT >= MAX_PORT_COUNT * 2,
+              "Each port requires charging and error inputs");
+
+bool status_mapper_setup(uint8_t activePortCount) {
+    if (activePortCount < 1 || activePortCount > MAX_PORT_COUNT) {
+        return false;
+    }
+
     StatusMapperState nextState = {};
-    nextState.activePortCount = DEFAULT_ACTIVE_PORT_COUNT;
+    nextState.activePortCount = activePortCount;
 
     for (uint8_t i = 0; i < MAX_PORT_COUNT; i++) {
         nextState.ports[i].chargingInput = i * 2;
@@ -20,6 +27,7 @@ void status_mapper_setup() {
     portENTER_CRITICAL(&mapperStateMux);
     mapperState = nextState;
     portEXIT_CRITICAL(&mapperStateMux);
+    return true;
 }
 
 void status_mapper_update(const StationInputState &inputs) {

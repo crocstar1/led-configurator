@@ -87,9 +87,9 @@ bool calculateActiveLedCount(const MatrixStateV2 &state,
   const HardwareConfig hardware = {
       state.rows,
       state.cols,
-      DEFAULT_ACTIVE_PORT_COUNT,
-      LedProtocol::WS2811_800K,
-      LedColorOrder::BRG,
+      state.activePortCount,
+      static_cast<LedProtocol>(state.ledProtocol),
+      static_cast<LedColorOrder>(state.colorOrder),
   };
   return hardware_config_validate(hardware) &&
          hardware_config_calculate_led_count(hardware, activeLedCount);
@@ -208,6 +208,9 @@ void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
   state.cols = hardware.cols;
   state.topology = 0;
   state.portBrightness = DEFAULT_PORT_BRIGHTNESS;
+  state.activePortCount = hardware.activePortCount;
+  state.ledProtocol = static_cast<uint8_t>(hardware.ledProtocol);
+  state.colorOrder = static_cast<uint8_t>(hardware.colorOrder);
 
   state.waitingColor[0] = 0;
   state.waitingColor[1] = 255;
@@ -231,7 +234,7 @@ void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
   // factory dimensions and guarantees pixels for every active port.
   for (size_t pixel = 0; pixel < activeLedCount; ++pixel) {
     const uint8_t portOffset = static_cast<uint8_t>(
-        (pixel * DEFAULT_ACTIVE_PORT_COUNT) / activeLedCount);
+        (pixel * state.activePortCount) / activeLedCount);
     state.zoneMap[pixel] = ZONE_ID_PORT1 + portOffset;
   }
 }
@@ -273,12 +276,12 @@ MatrixStateValidationResult matrix_state_storage_validate(
     }
 
     const uint8_t portIndex = zoneId - ZONE_ID_PORT1;
-    if (portIndex >= DEFAULT_ACTIVE_PORT_COUNT) {
+    if (portIndex >= state.activePortCount) {
       return MatrixStateValidationResult::INVALID;
     }
     activePortSeen[portIndex] = true;
   }
-  for (size_t port = 0; port < DEFAULT_ACTIVE_PORT_COUNT; ++port) {
+  for (size_t port = 0; port < state.activePortCount; ++port) {
     if (!activePortSeen[port]) {
       return MatrixStateValidationResult::INVALID;
     }
