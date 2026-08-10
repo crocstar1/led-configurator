@@ -25,7 +25,12 @@ bool otaRestartPending = false;
 String otaUpdateError = "";
 unsigned long otaRestartAt = 0;
 
+static bool hardwareConfigRestartRequired = false;
+static bool hardwareConfigRestartScheduled = false;
+static unsigned long hardwareConfigRestartAt = 0;
+
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
+static constexpr uint32_t HARDWARE_CONFIG_RESTART_DELAY_MS = 1000;
 static bool inputTaskStarted = false;
 static uint64_t lastInputUpdateMs = 0;
 static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
@@ -469,6 +474,161 @@ void skipJsonWhitespace(const String &value, int &position) {
     while (position < value.length() && isspace((unsigned char)value[position])) position++;
 }
 
+const char *ledProtocolApiName(LedProtocol protocol) {
+    switch (protocol) {
+        case LedProtocol::WS2811_800K: return "ws2811_800k";
+        default: return nullptr;
+    }
+}
+
+const char *ledColorOrderApiName(LedColorOrder colorOrder) {
+    switch (colorOrder) {
+        case LedColorOrder::RGB: return "RGB";
+        case LedColorOrder::RBG: return "RBG";
+        case LedColorOrder::GRB: return "GRB";
+        case LedColorOrder::GBR: return "GBR";
+        case LedColorOrder::BRG: return "BRG";
+        case LedColorOrder::BGR: return "BGR";
+        default: return nullptr;
+    }
+}
+
+bool parseLedProtocolApiName(const String &value, LedProtocol &protocol) {
+    if (value != "ws2811_800k") return false;
+    protocol = LedProtocol::WS2811_800K;
+    return true;
+}
+
+bool parseLedColorOrderApiName(const String &value, LedColorOrder &colorOrder) {
+    if (value == "RGB") colorOrder = LedColorOrder::RGB;
+    else if (value == "RBG") colorOrder = LedColorOrder::RBG;
+    else if (value == "GRB") colorOrder = LedColorOrder::GRB;
+    else if (value == "GBR") colorOrder = LedColorOrder::GBR;
+    else if (value == "BRG") colorOrder = LedColorOrder::BRG;
+    else if (value == "BGR") colorOrder = LedColorOrder::BGR;
+    else return false;
+    return true;
+}
+
+void skipHardwareJsonWhitespace(const String &value, int &position) {
+    while (position < value.length() &&
+           (value[position] == ' ' || value[position] == '\t' ||
+            value[position] == '\n' || value[position] == '\r')) {
+        position++;
+    }
+}
+
+void trimHardwareJsonWhitespace(String &value) {
+    int first = 0;
+    skipHardwareJsonWhitespace(value, first);
+    int last = value.length();
+    while (last > first &&
+           (value[last - 1] == ' ' || value[last - 1] == '\t' ||
+            value[last - 1] == '\n' || value[last - 1] == '\r')) {
+        last--;
+    }
+    if (first > 0) value.remove(0, first);
+    value.remove(last - first);
+}
+
+bool parseHardwareConfigPayload(const String &body, HardwareConfig &hardware) {
+    if (body.length() < 2 || body.length() > 256 || body[0] != '{' ||
+        body[body.length() - 1] != '}') {
+        return false;
+    }
+
+    bool rowsSeen = false;
+    bool colsSeen = false;
+    bool portsSeen = false;
+    bool protocolSeen = false;
+    bool orderSeen = false;
+    int rows = 0;
+    int cols = 0;
+    int activePortCount = 0;
+    LedProtocol protocol = LedProtocol::WS2811_800K;
+    LedColorOrder colorOrder = LedColorOrder::BRG;
+    int position = 1;
+
+    skipHardwareJsonWhitespace(body, position);
+    while (position < body.length() - 1) {
+        if (body[position] != '"') return false;
+        const int keyEnd = body.indexOf('"', position + 1);
+        if (keyEnd < 0) return false;
+        const String key = body.substring(position + 1, keyEnd);
+        position = keyEnd + 1;
+
+        skipHardwareJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] != ':') return false;
+        position++;
+        skipHardwareJsonWhitespace(body, position);
+
+        if (key == "ledProtocol" || key == "colorOrder") {
+            if (position >= body.length() || body[position] != '"') return false;
+            const int valueEnd = body.indexOf('"', position + 1);
+            if (valueEnd < 0) return false;
+            const String value = body.substring(position + 1, valueEnd);
+            position = valueEnd + 1;
+
+            if (key == "ledProtocol") {
+                if (protocolSeen || !parseLedProtocolApiName(value, protocol)) return false;
+                protocolSeen = true;
+            } else {
+                if (orderSeen || !parseLedColorOrderApiName(value, colorOrder)) return false;
+                orderSeen = true;
+            }
+        } else {
+            const int valueStart = position;
+            if (position < body.length() && body[position] == '-') position++;
+            const int digitStart = position;
+            while (position < body.length() && isdigit((unsigned char)body[position])) position++;
+            if (position == digitStart) return false;
+            if (body[digitStart] == '0' && position > digitStart + 1) return false;
+
+            int parsed = 0;
+            if (!parseStrictInt(body.substring(valueStart, position), parsed)) return false;
+            if (key == "rows") {
+                if (rowsSeen) return false;
+                rows = parsed;
+                rowsSeen = true;
+            } else if (key == "cols") {
+                if (colsSeen) return false;
+                cols = parsed;
+                colsSeen = true;
+            } else if (key == "activePortCount") {
+                if (portsSeen) return false;
+                activePortCount = parsed;
+                portsSeen = true;
+            } else {
+                return false;
+            }
+        }
+
+        skipHardwareJsonWhitespace(body, position);
+        if (position == body.length() - 1) break;
+        if (body[position] != ',') return false;
+        position++;
+        skipHardwareJsonWhitespace(body, position);
+        if (position >= body.length() - 1) return false;
+    }
+
+    if (position != body.length() - 1 || !rowsSeen || !colsSeen ||
+        !portsSeen || !protocolSeen || !orderSeen || rows < 1 || cols < 1 ||
+        rows > static_cast<int>(MAX_LED_COUNT) ||
+        cols > static_cast<int>(MAX_LED_COUNT) || activePortCount < 1 ||
+        activePortCount > static_cast<int>(MAX_PORT_COUNT)) {
+        return false;
+    }
+
+    hardware = HardwareConfig{
+        static_cast<uint16_t>(rows),
+        static_cast<uint16_t>(cols),
+        static_cast<uint8_t>(activePortCount),
+        protocol,
+        colorOrder,
+    };
+    return hardware_config_validate(hardware);
+}
+
 bool parseMatrixCoordinate(
     const String &coordinate,
     const MatrixStateV2 &state,
@@ -648,6 +808,12 @@ bool snapshotMatrixState() {
     return false;
 }
 
+bool rejectMatrixSaveWhileRestartPending() {
+    if (!hardwareConfigRestartRequired) return false;
+    server.send(409, "text/plain", "RESTART_PENDING");
+    return true;
+}
+
 bool saveAndApplyMatrixState(const char *saveError) {
     if (matrix_state_storage_validate(matrixStateCandidate) != MatrixStateValidationResult::VALID) {
         Serial.println("Matrix state candidate validation failed");
@@ -715,6 +881,21 @@ void handleGetConfig() {
     json += ",\"topology\":";
     json += String((int)matrixStateCandidate.topology);
     json += "}";
+    json += ",\"hardware\":{\"rows\":";
+    json += String((int)matrixStateCandidate.rows);
+    json += ",\"cols\":";
+    json += String((int)matrixStateCandidate.cols);
+    json += ",\"activePortCount\":";
+    json += String((int)matrixStateCandidate.activePortCount);
+    json += ",\"ledProtocol\":\"";
+    json += ledProtocolApiName(
+        static_cast<LedProtocol>(matrixStateCandidate.ledProtocol));
+    json += "\",\"colorOrder\":\"";
+    json += ledColorOrderApiName(
+        static_cast<LedColorOrder>(matrixStateCandidate.colorOrder));
+    json += "\",\"maxLedCount\":";
+    json += String((int)MAX_LED_COUNT);
+    json += "}";
     appendStatusLayersJson(json, matrixStateCandidate);
     appendHardwareMapJson(json, matrixStateCandidate);
     appendZoneMetadataJson(json, matrixStateCandidate);
@@ -724,8 +905,80 @@ void handleGetConfig() {
     server.send(200, "application/json", json);
 }
 
+void handleSaveHardwareConfig() {
+    if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
+
+    String body = server.arg("plain");
+    trimHardwareJsonWhitespace(body);
+    HardwareConfig requestedHardware = {};
+    if (!parseHardwareConfigPayload(body, requestedHardware)) {
+        server.send(400, "text/plain", "BAD_CONFIG");
+        return;
+    }
+    if (!snapshotMatrixState()) return;
+
+    const bool spatialChange =
+        matrixStateCandidate.rows != requestedHardware.rows ||
+        matrixStateCandidate.cols != requestedHardware.cols ||
+        matrixStateCandidate.activePortCount != requestedHardware.activePortCount;
+    const bool outputChange =
+        matrixStateCandidate.ledProtocol !=
+            static_cast<uint8_t>(requestedHardware.ledProtocol) ||
+        matrixStateCandidate.colorOrder !=
+            static_cast<uint8_t>(requestedHardware.colorOrder);
+    if (!spatialChange && !outputChange) {
+        server.send(200, "text/plain", "NO_CHANGE");
+        return;
+    }
+
+    matrixStateCandidate.ledProtocol =
+        static_cast<uint8_t>(requestedHardware.ledProtocol);
+    matrixStateCandidate.colorOrder =
+        static_cast<uint8_t>(requestedHardware.colorOrder);
+    if (spatialChange && !matrix_state_storage_reset_spatial_data(
+            matrixStateCandidate,
+            requestedHardware.rows,
+            requestedHardware.cols,
+            requestedHardware.activePortCount)) {
+        Serial.println("Matrix spatial reset failed for hardware configuration");
+        server.send(400, "text/plain", "BAD_CONFIG");
+        return;
+    }
+
+    if (matrix_state_storage_validate(matrixStateCandidate) !=
+        MatrixStateValidationResult::VALID) {
+        Serial.println("Hardware configuration produced an invalid matrix state");
+        server.send(400, "text/plain", "BAD_CONFIG");
+        return;
+    }
+
+    const MatrixStateSaveResult saveResult =
+        matrix_state_storage_save(matrixStateCandidate);
+    if (saveResult != MatrixStateSaveResult::SAVED) {
+        Serial.printf("Hardware configuration save failed: %s\n",
+                      matrixSaveResultName(saveResult));
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+
+    hardwareConfigRestartRequired = true;
+    if (!led_prepare_for_restart()) {
+        Serial.println(
+            "Hardware configuration saved, but LED restart preparation failed; "
+            "manual reboot required");
+        server.send(500, "text/plain", "SAVED_RESTART_REQUIRED");
+        return;
+    }
+
+    hardwareConfigRestartScheduled = true;
+    hardwareConfigRestartAt = millis() + HARDWARE_CONFIG_RESTART_DELAY_MS;
+    server.send(200, "text/plain", "REBOOT_REQUIRED");
+}
+
 void handleSaveZones() {
     if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -746,6 +999,7 @@ void handleSaveZones() {
 
 void handleSaveTopology() {
     if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
 
     int topology = -1;
     if (server.hasArg("topology")) {
@@ -768,6 +1022,7 @@ void handleSaveTopology() {
 
 void handleSetBright() {
     if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
 
     if (!server.hasArg("type") || !server.hasArg("val")) {
         server.send(400, "text/plain", "MISSING_ARG");
@@ -795,6 +1050,7 @@ void handleSetBright() {
 
 void handleSaveStatusColors() {
     if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -851,6 +1107,7 @@ void handleSaveStatusColors() {
 
 void handleSaveFreeZone() {
     if (!requireHttpAuth()) return;
+    if (rejectMatrixSaveWhileRestartPending()) return;
 
     String body = server.arg("plain");
     body.trim();
@@ -1302,6 +1559,7 @@ void setup() {
     server.on("/", handleRoot);
     server.on("/get_size", handleGetMatrixSize);
     server.on("/get_config", handleGetConfig);
+    server.on("/save_hardware_config", HTTP_POST, handleSaveHardwareConfig);
     server.on("/save_zones", HTTP_POST, handleSaveZones);
     server.on("/save_topology", HTTP_POST, handleSaveTopology);
     server.on("/set_bright", HTTP_POST, handleSetBright);
@@ -1392,6 +1650,11 @@ void loop() {
             lastFallbackInputUpdate = now;
             updatePortStatusFromInputs();
         }
+    }
+    if (hardwareConfigRestartScheduled &&
+        static_cast<int32_t>(millis() - hardwareConfigRestartAt) >= 0) {
+        hardwareConfigRestartScheduled = false;
+        ESP.restart();
     }
     if (otaRestartPending && millis() >= otaRestartAt) {
         otaRestartPending = false;

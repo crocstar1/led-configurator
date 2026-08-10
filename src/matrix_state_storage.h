@@ -134,6 +134,14 @@ static_assert(std::is_trivially_copyable<MatrixStateV2>::value,
 
 void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state);
 
+// Replaces only geometry-dependent data. On failure state is unchanged. This
+// uses the module scratch buffer and must be serialized with load/save calls.
+bool matrix_state_storage_reset_spatial_data(
+    MatrixStateV2 &state,
+    uint16_t rows,
+    uint16_t cols,
+    uint8_t activePortCount);
+
 MatrixStateValidationResult matrix_state_storage_validate(
     const MatrixStateV2 &state);
 

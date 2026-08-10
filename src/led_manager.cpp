@@ -15,6 +15,7 @@ static MatrixStateV2 activeState;
 static size_t activeLedCount = 0;
 static bool activeStateReady = false;
 static bool ledControllerRegistered = false;
+static bool ledOutputStoppedForRestart = false;
 
 static float breatheScale = 0.2f;
 static bool breatheDirectionUp = true;
@@ -107,6 +108,25 @@ bool startupErrorActive() {
     }
   }
   return false;
+}
+
+bool stopLedOutputForRestart() {
+  if (ledOutputStoppedForRestart) {
+    return true;
+  }
+  if (!ledControllerRegistered) {
+    ledOutputStoppedForRestart = true;
+    return true;
+  }
+  if (!activeStateReady || activeLedCount == 0 ||
+      activeLedCount > MAX_LED_COUNT) {
+    return false;
+  }
+
+  ledOutputStoppedForRestart = true;
+  fill_solid(leds, activeLedCount, CRGB::Black);
+  FastLED.show();
+  return true;
 }
 
 bool startupShowColor(const CRGB &color) {
@@ -356,7 +376,9 @@ void updateStep(unsigned long now) {
 void ledTaskWorker(void *) {
   while (true) {
     if (xSemaphoreTake(ledMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-      updateStep(millis());
+      if (!ledOutputStoppedForRestart) {
+        updateStep(millis());
+      }
       xSemaphoreGive(ledMutex);
     }
     vTaskDelay(15 / portTICK_PERIOD_MS);
@@ -411,7 +433,8 @@ void led_setup(const MatrixStateV2 &initialState) {
 }
 
 void led_loop() {
-  if (!activeStateReady || !ledControllerRegistered || !ledLoopFallback) {
+  if (!activeStateReady || !ledControllerRegistered || !ledLoopFallback ||
+      ledOutputStoppedForRestart) {
     return;
   }
 
@@ -424,7 +447,9 @@ void led_loop() {
     if (xSemaphoreTake(ledMutex, 0) != pdTRUE) {
       return;
     }
-    updateStep(now);
+    if (!ledOutputStoppedForRestart) {
+      updateStep(now);
+    }
     xSemaphoreGive(ledMutex);
     return;
   }
@@ -470,7 +495,8 @@ bool led_get_matrix_state_snapshot(MatrixStateV2 &snapshot) {
 
 bool led_apply_matrix_state_safe(const MatrixStateV2 &state) {
   size_t nextLedCount = 0;
-  if (!activeStateReady || !calculateActiveLedCount(state, nextLedCount) ||
+  if (ledOutputStoppedForRestart || !activeStateReady ||
+      !calculateActiveLedCount(state, nextLedCount) ||
       nextLedCount != activeLedCount || state.rows != activeState.rows ||
       state.cols != activeState.cols ||
       state.activePortCount != activeState.activePortCount ||
@@ -491,8 +517,26 @@ bool led_apply_matrix_state_safe(const MatrixStateV2 &state) {
           ledMutex, pdMS_TO_TICKS(LED_STATE_MUTEX_TIMEOUT_MS)) != pdTRUE) {
     return false;
   }
+  if (ledOutputStoppedForRestart) {
+    xSemaphoreGive(ledMutex);
+    return false;
+  }
   memcpy(&activeState, &state, sizeof(activeState));
   refreshInternal();
   xSemaphoreGive(ledMutex);
   return true;
+}
+
+bool led_prepare_for_restart() {
+  if (!ledMutexReady) {
+    return stopLedOutputForRestart();
+  }
+
+  if (xSemaphoreTake(
+          ledMutex, pdMS_TO_TICKS(LED_STATE_MUTEX_TIMEOUT_MS)) != pdTRUE) {
+    return false;
+  }
+  const bool prepared = stopLedOutputForRestart();
+  xSemaphoreGive(ledMutex);
+  return prepared;
 }
