@@ -18,6 +18,7 @@
 
 WebServer server(80);
 static MatrixStateV2 matrixStateCandidate;
+static uint8_t previousZoneMap[MAX_LED_COUNT];
 
 bool otaUploadAuthorized = false;
 bool otaUpdateSuccess = false;
@@ -299,6 +300,15 @@ bool storedLayerHasPixel(const MatrixStateStoredLayer &layer, size_t index) {
     return (layer.present[index / 8U] & (1U << (index % 8U))) != 0;
 }
 
+void clearStoredLayerPixel(MatrixStateStoredLayer &layer, size_t index) {
+    const uint8_t bit = (uint8_t)(1U << (index % 8U));
+    layer.present[index / 8U] &= (uint8_t)~bit;
+    const size_t rgbOffset = index * 3U;
+    layer.rgb[rgbOffset] = 0;
+    layer.rgb[rgbOffset + 1U] = 0;
+    layer.rgb[rgbOffset + 2U] = 0;
+}
+
 void appendStoredLayerJson(String &json, const MatrixStateV2 &state, size_t layerIndex) {
     json += "{";
     bool first = true;
@@ -450,12 +460,39 @@ bool pruneFreeCustomLayersForZoneMap(MatrixStateV2 &state) {
         for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
             if (state.zoneMap[logicalIndex] == zoneId) continue;
 
-            const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
-            layer.present[logicalIndex / 8U] &= (uint8_t)~bit;
-            const size_t rgbOffset = logicalIndex * 3U;
-            layer.rgb[rgbOffset] = 0;
-            layer.rgb[rgbOffset + 1U] = 0;
-            layer.rgb[rgbOffset + 2U] = 0;
+            clearStoredLayerPixel(layer, logicalIndex);
+        }
+    }
+    return true;
+}
+
+bool clearStatusPixelsForChangedZones(
+    MatrixStateV2 &state,
+    const uint8_t oldZoneMap[MAX_LED_COUNT]) {
+    size_t ledCount = 0;
+    if (!activeLedCountForState(state, ledCount)) return false;
+
+    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+        if (oldZoneMap[logicalIndex] == state.zoneMap[logicalIndex]) continue;
+        for (size_t layerIndex = MATRIX_STATE_LAYER_WAITING;
+             layerIndex <= MATRIX_STATE_LAYER_ERROR;
+             layerIndex++) {
+            clearStoredLayerPixel(state.layers[layerIndex], logicalIndex);
+        }
+    }
+    return true;
+}
+
+bool statusLayerUsesOnlyActivePortZones(
+    const MatrixStateV2 &state,
+    const MatrixStateStoredLayer &layer,
+    size_t ledCount) {
+    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+        if (!storedLayerHasPixel(layer, logicalIndex)) continue;
+        const uint8_t zoneId = state.zoneMap[logicalIndex];
+        if (!zone_is_port(zoneId) ||
+            zoneId - ZONE_ID_PORT1 >= state.activePortCount) {
+            return false;
         }
     }
     return true;
@@ -727,9 +764,7 @@ bool parseZoneMapPayload(const String &body, MatrixStateV2 &state) {
 bool parseStoredLayerPayload(
     const String &payload,
     const MatrixStateV2 &state,
-    MatrixStateStoredLayer &layer,
-    uint8_t firstColor[3],
-    bool &hasFirstColor) {
+    MatrixStateStoredLayer &layer) {
     size_t ledCount = 0;
     if (!activeLedCountForState(state, ledCount)) return false;
 
@@ -741,7 +776,6 @@ bool parseStoredLayerPayload(
     }
 
     memset(&layer, 0, sizeof(layer));
-    hasFirstColor = false;
     size_t entryCount = 0;
     int position = 1;
     skipJsonWhitespace(body, position);
@@ -776,15 +810,124 @@ bool parseStoredLayerPayload(
         parseHexColor(colorText, parsedColor);
         layer.present[logicalIndex / 8U] |= bit;
         memcpy(&layer.rgb[logicalIndex * 3U], parsedColor, sizeof(parsedColor));
-        if (!hasFirstColor) {
-            memcpy(firstColor, parsedColor, sizeof(parsedColor));
-            hasFirstColor = true;
-        }
         entryCount++;
 
         skipJsonWhitespace(body, position);
         if (position == body.length() - 1) return true;
         if (body[position] != ',') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() - 1) return false;
+    }
+    return false;
+}
+
+bool parseStatusJsonString(
+    const String &body,
+    int &position,
+    String &value) {
+    if (position >= body.length() || body[position] != '"') return false;
+    const int valueStart = ++position;
+    while (position < body.length()) {
+        const unsigned char current = (unsigned char)body[position];
+        if (current == '"') {
+            value = body.substring(valueStart, position);
+            position++;
+            return true;
+        }
+        if (current == '\\' || current < 0x20U) return false;
+        position++;
+    }
+    return false;
+}
+
+bool parseStatusJsonObject(
+    const String &body,
+    int &position,
+    String &value) {
+    if (position >= body.length() || body[position] != '{') return false;
+    const int objectStart = position;
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+
+    while (position < body.length()) {
+        const unsigned char current = (unsigned char)body[position];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (current == '\\') escaped = true;
+            else if (current == '"') inString = false;
+            else if (current < 0x20U) return false;
+        } else if (current == '"') {
+            inString = true;
+        } else if (current == '{') {
+            depth++;
+        } else if (current == '}') {
+            depth--;
+            if (depth == 0) {
+                position++;
+                value = body.substring(objectStart, position);
+                return true;
+            }
+            if (depth < 0) return false;
+        }
+        position++;
+    }
+    return false;
+}
+
+bool parseStatusSavePayload(
+    const String &body,
+    String &status,
+    String &colorsJson,
+    bool &hasBaseColor,
+    String &baseColor) {
+    if (body.length() < 2 || body[0] != '{' ||
+        body[body.length() - 1] != '}') {
+        return false;
+    }
+
+    bool statusSeen = false;
+    bool colorsSeen = false;
+    hasBaseColor = false;
+    int position = 1;
+    skipJsonWhitespace(body, position);
+    if (position == body.length() - 1) return false;
+
+    while (position < body.length() - 1) {
+        String fieldName;
+        if (!parseStatusJsonString(body, position, fieldName)) return false;
+        skipJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] != ':') return false;
+        position++;
+        skipJsonWhitespace(body, position);
+
+        if (fieldName == "status") {
+            if (statusSeen || !parseStatusJsonString(body, position, status)) {
+                return false;
+            }
+            statusSeen = true;
+        } else if (fieldName == "baseColor") {
+            if (hasBaseColor ||
+                !parseStatusJsonString(body, position, baseColor)) {
+                return false;
+            }
+            hasBaseColor = true;
+        } else if (fieldName == "colors") {
+            if (colorsSeen ||
+                !parseStatusJsonObject(body, position, colorsJson)) {
+                return false;
+            }
+            colorsSeen = true;
+        } else {
+            return false;
+        }
+
+        skipJsonWhitespace(body, position);
+        if (position == body.length() - 1) {
+            return statusSeen && colorsSeen;
+        }
+        if (position >= body.length() || body[position] != ',') return false;
         position++;
         skipJsonWhitespace(body, position);
         if (position >= body.length() - 1) return false;
@@ -1026,6 +1169,7 @@ void handleSaveZones() {
     String body = server.arg("plain");
     body.trim();
     if (!snapshotMatrixState()) return;
+    memcpy(previousZoneMap, matrixStateCandidate.zoneMap, sizeof(previousZoneMap));
     if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
         server.send(500, "text/plain", "SAVE_FAILED");
         return;
@@ -1041,6 +1185,11 @@ void handleSaveZones() {
     }
 
     if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+    if (!clearStatusPixelsForChangedZones(
+            matrixStateCandidate, previousZoneMap)) {
         server.send(500, "text/plain", "SAVE_FAILED");
         return;
     }
@@ -1118,15 +1267,23 @@ void handleSaveStatusColors() {
         return;
     }
 
-    String status;
-    if (!canonicalStatusName(extractJsonStringField(body, "status"), status)) {
-        server.send(400, "text/plain", "BAD_STATUS");
+    String requestedStatus;
+    String colorsJson;
+    String baseColorText;
+    bool hasBaseColor = false;
+    if (!parseStatusSavePayload(
+            body,
+            requestedStatus,
+            colorsJson,
+            hasBaseColor,
+            baseColorText)) {
+        server.send(400, "text/plain", "BAD_JSON");
         return;
     }
 
-    String colorsJson;
-    if (!extractJsonObjectField(body, "colors", colorsJson)) {
-        server.send(400, "text/plain", "BAD_LAYER");
+    String status;
+    if (!canonicalStatusName(requestedStatus, status)) {
+        server.send(400, "text/plain", "BAD_STATUS");
         return;
     }
 
@@ -1140,18 +1297,37 @@ void handleSaveStatusColors() {
         fallbackColor = matrixStateCandidate.errorColor;
     }
 
-    uint8_t firstColor[3] = {};
-    bool hasFirstColor = false;
+    uint8_t factoryColor[3] = {};
+    if (!matrix_state_storage_get_factory_status_color(
+            layerIndex, factoryColor)) {
+        server.send(500, "text/plain", "STATE_INVALID");
+        return;
+    }
+    if (hasBaseColor) {
+        uint8_t parsedBaseColor[3] = {};
+        if (!isValidHexColor(baseColorText)) {
+            server.send(400, "text/plain", "BAD_BASE_COLOR");
+            return;
+        }
+        parseHexColor(baseColorText, parsedBaseColor);
+        if (memcmp(parsedBaseColor, factoryColor, sizeof(factoryColor)) != 0) {
+            server.send(400, "text/plain", "BAD_BASE_COLOR");
+            return;
+        }
+    }
+
     if (!parseStoredLayerPayload(
             colorsJson,
             matrixStateCandidate,
+            matrixStateCandidate.layers[layerIndex]) ||
+        !statusLayerUsesOnlyActivePortZones(
+            matrixStateCandidate,
             matrixStateCandidate.layers[layerIndex],
-            firstColor,
-            hasFirstColor)) {
+            ledCount)) {
         server.send(400, "text/plain", "BAD_LAYER");
         return;
     }
-    if (hasFirstColor) memcpy(fallbackColor, firstColor, sizeof(firstColor));
+    memcpy(fallbackColor, factoryColor, sizeof(factoryColor));
 
     if (!saveAndApplyMatrixState("SAVE_LAYER_FAILED")) return;
     server.send(200, "text/plain", "OK");
@@ -1234,15 +1410,11 @@ void handleSaveFreeZone() {
     const bool hasCustomLayer = jsonHasField(body, "customLayer");
     if (hasCustomLayer) {
         String customLayer;
-        uint8_t ignoredFirstColor[3] = {};
-        bool ignoredHasFirstColor = false;
         if (!extractJsonObjectField(body, "customLayer", customLayer) ||
             !parseStoredLayerPayload(
                 customLayer,
                 matrixStateCandidate,
-                matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex],
-                ignoredFirstColor,
-                ignoredHasFirstColor)) {
+                matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex])) {
             server.send(400, "text/plain", "BAD_LAYER");
             return;
         }

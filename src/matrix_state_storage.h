@@ -134,6 +134,12 @@ static_assert(std::is_trivially_copyable<MatrixStateV2>::value,
 
 void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state);
 
+// Copies the immutable factory fallback for waiting, charging or error into
+// color. Returns false for a non-status layer index.
+bool matrix_state_storage_get_factory_status_color(
+    size_t layerIndex,
+    uint8_t color[3]);
+
 // Replaces only geometry-dependent data. On failure state is unchanged. This
 // uses the module scratch buffer and must be serialized with load/save calls.
 bool matrix_state_storage_reset_spatial_data(

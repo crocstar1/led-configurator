@@ -899,10 +899,28 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="grid-2">
                         <div>
-                            <label for="status_color">Цвет кисти</label>
-                            <input type="color" id="status_color" value="#0055ff">
+                            <label for="status_scope_select">Область</label>
+                            <select id="status_scope_select"></select>
                         </div>
-                        <div class="notice">Слой выбранного статуса общий для всех портов. Цвет наносится по пикселям.</div>
+                        <div>
+                            <label for="status_mode_select">Способ настройки</label>
+                            <select id="status_mode_select">
+                                <option value="solid">Сплошной цвет</option>
+                                <option value="pixels" selected>Пиксельный рисунок</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div>
+                            <label for="status_color" id="status_color_label">Цвет кисти</label>
+                            <input type="color" id="status_color" value="#00ff00">
+                        </div>
+                        <div class="notice" id="status_mode_notice"></div>
+                    </div>
+                    <div class="status-line" id="status_editor_context"></div>
+                    <div class="btn-row">
+                        <button class="btn primary field-hidden" id="apply_status_solid_btn" type="button">Залить выбранную область</button>
+                        <button class="btn danger" id="clear_status_btn" type="button">Сбросить ожидание всех портов</button>
                     </div>
                     <div>
                         <label for="ports_brightness">Общая яркость портовых зон</label>
@@ -914,9 +932,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
-                        <button class="btn danger" id="clear_status_btn">Очистить слой статуса</button>
                     </div>
-                    <div class="hint">Сохраняет слой выбранного статуса.</div>
+                    <div class="hint">Сохраняется полный координатный слой только выбранного статуса. После сохранения пиксели без собственного цвета используют заводской базовый цвет.</div>
                 </div>
             </section>
 
@@ -1175,12 +1192,13 @@ const zoneColors = {
     '8': '#af52de',
 };
 
-const MOCK_STATUS_DEFAULTS = {
-    waiting: '#34c759',
-    charging: '#0055ff',
-    error: '#ff3b30',
+const FACTORY_STATUS_COLORS = {
+    waiting: '#00ff00',
+    charging: '#0050ff',
+    error: '#ff0000',
 };
-let statusDefaults = { ...MOCK_STATUS_DEFAULTS };
+let statusDefaults = { ...FACTORY_STATUS_COLORS };
+let statusBrushColors = { ...FACTORY_STATUS_COLORS };
 
 const STATUS_LABELS = {
     waiting: 'ожидание',
@@ -1188,6 +1206,17 @@ const STATUS_LABELS = {
     error: 'ошибка',
     disabled: 'отключён',
     unknown: 'неизвестно',
+};
+
+const STATUS_RESET_LABELS = {
+    waiting: 'ожидание',
+    charging: 'зарядку',
+    error: 'ошибку',
+};
+
+const STATUS_EDIT_MODE_LABELS = {
+    solid: 'сплошной цвет',
+    pixels: 'пиксельный рисунок',
 };
 
 const TYPE_LABELS = {
@@ -1235,12 +1264,15 @@ let activeTab = 'zones';
 let activeServiceSection = 'network';
 let activeZoneId = '1';
 let activeStatus = 'waiting';
+let activeStatusScope = 'all';
+let statusEditMode = 'pixels';
 let activeFreeZone = '5';
 let zoneTool = 'brush';
 let zoneViewMode = 'edit';
 let freeViewMode = 'edit';
 let drawing = false;
 let hardwareZonesMap = {};
+let savedHardwareZonesMap = {};
 let zoneMeta = [...DEFAULT_ZONES];
 let statusColorLayers = { waiting: {}, charging: {}, error: {} };
 let freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
@@ -1274,6 +1306,8 @@ let hardwareRestartInProgress = false;
 let hardwareRestartPollToken = 0;
 let zoneMapDirty = false;
 let zoneMapSaveInProgress = false;
+let uncertainZoneMapSubmission = null;
+let statusSaveInProgress = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
 let portsBrightnessValue = 120;
@@ -1368,9 +1402,9 @@ function buildMockConfig() {
     const mockActivePortCount = 2;
     return {
         b_ports: 120,
-        c_wait: '#34c759',
-        c_charge: '#0055ff',
-        c_error: '#ff3b30',
+        c_wait: FACTORY_STATUS_COLORS.waiting,
+        c_charge: FACTORY_STATUS_COLORS.charging,
+        c_error: FACTORY_STATUS_COLORS.error,
         activePortCount: mockActivePortCount,
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
         hardware: {
@@ -1513,6 +1547,59 @@ function sanitizeLayerForSize(layer) {
         }
     });
     return clean;
+}
+
+function isActivePortZoneId(zoneId) {
+    const portNumber = Number(zoneId);
+    return Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= activePortCount;
+}
+
+function statusScopeMatchesZone(zoneId, scope = activeStatusScope) {
+    if (!isActivePortZoneId(zoneId)) return false;
+    return scope === 'all' || String(zoneId) === String(scope);
+}
+
+function sanitizeStatusLayerForPortZones(layer) {
+    const clean = sanitizeLayerForSize(layer);
+    Object.keys(clean).forEach(key => {
+        if (!isActivePortZoneId(hardwareZonesMap[key] ?? '0')) delete clean[key];
+    });
+    return clean;
+}
+
+function clearLocalStatusPixelsForChangedZones(oldMap, newMap) {
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const key = `${x}-${y}`;
+            if (String(oldMap?.[key] ?? '0') === String(newMap?.[key] ?? '0')) continue;
+            delete statusColorLayers.waiting[key];
+            delete statusColorLayers.charging[key];
+            delete statusColorLayers.error[key];
+        }
+    }
+}
+
+function markStatusLayerDirty(status = activeStatus) {
+    statusDefaults[status] = FACTORY_STATUS_COLORS[status];
+    statusLayerDirty[status] = true;
+}
+
+function statusScopeLabel(scope = activeStatusScope) {
+    return scope === 'all' ? 'все активные порты' : `Порт ${scope}`;
+}
+
+function zoneMapsEqual(left, right) {
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const key = `${x}-${y}`;
+            if (String(left?.[key] ?? '0') !== String(right?.[key] ?? '0')) return false;
+        }
+    }
+    return true;
+}
+
+function statusEditModeLabel(mode = statusEditMode) {
+    return STATUS_EDIT_MODE_LABELS[mode] || mode;
 }
 
 function sanitizeFreeLayerForZone(layer, zoneId) {
@@ -1731,8 +1818,43 @@ function setHardwareConfigMessage(text, isError = false) {
     line.classList.toggle('warning', Boolean(text) && isError);
 }
 
+function updateStatusEditorControls() {
+    const blocked = matrixSavesBlockedByHardwareTransition();
+    const solidMode = statusEditMode === 'solid';
+    const scopeSelect = document.getElementById('status_scope_select');
+    const modeSelect = document.getElementById('status_mode_select');
+    const colorInput = document.getElementById('status_color');
+    const applyButton = document.getElementById('apply_status_solid_btn');
+    const clearButton = document.getElementById('clear_status_btn');
+    const context = document.getElementById('status_editor_context');
+    const notice = document.getElementById('status_mode_notice');
+
+    scopeSelect.disabled = blocked;
+    modeSelect.disabled = blocked;
+    colorInput.disabled = blocked;
+    applyButton.disabled = blocked;
+    clearButton.disabled = blocked;
+    applyButton.classList.toggle('field-hidden', !solidMode);
+    clearButton.classList.toggle('field-hidden', solidMode);
+    document.getElementById('status_color_label').textContent =
+        solidMode ? 'Цвет заливки' : 'Цвет кисти';
+    clearButton.textContent = `Сбросить ${STATUS_RESET_LABELS[activeStatus]} ${
+        activeStatusScope === 'all' ? 'всех активных портов' : `Порта ${activeStatusScope}`
+    }`;
+    notice.textContent = solidMode
+        ? `Кнопка заливки изменит координаты области «${statusScopeLabel()}» только в выбранном статусе.`
+        : `Рисование разрешено только в области «${statusScopeLabel()}». Остальные пиксели портов заблокированы.`;
+    context.textContent = `${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${
+        statusEditModeLabel()
+    } · ${statusLayerDirty[activeStatus] ? 'есть несохранённые изменения' : 'изменения сохранены'}`;
+    document.querySelectorAll('[data-status]').forEach(button => {
+        button.disabled = blocked;
+    });
+}
+
 function matrixSavesBlockedByHardwareTransition() {
-    return hardwareConfigSaveInProgress || hardwareRestartInProgress || zoneMapSaveInProgress;
+    return hardwareConfigSaveInProgress || hardwareRestartInProgress ||
+        zoneMapSaveInProgress || statusSaveInProgress;
 }
 
 function hasPendingMatrixChanges(includeTopology = true) {
@@ -1759,6 +1881,10 @@ function updateMatrixSaveControls() {
         'save_topology_btn',
         'save_zones_btn',
         'save_status_btn',
+        'status_scope_select',
+        'status_mode_select',
+        'status_color',
+        'apply_status_solid_btn',
         'clear_zone_btn',
         'clear_all_zones_btn',
         'clear_status_btn',
@@ -1776,6 +1902,7 @@ function updateMatrixSaveControls() {
     updateFreeModeControls();
     updateZoneViewControls();
     updateFreeViewControls();
+    updateStatusEditorControls();
 }
 
 function applyConfig(cfg) {
@@ -1797,6 +1924,8 @@ function applyConfig(cfg) {
     updateMatrixSaveControls();
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
+    savedHardwareZonesMap = { ...hardwareZonesMap };
+    uncertainZoneMapSubmission = null;
     if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
     portsBrightnessSaveTimer = null;
     Object.values(freeBrightnessSaveTimers).forEach(timer => clearTimeout(timer));
@@ -1808,15 +1937,16 @@ function applyConfig(cfg) {
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
     portsBrightnessDirty = false;
     freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
-    statusColorLayers.waiting = sanitizeLayerForSize(cfg.layers?.wait || {});
-    statusColorLayers.charging = sanitizeLayerForSize(cfg.layers?.charge || {});
-    statusColorLayers.error = sanitizeLayerForSize(cfg.layers?.err || {});
+    statusColorLayers.waiting = sanitizeStatusLayerForPortZones(cfg.layers?.wait || {});
+    statusColorLayers.charging = sanitizeStatusLayerForPortZones(cfg.layers?.charge || {});
+    statusColorLayers.error = sanitizeStatusLayerForPortZones(cfg.layers?.err || {});
     statusDefaults = {
-        waiting: configHexColor(cfg.c_wait, MOCK_STATUS_DEFAULTS.waiting),
-        charging: configHexColor(cfg.c_charge, MOCK_STATUS_DEFAULTS.charging),
-        error: configHexColor(cfg.c_error, MOCK_STATUS_DEFAULTS.error),
+        waiting: configHexColor(cfg.c_wait, FACTORY_STATUS_COLORS.waiting),
+        charging: configHexColor(cfg.c_charge, FACTORY_STATUS_COLORS.charging),
+        error: configHexColor(cfg.c_error, FACTORY_STATUS_COLORS.error),
     };
-    document.getElementById('status_color').value = statusDefaults[activeStatus];
+    statusBrushColors = { ...statusDefaults };
+    document.getElementById('status_color').value = statusBrushColors[activeStatus];
     Object.keys(freeCustomLayers).forEach(zoneId => {
         freeCustomLayers[zoneId] = sanitizeLayerForSize(freeCustomLayers[zoneId]);
     });
@@ -2076,6 +2206,29 @@ function buildMatrix() {
     renderTopologyControls();
 }
 
+function buildStatusScopeOptions() {
+    const scopeSelect = document.getElementById('status_scope_select');
+    const activeCount = clampActivePortCount(activePortCount);
+    if (activeStatusScope !== 'all' &&
+        (!/^\d+$/.test(activeStatusScope) || Number(activeStatusScope) > activeCount)) {
+        activeStatusScope = 'all';
+    }
+
+    scopeSelect.innerHTML = '';
+    const allPorts = document.createElement('option');
+    allPorts.value = 'all';
+    allPorts.textContent = 'Все активные порты';
+    scopeSelect.appendChild(allPorts);
+    for (let port = 1; port <= activeCount; port++) {
+        const option = document.createElement('option');
+        option.value = String(port);
+        option.textContent = `Порт ${port}`;
+        scopeSelect.appendChild(option);
+    }
+    scopeSelect.value = activeStatusScope;
+    document.getElementById('status_mode_select').value = statusEditMode;
+}
+
 function buildSelects() {
     const zoneSelect = document.getElementById('zone_select');
     const freeZoneSelect = document.getElementById('free_zone_select');
@@ -2106,12 +2259,14 @@ function buildSelects() {
     });
 
     zoneSelect.value = activeZoneId;
+    buildStatusScopeOptions();
     if (!activeFreeZoneStillSelectable && firstMappedFreeZone !== null) {
         activeFreeZone = firstMappedFreeZone;
     }
     freeZoneSelect.value = activeFreeZone;
     document.getElementById('free_mode_select').value = freeModes[activeFreeZone] || 'static';
     syncFreeColorInput();
+    updateStatusEditorControls();
 }
 
 function buildLegend() {
@@ -2185,7 +2340,8 @@ function shouldLockPixel(zoneId) {
         return !(zoneId === '0' || zoneId === activeZoneId);
     }
     if (activeTab === 'status') {
-        return !isEditablePortZone(zoneId);
+        if (!isEditablePortZone(zoneId) || statusEditMode !== 'pixels') return true;
+        return !statusScopeMatchesZone(zoneId);
     }
     if (activeTab === 'free') {
         if (freeViewMode === 'overview') return false;
@@ -2209,7 +2365,7 @@ function redrawMatrix() {
                 ? `${matrixSize} · Обзор зон`
                 : `${matrixSize} · ${zoneDisplayName(activeZoneId)} · ${zoneTool === 'erase' ? 'Ластик' : 'Кисть'}`)
             : activeTab === 'status'
-                ? `${matrixSize} · Статус: ${statusLabel(activeStatus)}`
+                ? `${matrixSize} · ${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${statusEditModeLabel()}`
                 : (freeViewMode === 'overview'
                     ? `${matrixSize} · Обзор свободных зон`
                     : `${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
@@ -2221,7 +2377,7 @@ function redrawMatrix() {
         p.classList.toggle('off-zone', zoneId === '0');
         p.classList.toggle('active-zone',
             (activeTab === 'zones' && zoneViewMode === 'edit' && zoneId === activeZoneId) ||
-            (activeTab === 'status' && isEditablePortZone(zoneId)) ||
+            (activeTab === 'status' && statusScopeMatchesZone(zoneId)) ||
             (activeTab === 'free' && freeViewMode === 'edit' && zoneId === activeFreeZone));
         p.classList.toggle('locked', shouldLockPixel(zoneId));
 
@@ -2276,10 +2432,10 @@ function paintPixel(pixel) {
             }
         }
     } else if (activeTab === 'status') {
-        if (!isEditablePortZone(currentZone)) return;
+        if (statusEditMode !== 'pixels' || !statusScopeMatchesZone(currentZone)) return;
         const color = document.getElementById('status_color').value;
         statusColorLayers[activeStatus][key] = color;
-        statusLayerDirty[activeStatus] = true;
+        markStatusLayerDirty();
     } else if (activeTab === 'free') {
         if (freeViewMode !== 'edit') return;
         if (currentZone !== activeFreeZone || freeModes[activeFreeZone] !== 'custom') return;
@@ -2415,7 +2571,60 @@ document.getElementById('free_color').addEventListener('input', e => {
     }
     redrawMatrix();
 });
-document.getElementById('status_color').addEventListener('input', redrawMatrix);
+
+function applyStatusSolidColor() {
+    if (matrixSavesBlockedByHardwareTransition() || statusEditMode !== 'solid') return;
+    const color = document.getElementById('status_color').value;
+    let targetCount = 0;
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            const key = `${x}-${y}`;
+            if (!statusScopeMatchesZone(hardwareZonesMap[key] ?? '0')) continue;
+            statusColorLayers[activeStatus][key] = color;
+            targetCount += 1;
+        }
+    }
+    if (targetCount === 0) return;
+    markStatusLayerDirty();
+    redrawMatrix();
+}
+
+function resetSelectedStatusScope() {
+    if (matrixSavesBlockedByHardwareTransition() || statusEditMode !== 'pixels') return;
+    if (activeStatusScope === 'all' &&
+        !confirm(`Сбросить ${STATUS_RESET_LABELS[activeStatus]} всех активных портов к заводскому базовому цвету?`)) {
+        return;
+    }
+
+    if (activeStatusScope === 'all') {
+        statusColorLayers[activeStatus] = {};
+    } else {
+        Object.keys(statusColorLayers[activeStatus]).forEach(key => {
+            if (statusScopeMatchesZone(hardwareZonesMap[key] ?? '0')) {
+                delete statusColorLayers[activeStatus][key];
+            }
+        });
+    }
+    markStatusLayerDirty();
+    redrawMatrix();
+    alert('Выбранная область сброшена только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.');
+}
+
+document.getElementById('status_color').addEventListener('input', e => {
+    statusBrushColors[activeStatus] = e.target.value;
+    redrawMatrix();
+});
+document.getElementById('status_scope_select').addEventListener('change', e => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
+    activeStatusScope = e.target.value;
+    redrawMatrix();
+});
+document.getElementById('status_mode_select').addEventListener('change', e => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
+    statusEditMode = e.target.value === 'solid' ? 'solid' : 'pixels';
+    redrawMatrix();
+});
+document.getElementById('apply_status_solid_btn').addEventListener('click', applyStatusSolidColor);
 
 document.getElementById('zone_brush_btn').addEventListener('click', () => {
     zoneTool = 'brush';
@@ -2441,9 +2650,10 @@ document.getElementById('free_erase_btn').addEventListener('click', () => {
 
 document.querySelectorAll('[data-status]').forEach(btn => {
     btn.addEventListener('click', () => {
+        if (matrixSavesBlockedByHardwareTransition()) return;
         activeStatus = btn.dataset.status;
         document.querySelectorAll('[data-status]').forEach(b => b.classList.toggle('active', b === btn));
-        document.getElementById('status_color').value = statusDefaults[activeStatus];
+        document.getElementById('status_color').value = statusBrushColors[activeStatus];
         redrawMatrix();
     });
 });
@@ -2713,6 +2923,11 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         alert(validationError);
         return;
     }
+    if (uncertainZoneMapSubmission &&
+        !zoneMapsEqual(hardwareZonesMap, uncertainZoneMapSubmission)) {
+        alert('Результат предыдущего сохранения зон неизвестен. Перезагрузите страницу для сверки с контроллером перед сохранением другой разметки.');
+        return;
+    }
 
     if (!backendAvailable) {
         alert('Контроллер недоступен: зоны изменены только в браузере.');
@@ -2722,6 +2937,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         !confirm('Новая разметка удалит части рисунков свободных зон, которые больше не входят в эти зоны. Продолжить?')) {
         return;
     }
+    const submittedZoneMap = { ...hardwareZonesMap };
 
     zoneMapSaveInProgress = true;
     updateMatrixSaveControls();
@@ -2732,24 +2948,34 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         const res = await fetch('/save_zones', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(hardwareZonesMap),
+            body: JSON.stringify(submittedZoneMap),
             signal: saveController.signal,
         });
         const text = await res.text();
+        const resultUncertain = res.status >= 500;
         alert(text === 'OK'
             ? 'Зоны сохранены в памяти контроллера.'
             : text === 'ACTIVE_PORT_ZONE_EMPTY'
                 ? (validateActivePortZones() || 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.')
-                : 'Не удалось сохранить зоны.');
+                : resultUncertain
+                    ? 'Результат сохранения зон неизвестен. Не изменяйте разметку: повторите сохранение этой же карты или перезагрузите страницу для сверки.'
+                    : 'Не удалось сохранить зоны.');
         if (res.ok && text === 'OK') {
+            clearLocalStatusPixelsForChangedZones(savedHardwareZonesMap, submittedZoneMap);
+            hardwareZonesMap = { ...submittedZoneMap };
+            savedHardwareZonesMap = { ...submittedZoneMap };
+            uncertainZoneMapSubmission = null;
             zoneMapDirty = false;
             Object.keys(freeCustomLayers).forEach(zoneId => {
                 freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(freeCustomLayers[zoneId], zoneId);
             });
             zonesSaved = true;
+        } else if (resultUncertain) {
+            uncertainZoneMapSubmission = { ...submittedZoneMap };
         }
     } catch (err) {
-        alert('Не удалось подтвердить сохранение зон. Разметка оставлена как несохранённая; повторите сохранение или перезагрузите страницу для сверки.');
+        uncertainZoneMapSubmission = { ...submittedZoneMap };
+        alert('Не удалось подтвердить сохранение зон. Не изменяйте разметку: повторите сохранение этой же карты или перезагрузите страницу для сверки.');
     } finally {
         clearTimeout(saveTimeout);
         zoneMapSaveInProgress = false;
@@ -2812,35 +3038,56 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
         return;
     }
 
+    const submittedStatus = activeStatus;
+    const submittedColors = sanitizeStatusLayerForPortZones(
+        statusColorLayers[submittedStatus]
+    );
+    const payload = JSON.stringify({
+        status: submittedStatus,
+        baseColor: FACTORY_STATUS_COLORS[submittedStatus],
+        colors: submittedColors,
+    });
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
+    let saved = false;
+    let resultMessage = '';
+    statusSaveInProgress = true;
+    updateMatrixSaveControls();
     try {
         const res = await fetch('/save_status_colors', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: activeStatus, colors: statusColorLayers[activeStatus] })
+            body: payload,
+            signal: saveController.signal,
         });
         const responseText = await res.text();
         const ok = res.ok && responseText === 'OK';
         if (ok) {
-            const firstSavedColor = Object.values(statusColorLayers[activeStatus])
-                .find(color => typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color));
-            if (firstSavedColor) statusDefaults[activeStatus] = firstSavedColor;
-            statusLayerDirty[activeStatus] = false;
-            updateDirtyIndicators();
-            updateEditState();
+            statusColorLayers[submittedStatus] = submittedColors;
+            statusDefaults[submittedStatus] = FACTORY_STATUS_COLORS[submittedStatus];
+            statusLayerDirty[submittedStatus] = false;
+            saved = true;
+        } else {
+            statusLayerDirty[submittedStatus] = true;
         }
-        alert(ok ? 'Слой статуса сохранён.' : 'Не удалось сохранить слой статуса.');
+        resultMessage = ok ? 'Слой статуса сохранён.' : 'Не удалось сохранить слой статуса.';
     } catch (err) {
-        alert('Контроллер недоступен: слой статуса изменён только в браузере.');
+        statusLayerDirty[submittedStatus] = true;
+        resultMessage = 'Не удалось подтвердить сохранение слоя статуса. Изменения оставлены как несохранённые.';
+    } finally {
+        clearTimeout(saveTimeout);
+        statusSaveInProgress = false;
+        updateMatrixSaveControls();
     }
+    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    if (!zoneMapDirty) flushPendingFreeZoneBrightness();
+    updateDirtyIndicators();
+    updateEditState();
+    if (saved) redrawMatrix();
+    alert(resultMessage);
 });
 
-document.getElementById('clear_status_btn').addEventListener('click', () => {
-    if (matrixSavesBlockedByHardwareTransition()) return;
-    statusColorLayers[activeStatus] = {};
-    statusLayerDirty[activeStatus] = true;
-    redrawMatrix();
-    alert('Слой очищен только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.');
-});
+document.getElementById('clear_status_btn').addEventListener('click', resetSelectedStatusScope);
 
 function updatePortsBrightness(value) {
     const safe = setBrightnessPair('ports_brightness', 'ports_brightness_input', value);

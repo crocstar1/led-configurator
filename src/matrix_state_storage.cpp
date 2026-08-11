@@ -15,9 +15,18 @@ static constexpr char MATRIX_NVS_KEY[] = "state_v2";
 static constexpr uint8_t TOPOLOGY_MAX = 3;
 static constexpr uint8_t DEFAULT_PORT_BRIGHTNESS = 120;
 static constexpr uint8_t DEFAULT_FREE_ZONE_BRIGHTNESS = 100;
+static constexpr uint8_t FACTORY_STATUS_COLORS[3][3] = {
+    {0, 255, 0},
+    {0, 80, 255},
+    {255, 0, 0},
+};
 
 static_assert(MATRIX_STATE_LAYER_COUNT == 7,
               "The stored layer order must contain seven layers");
+static_assert(MATRIX_STATE_LAYER_WAITING == 0 &&
+                  MATRIX_STATE_LAYER_CHARGING == 1 &&
+                  MATRIX_STATE_LAYER_ERROR == 2,
+              "Factory status colors depend on the status-layer order");
 
 // One reusable buffer keeps the 11.5 KiB image off task stacks. The module is
 // deliberately synchronous and non-reentrant.
@@ -206,6 +215,16 @@ void setPortZoneMap(MatrixStateV2 &state, size_t activeLedCount) {
 
 }  // namespace
 
+bool matrix_state_storage_get_factory_status_color(
+    size_t layerIndex,
+    uint8_t color[3]) {
+  if (color == nullptr || layerIndex > MATRIX_STATE_LAYER_ERROR) {
+    return false;
+  }
+  memcpy(color, FACTORY_STATUS_COLORS[layerIndex], 3U);
+  return true;
+}
+
 void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
   memset(&state, 0, sizeof(state));
 
@@ -221,15 +240,15 @@ void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
   state.ledProtocol = static_cast<uint8_t>(hardware.ledProtocol);
   state.colorOrder = static_cast<uint8_t>(hardware.colorOrder);
 
-  state.waitingColor[0] = 0;
-  state.waitingColor[1] = 255;
-  state.waitingColor[2] = 0;
-  state.chargingColor[0] = 0;
-  state.chargingColor[1] = 80;
-  state.chargingColor[2] = 255;
-  state.errorColor[0] = 255;
-  state.errorColor[1] = 0;
-  state.errorColor[2] = 0;
+  memcpy(state.waitingColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_WAITING],
+         sizeof(state.waitingColor));
+  memcpy(state.chargingColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_CHARGING],
+         sizeof(state.chargingColor));
+  memcpy(state.errorColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_ERROR],
+         sizeof(state.errorColor));
 
   setFreeZoneDefaults(state);
 
