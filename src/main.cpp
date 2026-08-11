@@ -438,6 +438,29 @@ bool activeLedCountForState(const MatrixStateV2 &state, size_t &ledCount) {
     return ledCount > 0 && ledCount <= MAX_LED_COUNT;
 }
 
+bool pruneFreeCustomLayersForZoneMap(MatrixStateV2 &state) {
+    size_t ledCount = 0;
+    if (!activeLedCountForState(state, ledCount)) return false;
+
+    for (size_t zoneIndex = 0; zoneIndex < FREE_ZONE_COUNT; zoneIndex++) {
+        const uint8_t zoneId = FREE_ZONE_IDS[zoneIndex];
+        MatrixStateStoredLayer &layer =
+            state.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
+
+        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
+            if (state.zoneMap[logicalIndex] == zoneId) continue;
+
+            const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
+            layer.present[logicalIndex / 8U] &= (uint8_t)~bit;
+            const size_t rgbOffset = logicalIndex * 3U;
+            layer.rgb[rgbOffset] = 0;
+            layer.rgb[rgbOffset + 1U] = 0;
+            layer.rgb[rgbOffset + 2U] = 0;
+        }
+    }
+    return true;
+}
+
 bool zoneMapHasRequiredActivePortZones(const MatrixStateV2 &state) {
     size_t ledCount = 0;
     if (!activeLedCountForState(state, ledCount) ||
@@ -1003,6 +1026,10 @@ void handleSaveZones() {
     String body = server.arg("plain");
     body.trim();
     if (!snapshotMatrixState()) return;
+    if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
+        server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
     if (!parseZoneMapPayload(body, matrixStateCandidate)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
@@ -1010,6 +1037,11 @@ void handleSaveZones() {
 
     if (!zoneMapHasRequiredActivePortZones(matrixStateCandidate)) {
         server.send(400, "text/plain", "ACTIVE_PORT_ZONE_EMPTY");
+        return;
+    }
+
+    if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
+        server.send(500, "text/plain", "SAVE_FAILED");
         return;
     }
 

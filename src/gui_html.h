@@ -1273,6 +1273,7 @@ let hardwareConfigSaveInProgress = false;
 let hardwareRestartInProgress = false;
 let hardwareRestartPollToken = 0;
 let zoneMapDirty = false;
+let zoneMapSaveInProgress = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
 let portsBrightnessValue = 120;
@@ -1288,6 +1289,7 @@ const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
 const HARDWARE_MAX_LED_COUNT_FALLBACK = 500;
 const HARDWARE_SAVE_REQUEST_TIMEOUT_MS = 10000;
+const MATRIX_SAVE_REQUEST_TIMEOUT_MS = 10000;
 const HARDWARE_RESTART_POLL_MS = 1000;
 const HARDWARE_RESTART_TIMEOUT_MS = 60000;
 const HARDWARE_RESTART_REQUEST_TIMEOUT_MS = 4000;
@@ -1331,10 +1333,13 @@ function zoneOptionLabel(zone) {
 function buildDefaultPortMap(cols = 12, rows = 8, portCount = 2) {
     const map = {};
     const activeCount = clampActivePortCount(portCount);
+    const activeLedCount = cols * rows;
+    if (!Number.isInteger(activeLedCount) || activeLedCount <= 0) return map;
     for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
-            const portIndex = Math.min(activeCount - 1, Math.floor((x * activeCount) / cols));
-            map[`${x}-${y}`] = String(1 + portIndex);
+            const logicalIndex = y * cols + x;
+            const portOffset = Math.floor((logicalIndex * activeCount) / activeLedCount);
+            map[`${x}-${y}`] = String(1 + portOffset);
         }
     }
     return map;
@@ -1516,6 +1521,13 @@ function sanitizeFreeLayerForZone(layer, zoneId) {
         if (String(hardwareZonesMap[key] ?? '0') !== String(zoneId)) delete clean[key];
     });
     return clean;
+}
+
+function freeCustomLayersLosePixelsWithCurrentZoneMap() {
+    return Object.entries(freeCustomLayers).some(([zoneId, layer]) =>
+        Object.keys(layer || {}).some(key =>
+            String(hardwareZonesMap[key] ?? '0') !== String(zoneId))
+    );
 }
 
 function clampBrightnessValue(value, fallback = 100) {
@@ -1720,7 +1732,7 @@ function setHardwareConfigMessage(text, isError = false) {
 }
 
 function matrixSavesBlockedByHardwareTransition() {
-    return hardwareConfigSaveInProgress || hardwareRestartInProgress;
+    return hardwareConfigSaveInProgress || hardwareRestartInProgress || zoneMapSaveInProgress;
 }
 
 function hasPendingMatrixChanges(includeTopology = true) {
@@ -2706,12 +2718,22 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         alert('Контроллер недоступен: зоны изменены только в браузере.');
         return;
     }
+    if (freeCustomLayersLosePixelsWithCurrentZoneMap() &&
+        !confirm('Новая разметка удалит части рисунков свободных зон, которые больше не входят в эти зоны. Продолжить?')) {
+        return;
+    }
 
+    zoneMapSaveInProgress = true;
+    updateMatrixSaveControls();
+    let zonesSaved = false;
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
         const res = await fetch('/save_zones', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(hardwareZonesMap)
+            body: JSON.stringify(hardwareZonesMap),
+            signal: saveController.signal,
         });
         const text = await res.text();
         alert(text === 'OK'
@@ -2724,12 +2746,24 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
             Object.keys(freeCustomLayers).forEach(zoneId => {
                 freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(freeCustomLayers[zoneId], zoneId);
             });
-            updateDirtyIndicators();
-            updateEditState();
-            flushPendingFreeZoneBrightness();
+            zonesSaved = true;
         }
     } catch (err) {
-        alert('Контроллер недоступен: зоны изменены только в браузере.');
+        alert('Не удалось подтвердить сохранение зон. Разметка оставлена как несохранённая; повторите сохранение или перезагрузите страницу для сверки.');
+    } finally {
+        clearTimeout(saveTimeout);
+        zoneMapSaveInProgress = false;
+        updateMatrixSaveControls();
+    }
+    if (portsBrightnessDirty) {
+        schedulePortsBrightnessSave(portsBrightnessValue, true);
+    }
+    if (zonesSaved) {
+        updateDirtyIndicators();
+        updateEditState();
+    }
+    if (!zoneMapDirty) {
+        flushPendingFreeZoneBrightness();
     }
 });
 
