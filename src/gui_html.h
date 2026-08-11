@@ -152,6 +152,12 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             align-items: start;
         }
 
+        .layout > *,
+        .side-stack,
+        .panel {
+            min-width: 0;
+        }
+
         .panel {
             background: var(--panel);
             border: 1px solid var(--line);
@@ -182,6 +188,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
         .matrix-shell {
             overflow: auto;
+            max-width: 100%;
+            box-sizing: border-box;
             padding: 12px;
             border: 1px solid var(--line);
             border-radius: 10px;
@@ -326,9 +334,22 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             max-width: 100%;
         }
 
-        #matrix_settings_block select {
+        #matrix_settings_block select,
+        #matrix_settings_block input[type="number"] {
             min-width: 0;
             max-width: 100%;
+        }
+
+        #matrix_settings_block input[type="number"] {
+            text-align: left;
+            padding-left: 11px;
+            padding-right: 11px;
+            font-size: 13px;
+        }
+
+        .hardware-config-group {
+            display: grid;
+            gap: 10px;
         }
 
         #matrix_settings_block .notice,
@@ -799,6 +820,53 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <details class="advanced-block" id="matrix_settings_block">
                         <summary>Настройки матрицы</summary>
                         <div class="advanced-body">
+                            <div class="hardware-config-group" aria-labelledby="hardware_config_title">
+                                <strong id="hardware_config_title">Аппаратная конфигурация</strong>
+                                <div class="grid-2">
+                                    <div>
+                                        <label for="hardware_cols">Столбцы</label>
+                                        <input id="hardware_cols" type="number" min="1" max="500" step="1" inputmode="numeric">
+                                    </div>
+                                    <div>
+                                        <label for="hardware_rows">Строки</label>
+                                        <input id="hardware_rows" type="number" min="1" max="500" step="1" inputmode="numeric">
+                                    </div>
+                                </div>
+                                <div class="grid-2">
+                                    <div>
+                                        <label for="hardware_active_ports">Активные порты</label>
+                                        <select id="hardware_active_ports">
+                                            <option value="1">1</option>
+                                            <option value="2">2</option>
+                                            <option value="3">3</option>
+                                            <option value="4">4</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label for="hardware_protocol">Тип светодиодов</label>
+                                        <select id="hardware_protocol">
+                                            <option value="ws2811_800k">WS2811 · 800 кГц</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="hardware_color_order">Порядок цветов</label>
+                                    <select id="hardware_color_order">
+                                        <option value="RGB">RGB</option>
+                                        <option value="RBG">RBG</option>
+                                        <option value="GRB">GRB</option>
+                                        <option value="GBR">GBR</option>
+                                        <option value="BRG">BRG</option>
+                                        <option value="BGR">BGR</option>
+                                    </select>
+                                </div>
+                                <div class="notice">Размер или число портов сбрасывают разметку и нарисованные слои. Любое изменение применяется после перезагрузки.</div>
+                                <div class="btn-row">
+                                    <button class="btn primary" id="save_hardware_config_btn" type="button">Сохранить аппаратные настройки</button>
+                                </div>
+                                <div class="status-line" id="hardware_config_message" aria-live="polite"></div>
+                            </div>
+                            <div class="section-divider"></div>
                             <div>
                                 <label for="topology_select">Топология матрицы</label>
                                 <select id="topology_select"></select>
@@ -1187,9 +1255,23 @@ let backendAvailable = false;
 let mockMode = false;
 let serviceOpen = false;
 let diagnosticsRequestInFlight = false;
+let configLoadInProgress = false;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
 let activePortCount = 2;
+let hardwareConfigApplied = {
+    rows: 8,
+    cols: 12,
+    activePortCount: 2,
+    ledProtocol: 'ws2811_800k',
+    colorOrder: 'BRG',
+    maxLedCount: 500,
+};
+let hardwareConfigPending = { ...hardwareConfigApplied };
+let hardwareConfigInitialized = false;
+let hardwareConfigSaveInProgress = false;
+let hardwareRestartInProgress = false;
+let hardwareRestartPollToken = 0;
 let zoneMapDirty = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
@@ -1204,6 +1286,13 @@ let networkScanInFlight = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
+const HARDWARE_MAX_LED_COUNT_FALLBACK = 500;
+const HARDWARE_SAVE_REQUEST_TIMEOUT_MS = 10000;
+const HARDWARE_RESTART_POLL_MS = 1000;
+const HARDWARE_RESTART_TIMEOUT_MS = 60000;
+const HARDWARE_RESTART_REQUEST_TIMEOUT_MS = 4000;
+const HARDWARE_SUPPORTED_PROTOCOL = 'ws2811_800k';
+const HARDWARE_COLOR_ORDERS = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'];
 const NETWORK_SCAN_POLL_MS = 500;
 const NETWORK_SCAN_UI_TIMEOUT_MS = 14000;
 
@@ -1279,6 +1368,14 @@ function buildMockConfig() {
         c_error: '#ff3b30',
         activePortCount: mockActivePortCount,
         matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
+        hardware: {
+            rows: 8,
+            cols: 12,
+            activePortCount: mockActivePortCount,
+            ledProtocol: HARDWARE_SUPPORTED_PROTOCOL,
+            colorOrder: 'BRG',
+            maxLedCount: HARDWARE_MAX_LED_COUNT_FALLBACK,
+        },
         hardware_map: buildDefaultPortMap(12, 8, mockActivePortCount),
         layers: { wait: {}, charge: {}, err: {} },
         zones: zonesForActivePortCount(DEFAULT_ZONES, mockActivePortCount),
@@ -1452,6 +1549,7 @@ function syncFreeColorInput() {
 function updateFreeModeControls() {
     const mode = freeModes[activeFreeZone] || 'static';
     const mapped = activeFreeZoneIsMapped();
+    const savesBlocked = matrixSavesBlockedByHardwareTransition();
     const colorField = document.getElementById('free_color_field');
     const colorLabel = document.getElementById('free_color_label');
     const clearBtn = document.getElementById('free_erase_btn');
@@ -1466,12 +1564,12 @@ function updateFreeModeControls() {
     colorField.classList.toggle('field-hidden', mode === 'rainbow');
     clearBtn.classList.toggle('field-hidden', mode !== 'custom' || !mapped);
     colorLabel.textContent = mode === 'custom' ? 'Цвет кисти' : 'Цвет зоны';
-    modeSelect.disabled = !mapped;
-    colorInput.disabled = !mapped || mode === 'rainbow';
-    brightnessInput.disabled = !mapped;
-    brightnessNumber.disabled = !mapped;
-    applyBtn.disabled = !mapped;
-    applyAllBtn.disabled = getMappedFreeZoneIds().length === 0;
+    modeSelect.disabled = !mapped || savesBlocked;
+    colorInput.disabled = !mapped || mode === 'rainbow' || savesBlocked;
+    brightnessInput.disabled = !mapped || savesBlocked;
+    brightnessNumber.disabled = !mapped || savesBlocked;
+    applyBtn.disabled = !mapped || savesBlocked;
+    applyAllBtn.disabled = getMappedFreeZoneIds().length === 0 || savesBlocked;
     notice.classList.toggle('field-hidden', mapped);
     notice.textContent = mapped
         ? ''
@@ -1480,10 +1578,11 @@ function updateFreeModeControls() {
 
 function updateZoneViewControls() {
     const isOverview = zoneViewMode === 'overview';
+    const savesBlocked = matrixSavesBlockedByHardwareTransition();
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
-    document.getElementById('clear_zone_btn').disabled = isOverview;
+    document.getElementById('clear_zone_btn').disabled = isOverview || savesBlocked;
     const baseText = isOverview
         ? 'Обзор: все зоны показаны своими цветами, рисование отключено.'
         : 'Рисуйте внутри выбранной зоны. Чужие зоны заблокированы.';
@@ -1492,6 +1591,7 @@ function updateZoneViewControls() {
 
 function updateFreeViewControls() {
     const mapped = activeFreeZoneIsMapped();
+    const savesBlocked = matrixSavesBlockedByHardwareTransition();
     if (!mapped && freeViewMode === 'edit') {
         freeViewMode = 'overview';
     }
@@ -1499,11 +1599,177 @@ function updateFreeViewControls() {
     document.getElementById('free_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('free_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('free_edit_mode_btn').disabled = !mapped;
-    document.getElementById('free_erase_btn').disabled = isOverview || !mapped;
+    document.getElementById('free_erase_btn').disabled = isOverview || !mapped || savesBlocked;
+}
+
+function positiveHardwareInteger(value, fallback) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function hardwareConfigFromResponse(cfg) {
+    const matrix = cfg?.matrix || {};
+    const hardware = cfg?.hardware || {};
+    const fallbackRows = positiveHardwareInteger(matrix.rows, 8);
+    const fallbackCols = positiveHardwareInteger(matrix.cols, 12);
+    const fallbackPorts = clampActivePortCount(cfg?.activePortCount ?? cfg?.active_port_count ?? 2);
+    const protocol = hardware.ledProtocol === undefined
+        ? HARDWARE_SUPPORTED_PROTOCOL
+        : String(hardware.ledProtocol);
+    const order = hardware.colorOrder === undefined ? 'BRG' : String(hardware.colorOrder);
+
+    return {
+        rows: positiveHardwareInteger(hardware.rows, fallbackRows),
+        cols: positiveHardwareInteger(hardware.cols, fallbackCols),
+        activePortCount: clampActivePortCount(hardware.activePortCount ?? fallbackPorts),
+        ledProtocol: protocol,
+        colorOrder: order,
+        maxLedCount: positiveHardwareInteger(hardware.maxLedCount, HARDWARE_MAX_LED_COUNT_FALLBACK),
+    };
+}
+
+function hardwareConfigsEqual(left, right) {
+    return Number(left?.rows) === Number(right?.rows) &&
+        Number(left?.cols) === Number(right?.cols) &&
+        Number(left?.activePortCount) === Number(right?.activePortCount) &&
+        String(left?.ledProtocol) === String(right?.ledProtocol) &&
+        String(left?.colorOrder) === String(right?.colorOrder);
+}
+
+function captureHardwareConfigPending() {
+    hardwareConfigPending = {
+        rows: document.getElementById('hardware_rows').value,
+        cols: document.getElementById('hardware_cols').value,
+        activePortCount: document.getElementById('hardware_active_ports').value,
+        ledProtocol: document.getElementById('hardware_protocol').value,
+        colorOrder: document.getElementById('hardware_color_order').value,
+        maxLedCount: hardwareConfigApplied.maxLedCount,
+    };
+    return hardwareConfigPending;
+}
+
+function syncHardwareConfigForm() {
+    hardwareConfigPending = { ...hardwareConfigApplied };
+    document.getElementById('hardware_rows').value = String(hardwareConfigApplied.rows);
+    document.getElementById('hardware_cols').value = String(hardwareConfigApplied.cols);
+    document.getElementById('hardware_active_ports').value = String(hardwareConfigApplied.activePortCount);
+    document.getElementById('hardware_protocol').value = hardwareConfigApplied.ledProtocol;
+    document.getElementById('hardware_color_order').value = hardwareConfigApplied.colorOrder;
+}
+
+function parseHardwareFormInteger(value) {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    const parsed = Number(text);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function validateHardwareConfigForm(pending = hardwareConfigPending) {
+    const rows = parseHardwareFormInteger(pending.rows);
+    const cols = parseHardwareFormInteger(pending.cols);
+    const ports = parseHardwareFormInteger(pending.activePortCount);
+    const maxLedCount = positiveHardwareInteger(
+        hardwareConfigApplied.maxLedCount,
+        HARDWARE_MAX_LED_COUNT_FALLBACK
+    );
+
+    if (rows === null || cols === null || rows < 1 || cols < 1) {
+        return { error: 'Строки и столбцы должны быть целыми числами больше нуля.' };
+    }
+    if (rows > HARDWARE_MAX_LED_COUNT_FALLBACK || cols > HARDWARE_MAX_LED_COUNT_FALLBACK) {
+        return { error: `Строки и столбцы не должны превышать ${HARDWARE_MAX_LED_COUNT_FALLBACK}.` };
+    }
+    const total = rows * cols;
+    if (total > maxLedCount) {
+        return { error: `Матрица содержит ${total} пикселей; допустимый предел — ${maxLedCount}.` };
+    }
+    if (ports === null || ports < 1 || ports > 4) {
+        return { error: 'Количество активных портов должно быть от 1 до 4.' };
+    }
+    if (total < ports) {
+        return { error: 'Количество пикселей не может быть меньше количества активных портов.' };
+    }
+    if (pending.ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL) {
+        return { error: 'Выбран неподдерживаемый тип светодиодов.' };
+    }
+    if (!HARDWARE_COLOR_ORDERS.includes(String(pending.colorOrder))) {
+        return { error: 'Выбран неподдерживаемый порядок цветов.' };
+    }
+
+    return {
+        config: {
+            rows,
+            cols,
+            activePortCount: ports,
+            ledProtocol: HARDWARE_SUPPORTED_PROTOCOL,
+            colorOrder: String(pending.colorOrder),
+            maxLedCount,
+        },
+    };
+}
+
+function hardwareConfigFormHasChanges() {
+    const result = validateHardwareConfigForm(hardwareConfigPending);
+    return !result.config || !hardwareConfigsEqual(result.config, hardwareConfigApplied);
+}
+
+function setHardwareConfigMessage(text, isError = false) {
+    const line = document.getElementById('hardware_config_message');
+    line.textContent = text || '';
+    line.classList.toggle('warning', Boolean(text) && isError);
+}
+
+function matrixSavesBlockedByHardwareTransition() {
+    return hardwareConfigSaveInProgress || hardwareRestartInProgress;
+}
+
+function hasPendingMatrixChanges(includeTopology = true) {
+    return zoneMapDirty ||
+        (includeTopology && Number(pendingTopology) !== Number(matrixConfig.topology)) ||
+        portsBrightnessDirty ||
+        Object.values(statusLayerDirty).some(Boolean) ||
+        Object.values(freeZoneDirty).some(Boolean) ||
+        Object.values(freeBrightnessDirty).some(Boolean) ||
+        portsBrightnessSaveTimer !== null ||
+        Object.keys(freeBrightnessSaveTimers).length > 0;
+}
+
+function updateMatrixSaveControls() {
+    const blocked = matrixSavesBlockedByHardwareTransition();
+    [
+        'hardware_rows',
+        'hardware_cols',
+        'hardware_active_ports',
+        'hardware_protocol',
+        'hardware_color_order',
+        'save_hardware_config_btn',
+        'topology_select',
+        'save_topology_btn',
+        'save_zones_btn',
+        'save_status_btn',
+        'clear_zone_btn',
+        'clear_all_zones_btn',
+        'clear_status_btn',
+        'free_erase_btn',
+        'ports_brightness',
+        'ports_brightness_input',
+        'free_brightness',
+        'free_brightness_input',
+        'apply_free_btn',
+        'apply_free_brightness_all_btn',
+    ].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = blocked;
+    });
+    updateFreeModeControls();
+    updateZoneViewControls();
+    updateFreeViewControls();
 }
 
 function applyConfig(cfg) {
     const matrix = cfg.matrix || {};
+    const preserveHardwarePending = hardwareConfigInitialized && hardwareConfigFormHasChanges();
+    hardwareConfigApplied = hardwareConfigFromResponse(cfg);
     COLS = Number(matrix.cols) || COLS || 12;
     ROWS = Number(matrix.rows) || ROWS || 8;
     matrixConfig = {
@@ -1513,7 +1779,10 @@ function applyConfig(cfg) {
         topology: Number(matrix.topology ?? 0),
     };
     pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
-    activePortCount = clampActivePortCount(cfg.activePortCount ?? cfg.active_port_count ?? activePortCount);
+    activePortCount = hardwareConfigApplied.activePortCount;
+    if (!preserveHardwarePending) syncHardwareConfigForm();
+    hardwareConfigInitialized = true;
+    updateMatrixSaveControls();
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
@@ -1975,6 +2244,7 @@ function updateEditState() {
 }
 
 function paintPixel(pixel) {
+    if (matrixSavesBlockedByHardwareTransition()) return;
     if (!pixel || !pixel.classList.contains('pixel')) return;
     const key = keyOf(pixel.dataset.x, pixel.dataset.y);
     const currentZone = hardwareZonesMap[key] || '0';
@@ -2150,6 +2420,7 @@ document.getElementById('zone_erase_btn').addEventListener('click', () => {
 });
 
 document.getElementById('free_erase_btn').addEventListener('click', () => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
     if (freeViewMode !== 'edit' || (freeModes[activeFreeZone] || 'static') !== 'custom') return;
     freeCustomLayers[activeFreeZone] = {};
     freeZoneDirty[activeFreeZone] = true;
@@ -2165,6 +2436,210 @@ document.querySelectorAll('[data-status]').forEach(btn => {
     });
 });
 
+[
+    'hardware_rows',
+    'hardware_cols',
+    'hardware_active_ports',
+    'hardware_protocol',
+    'hardware_color_order',
+].forEach(id => {
+    const element = document.getElementById(id);
+    element.addEventListener('input', () => {
+        captureHardwareConfigPending();
+        if (!hardwareRestartInProgress) setHardwareConfigMessage('');
+    });
+    element.addEventListener('change', () => {
+        captureHardwareConfigPending();
+        if (!hardwareRestartInProgress) setHardwareConfigMessage('');
+    });
+});
+
+function waitForMilliseconds(milliseconds) {
+    return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function fetchHardwareConfigForRestart(timeoutMs = HARDWARE_RESTART_REQUEST_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    try {
+        const response = await fetch('/get_config', {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) return null;
+        return hardwareConfigFromResponse(await response.json());
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function pollForHardwareRestart(expectedHardware) {
+    const token = ++hardwareRestartPollToken;
+    const deadline = Date.now() + HARDWARE_RESTART_TIMEOUT_MS;
+
+    while (hardwareRestartInProgress && token === hardwareRestartPollToken) {
+        const waitMs = Math.min(HARDWARE_RESTART_POLL_MS, deadline - Date.now());
+        if (waitMs <= 0) break;
+        await waitForMilliseconds(waitMs);
+        if (!hardwareRestartInProgress || token !== hardwareRestartPollToken) break;
+
+        const requestTimeoutMs = Math.min(HARDWARE_RESTART_REQUEST_TIMEOUT_MS, deadline - Date.now());
+        if (requestTimeoutMs <= 0) break;
+        try {
+            const applied = await fetchHardwareConfigForRestart(requestTimeoutMs);
+            if (applied && hardwareConfigsEqual(applied, expectedHardware)) {
+                setHardwareConfigMessage('Контроллер перезапущен. Обновляем страницу.');
+                window.location.reload();
+                return;
+            }
+        } catch (err) {
+            // Перезапуск временно разрывает HTTP-соединение; продолжаем опрос.
+        }
+    }
+
+    if (token === hardwareRestartPollToken && hardwareRestartInProgress) {
+        setHardwareConfigMessage(
+            'Не удалось подтвердить перезагрузку за 60 секунд. Перезагрузите контроллер или обновите страницу вручную.',
+            true
+        );
+    }
+}
+
+function lockMatrixSavesForHardwareRestart() {
+    hardwareConfigSaveInProgress = false;
+    hardwareRestartInProgress = true;
+    updateMatrixSaveControls();
+}
+
+document.getElementById('save_hardware_config_btn').addEventListener('click', async () => {
+    if (matrixSavesBlockedByHardwareTransition()) {
+        setHardwareConfigMessage('Аппаратные настройки уже сохраняются или ожидают перезагрузки.', true);
+        return;
+    }
+
+    captureHardwareConfigPending();
+    const validation = validateHardwareConfigForm();
+    if (!validation.config) {
+        setHardwareConfigMessage(validation.error, true);
+        return;
+    }
+    const requested = validation.config;
+
+    if (hasPendingMatrixChanges()) {
+        setHardwareConfigMessage(
+            'Сначала сохраните изменения зон, слоёв, яркости и топологии.',
+            true
+        );
+        return;
+    }
+    if (configLoadInProgress) {
+        setHardwareConfigMessage('Дождитесь завершения загрузки текущей конфигурации.', true);
+        return;
+    }
+    if (hardwareConfigsEqual(requested, hardwareConfigApplied)) {
+        setHardwareConfigMessage('Настройки не изменены.');
+        return;
+    }
+    if (mockMode || !backendAvailable) {
+        setHardwareConfigMessage('Контроллер недоступен: настройки не сохранены.', true);
+        return;
+    }
+
+    const spatialChange = requested.rows !== hardwareConfigApplied.rows ||
+        requested.cols !== hardwareConfigApplied.cols ||
+        requested.activePortCount !== hardwareConfigApplied.activePortCount;
+    const confirmation = spatialChange
+        ? 'Изменение размера матрицы или количества портов очистит разметку зон и все нарисованные слои. Продолжить?'
+        : 'Новые параметры светодиодов начнут действовать после перезагрузки контроллера. Продолжить?';
+    if (!confirm(confirmation)) return;
+
+    hardwareConfigSaveInProgress = true;
+    updateMatrixSaveControls();
+    setHardwareConfigMessage('Сохраняем аппаратные настройки...');
+
+    let response;
+    let responseText = '';
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), HARDWARE_SAVE_REQUEST_TIMEOUT_MS);
+    try {
+        response = await fetch('/save_hardware_config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: saveController.signal,
+            body: JSON.stringify({
+                rows: requested.rows,
+                cols: requested.cols,
+                activePortCount: requested.activePortCount,
+                ledProtocol: requested.ledProtocol,
+                colorOrder: requested.colorOrder,
+            }),
+        });
+        responseText = (await response.text()).trim();
+    } catch (err) {
+        hardwareConfigPending = { ...requested };
+        lockMatrixSavesForHardwareRestart();
+        setHardwareConfigMessage(
+            'Связь прервана во время сохранения. Состояние записи неизвестно; проверяем, применились ли настройки.',
+            true
+        );
+        pollForHardwareRestart({ ...requested });
+        return;
+    } finally {
+        clearTimeout(saveTimeout);
+    }
+
+    if (response.status === 200 && responseText === 'NO_CHANGE') {
+        hardwareConfigSaveInProgress = false;
+        updateMatrixSaveControls();
+        setHardwareConfigMessage('Настройки не изменены.');
+        setTimeout(() => window.location.reload(), 250);
+        return;
+    }
+    if (response.status === 200 && responseText === 'REBOOT_REQUIRED') {
+        hardwareConfigPending = { ...requested };
+        lockMatrixSavesForHardwareRestart();
+        setHardwareConfigMessage('Настройки сохранены. Контроллер перезагружается.');
+        pollForHardwareRestart({ ...requested });
+        return;
+    }
+    if (response.status === 400 && responseText === 'BAD_CONFIG') {
+        hardwareConfigSaveInProgress = false;
+        updateMatrixSaveControls();
+        setHardwareConfigMessage('Контроллер отклонил значения аппаратной конфигурации.', true);
+        return;
+    }
+    if (response.status === 409 && responseText === 'RESTART_PENDING') {
+        lockMatrixSavesForHardwareRestart();
+        setHardwareConfigMessage(
+            'Настройки уже сохранены. Завершите перезагрузку контроллера вручную, затем обновите эту страницу.',
+            true
+        );
+        return;
+    }
+    if (response.status === 500 && responseText === 'SAVE_FAILED') {
+        hardwareConfigSaveInProgress = false;
+        updateMatrixSaveControls();
+        setHardwareConfigMessage('Настройки не сохранены; действующая конфигурация не изменилась.', true);
+        return;
+    }
+    if (response.status === 500 && responseText === 'SAVED_RESTART_REQUIRED') {
+        hardwareConfigPending = { ...requested };
+        lockMatrixSavesForHardwareRestart();
+        setHardwareConfigMessage(
+            'Настройки сохранены, но автоматическая перезагрузка не запущена. Перезагрузите контроллер или питание вручную, затем обновите эту страницу.',
+            true
+        );
+        return;
+    }
+
+    hardwareConfigSaveInProgress = false;
+    updateMatrixSaveControls();
+    setHardwareConfigMessage(
+        `Неожиданный ответ контроллера: ${responseText || response.status}. Настройки не считаются сохранёнными.`,
+        true
+    );
+});
+
 document.getElementById('topology_select').addEventListener('change', e => {
     pendingTopology = Number(e.target.value);
     renderTopologyControls();
@@ -2172,10 +2647,12 @@ document.getElementById('topology_select').addEventListener('change', e => {
 });
 
 document.getElementById('save_topology_btn').addEventListener('click', async () => {
-    const hasDirtyStatusLayer = Object.values(statusLayerDirty).some(Boolean);
-    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean);
-    if (zoneMapDirty || hasDirtyStatusLayer || hasDirtyFreeZone) {
-        const message = 'Сначала сохраните изменения зон, статусов и свободных зон.';
+    if (matrixSavesBlockedByHardwareTransition()) {
+        setTopologyMessage('Сохранение матрицы заблокировано до перезагрузки контроллера.', true);
+        return;
+    }
+    if (hasPendingMatrixChanges(false)) {
+        const message = 'Сначала сохраните изменения зон, статусов, свободных зон и яркости.';
         setTopologyMessage(message, true);
         alert(message);
         return;
@@ -2215,6 +2692,10 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
 });
 
 document.getElementById('save_zones_btn').addEventListener('click', async () => {
+    if (matrixSavesBlockedByHardwareTransition()) {
+        alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
+        return;
+    }
     const validationError = validateActivePortZones();
     if (validationError) {
         alert(validationError);
@@ -2253,6 +2734,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
 });
 
 document.getElementById('clear_zone_btn').addEventListener('click', () => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
     if (zonePixelCount(activeZoneId) === 0) return;
     if (isPortZone(activeZoneId)) {
         const message = isRequiredActivePortZone(activeZoneId)
@@ -2270,6 +2752,7 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
 });
 
 document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
     if (!confirm('Очистить всю разметку матрицы? Все пиксели останутся без зоны только в браузере. Сохранить такую разметку нельзя, пока активные порты не будут размечены.')) return;
     hardwareZonesMap = {};
     zoneMapDirty = true;
@@ -2277,6 +2760,10 @@ document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
 });
 
 document.getElementById('save_status_btn').addEventListener('click', async () => {
+    if (matrixSavesBlockedByHardwareTransition()) {
+        alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
+        return;
+    }
     if (!backendAvailable) {
         alert('Контроллер недоступен: слой статуса изменён только в браузере.');
         return;
@@ -2314,6 +2801,7 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
 });
 
 document.getElementById('clear_status_btn').addEventListener('click', () => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
     statusColorLayers[activeStatus] = {};
     statusLayerDirty[activeStatus] = true;
     redrawMatrix();
@@ -2333,7 +2821,7 @@ function updatePortsBrightness(value) {
 }
 
 async function persistPortsBrightness(value, revision) {
-    if (!backendAvailable) return false;
+    if (!backendAvailable || matrixSavesBlockedByHardwareTransition()) return false;
 
     try {
         const body = new URLSearchParams();
@@ -2363,7 +2851,8 @@ async function persistPortsBrightness(value, revision) {
 
 function schedulePortsBrightnessSave(value, immediate = false) {
     if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
-    if (!portsBrightnessDirty || !backendAvailable) return;
+    portsBrightnessSaveTimer = null;
+    if (!portsBrightnessDirty || !backendAvailable || matrixSavesBlockedByHardwareTransition()) return;
 
     const revision = portsBrightnessRevision;
     portsBrightnessSaveTimer = setTimeout(() => {
@@ -2445,6 +2934,7 @@ function buildFreeZoneBrightnessPayload(zoneId, brightness) {
 }
 
 async function saveFreeZonePayload(payload) {
+    if (matrixSavesBlockedByHardwareTransition()) return false;
     const res = await fetch('/save_free_zone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2463,7 +2953,8 @@ function cancelFreeZoneBrightnessSave(zoneId) {
 
 async function persistFreeZoneBrightness(zoneId, brightness, revision, showError = true) {
     const id = String(zoneId);
-    if (!backendAvailable || zoneMapDirty || validateActivePortZones()) return false;
+    if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
+        zoneMapDirty || validateActivePortZones()) return false;
 
     try {
         const ok = await saveFreeZonePayload(buildFreeZoneBrightnessPayload(id, brightness));
@@ -2486,7 +2977,7 @@ async function persistFreeZoneBrightness(zoneId, brightness, revision, showError
 function scheduleFreeZoneBrightnessSave(zoneId, brightness, immediate = false) {
     const id = String(zoneId);
     cancelFreeZoneBrightnessSave(id);
-    if (!freeBrightnessDirty[id] || !backendAvailable) return;
+    if (!freeBrightnessDirty[id] || !backendAvailable || matrixSavesBlockedByHardwareTransition()) return;
 
     const revision = freeBrightnessRevisions[id];
     freeBrightnessSaveTimers[id] = setTimeout(() => {
@@ -2504,6 +2995,10 @@ function flushPendingFreeZoneBrightness() {
 }
 
 function ensureFreeZoneSaveAllowed() {
+    if (matrixSavesBlockedByHardwareTransition()) {
+        alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
+        return false;
+    }
     if (!backendAvailable) {
         alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
         return false;
@@ -2540,6 +3035,10 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
 });
 
 document.getElementById('apply_free_brightness_all_btn').addEventListener('click', async () => {
+    if (matrixSavesBlockedByHardwareTransition()) {
+        alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
+        return;
+    }
     const mappedZones = getMappedFreeZoneIds();
     if (!mappedZones.length) {
         alert('Нет размеченных свободных зон.');
@@ -2591,7 +3090,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
 
 document.getElementById('refresh_diag_btn').addEventListener('click', loadDiagnostics);
 
-async function loadConfig() {
+async function loadConfigInternal() {
     let cfg = null;
 
     try {
@@ -2628,7 +3127,18 @@ async function loadConfig() {
     await loadDiagnostics();
 }
 
+async function loadConfig() {
+    if (configLoadInProgress) return;
+    configLoadInProgress = true;
+    try {
+        await loadConfigInternal();
+    } finally {
+        configLoadInProgress = false;
+    }
+}
+
 async function loadDiagnostics() {
+    if (hardwareRestartInProgress) return;
     if (!backendAvailable) {
         diagnostics = buildMockDiagnostics();
         renderDiagnostics();
@@ -2642,11 +3152,14 @@ async function loadDiagnostics() {
     try {
         const res = await fetch('/diagnostics');
         if (!res.ok) throw new Error(`diagnostics ${res.status}`);
-        diagnostics = await res.json();
+        const receivedDiagnostics = await res.json();
+        if (hardwareRestartInProgress) return;
+        diagnostics = receivedDiagnostics;
         renderDiagnostics();
         const runtimeWarning = diagnosticsRuntimeWarning();
         setDiagnosticsMessage(runtimeWarning, Boolean(runtimeWarning));
     } catch (err) {
+        if (hardwareRestartInProgress) return;
         setDiagnosticsMessage('Связь с контроллером потеряна. Повторная проверка будет выполнена автоматически.', true);
         document.getElementById('runtime_label').textContent = 'связь с контроллером потеряна';
         document.getElementById('runtime_dot').style.background = 'var(--orange)';
@@ -3103,8 +3616,6 @@ function uploadFirmware() {
 
 function renderDiagnostics() {
     if (!diagnostics) return;
-    const reportedActivePorts = Number(diagnostics.activePortCount);
-    activePortCount = clampActivePortCount(reportedActivePorts);
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
     const port1 = diagnostics.ports?.[0]?.status || 'unknown';
     const firmware = diagnostics.firmware || {};
@@ -3214,13 +3725,13 @@ setInterval(() => {
 }, 160);
 
 setInterval(() => {
-    if (backendAvailable && serviceOpen && activeServiceSection === 'diagnostics') {
+    if (backendAvailable && !hardwareRestartInProgress && serviceOpen && activeServiceSection === 'diagnostics') {
         loadDiagnostics();
     }
 }, 2500);
 
 setInterval(() => {
-    if (backendAvailable && (!serviceOpen || activeServiceSection !== 'diagnostics')) {
+    if (backendAvailable && !hardwareRestartInProgress && (!serviceOpen || activeServiceSection !== 'diagnostics')) {
         loadDiagnostics();
     }
 }, 30000);
