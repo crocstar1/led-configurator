@@ -31,6 +31,8 @@ static unsigned long hardwareConfigRestartAt = 0;
 
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
 static constexpr uint32_t HARDWARE_CONFIG_RESTART_DELAY_MS = 1000;
+// Worst current 500-pixel chunk is 9007 bytes (a full free-zone layer at 1x500/500x1).
+static constexpr size_t GET_CONFIG_CHUNK_RESERVE = 12U * 1024U;
 static bool inputTaskStarted = false;
 static uint64_t lastInputUpdateMs = 0;
 static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
@@ -346,14 +348,9 @@ void appendHardwareMapJson(String &json, const MatrixStateV2 &state) {
     json += "}";
 }
 
-void appendStatusLayersJson(String &json, const MatrixStateV2 &state) {
-    json += ",\"layers\":{\"wait\":";
-    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_WAITING);
-    json += ",\"charge\":";
-    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_CHARGING);
-    json += ",\"err\":";
-    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_ERROR);
-    json += "}";
+void sendAndClearConfigChunk(String &json) {
+    server.sendContent(json);
+    json.remove(0);
 }
 
 FreeZoneMode currentFreeZoneMode(const MatrixStateV2 &state, uint8_t zoneId) {
@@ -366,29 +363,21 @@ FreeZoneMode currentFreeZoneMode(const MatrixStateV2 &state, uint8_t zoneId) {
     return metadata ? metadata->defaultMode : FREE_ZONE_STATIC;
 }
 
-void appendFreeZoneConfigsJson(String &json, const MatrixStateV2 &state) {
-    json += ",\"free_zones\":[";
-
-    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
-        if (i > 0) json += ",";
-
-        const MatrixStateStoredFreeZone &freeZone = state.freeZones[i];
-        json += "{\"zoneId\":";
-        json += String((int)freeZone.zoneId);
-        json += ",\"enabled\":";
-        json += (freeZone.enabled ? "true" : "false");
-        json += ",\"mode\":\"";
-        json += free_zone_mode_to_string((FreeZoneMode)freeZone.mode);
-        json += "\",\"staticColor\":\"";
-        json += rgbToHex(freeZone.staticColor);
-        json += "\",\"brightness\":";
-        json += String((int)freeZone.brightness);
-        json += ",\"customLayer\":";
-        appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_LOGO + i);
-        json += "}";
-    }
-
-    json += "]";
+void appendFreeZoneConfigJson(String &json, const MatrixStateV2 &state, size_t index) {
+    const MatrixStateStoredFreeZone &freeZone = state.freeZones[index];
+    json += "{\"zoneId\":";
+    json += String((int)freeZone.zoneId);
+    json += ",\"enabled\":";
+    json += (freeZone.enabled ? "true" : "false");
+    json += ",\"mode\":\"";
+    json += free_zone_mode_to_string((FreeZoneMode)freeZone.mode);
+    json += "\",\"staticColor\":\"";
+    json += rgbToHex(freeZone.staticColor);
+    json += "\",\"brightness\":";
+    json += String((int)freeZone.brightness);
+    json += ",\"customLayer\":";
+    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_LOGO + index);
+    json += "}";
 }
 
 void appendZoneMetadataJson(String &json, const MatrixStateV2 &state) {
@@ -859,7 +848,11 @@ void handleGetConfig() {
     }
 
     String json;
-    json.reserve(7600);
+    if (!json.reserve(GET_CONFIG_CHUNK_RESERVE)) {
+        server.send(500, "text/plain", "RESPONSE_BUFFER_UNAVAILABLE");
+        return;
+    }
+
     json += "{\"topo\":";
     json += String((int)matrixStateCandidate.topology);
     json += ",\"b_ports\":";
@@ -896,13 +889,40 @@ void handleGetConfig() {
     json += "\",\"maxLedCount\":";
     json += String((int)MAX_LED_COUNT);
     json += "}";
-    appendStatusLayersJson(json, matrixStateCandidate);
-    appendHardwareMapJson(json, matrixStateCandidate);
-    appendZoneMetadataJson(json, matrixStateCandidate);
-    appendFreeZoneConfigsJson(json, matrixStateCandidate);
-    json += "}";
 
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
     server.send(200, "application/json", json);
+    json.remove(0);
+
+    json += ",\"layers\":{\"wait\":";
+    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_WAITING);
+    sendAndClearConfigChunk(json);
+
+    json += ",\"charge\":";
+    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_CHARGING);
+    sendAndClearConfigChunk(json);
+
+    json += ",\"err\":";
+    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_ERROR);
+    json += "}";
+    sendAndClearConfigChunk(json);
+
+    appendHardwareMapJson(json, matrixStateCandidate);
+    sendAndClearConfigChunk(json);
+
+    appendZoneMetadataJson(json, matrixStateCandidate);
+    sendAndClearConfigChunk(json);
+
+    for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
+        if (i == 0) json += ",\"free_zones\":[";
+        else json += ",";
+        appendFreeZoneConfigJson(json, matrixStateCandidate, i);
+        sendAndClearConfigChunk(json);
+    }
+
+    json += "]}";
+    sendAndClearConfigChunk(json);
+    server.sendContent("");
 }
 
 void handleSaveHardwareConfig() {
