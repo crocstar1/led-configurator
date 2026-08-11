@@ -1249,6 +1249,7 @@ const DEFAULT_FREE_STATIC_COLORS = {
     '7': '#ff9500',
     '8': '#af52de',
 };
+const FREE_ZONE_IDS = ['5', '6', '7', '8'];
 
 const TOPOLOGY_OPTIONS = [
     { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'Светодиод 0 справа снизу, далее змейкой по столбцам.' },
@@ -1280,6 +1281,7 @@ let freeCustomLayers = { '5': {}, '6': {}, '7': {}, '8': {} };
 let freeStaticColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrushColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrightness = { '5': 100, '6': 100, '7': 100, '8': 100 };
+let appliedFreeZones = {};
 let diagnostics = null;
 let networkStatus = null;
 let rainbowTick = 0;
@@ -1308,8 +1310,11 @@ let zoneMapDirty = false;
 let zoneMapSaveInProgress = false;
 let uncertainZoneMapSubmission = null;
 let statusSaveInProgress = false;
+let freeZoneSaveInProgress = false;
+let freeBrightnessBatchInProgress = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
+let uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
 let portsBrightnessValue = 120;
 let portsBrightnessDirty = false;
 let portsBrightnessRevision = 0;
@@ -1317,6 +1322,7 @@ let portsBrightnessSaveTimer = null;
 let freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
 let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
 let freeBrightnessSaveTimers = {};
+let freeBrightnessSaveInProgress = {};
 let networkScanInFlight = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
@@ -1610,11 +1616,95 @@ function sanitizeFreeLayerForZone(layer, zoneId) {
     return clean;
 }
 
-function freeCustomLayersLosePixelsWithCurrentZoneMap() {
-    return Object.entries(freeCustomLayers).some(([zoneId, layer]) =>
-        Object.keys(layer || {}).some(key =>
-            String(hardwareZonesMap[key] ?? '0') !== String(zoneId))
+function defaultFreeZoneState(zoneId) {
+    const id = String(zoneId);
+    return {
+        mode: id === '8' ? 'custom' : 'static',
+        staticColor: DEFAULT_FREE_STATIC_COLORS[id] || '#ffffff',
+        brightness: 100,
+        customLayer: {},
+    };
+}
+
+function normalizeFreeZoneState(zoneId, source = {}) {
+    const id = String(zoneId);
+    const fallback = defaultFreeZoneState(id);
+    const mode = ['static', 'custom', 'rainbow'].includes(source.mode)
+        ? source.mode
+        : fallback.mode;
+    return {
+        mode,
+        staticColor: configHexColor(source.staticColor, fallback.staticColor),
+        brightness: clampBrightnessValue(source.brightness, fallback.brightness),
+        customLayer: sanitizeFreeLayerForZone(source.customLayer || {}, id),
+    };
+}
+
+function appliedFreeZoneState(zoneId) {
+    const id = String(zoneId);
+    if (!appliedFreeZones[id]) {
+        appliedFreeZones[id] = normalizeFreeZoneState(id);
+    }
+    return appliedFreeZones[id];
+}
+
+function captureFreeZoneDraft(zoneId) {
+    const id = String(zoneId);
+    return normalizeFreeZoneState(id, {
+        mode: freeModes[id],
+        staticColor: freeStaticColors[id],
+        brightness: freeBrightness[id],
+        customLayer: freeCustomLayers[id],
+    });
+}
+
+function setAppliedFreeZoneState(zoneId, state) {
+    const id = String(zoneId);
+    const normalized = normalizeFreeZoneState(id, state);
+    appliedFreeZones[id] = {
+        ...normalized,
+        customLayer: { ...normalized.customLayer },
+    };
+}
+
+function loadFreeZoneDraftFromApplied(zoneId) {
+    const id = String(zoneId);
+    const applied = appliedFreeZoneState(id);
+    freeModes[id] = applied.mode;
+    freeStaticColors[id] = applied.staticColor;
+    freeBrightness[id] = applied.brightness;
+    freeCustomLayers[id] = { ...applied.customLayer };
+    freeBrushColors[id] = Object.values(applied.customLayer)[0] || applied.staticColor;
+}
+
+function freeZoneDraftHasUnsavedChanges(zoneId = activeFreeZone) {
+    const id = String(zoneId);
+    return Boolean(
+        freeZoneDirty[id] ||
+        freeBrightnessDirty[id] ||
+        uncertainFreeZoneState[id] ||
+        freeBrightnessSaveTimers[id] !== undefined
     );
+}
+
+function discardFreeZoneDraft(zoneId) {
+    const id = String(zoneId);
+    cancelFreeZoneBrightnessSave(id);
+    freeBrightnessRevisions[id] += 1;
+    freeZoneDirty[id] = false;
+    freeBrightnessDirty[id] = false;
+    loadFreeZoneDraftFromApplied(id);
+}
+
+function freeCustomLayersLosePixelsWithCurrentZoneMap() {
+    return FREE_ZONE_IDS.some(zoneId => {
+        const appliedLayer = appliedFreeZoneState(zoneId).customLayer;
+        const draftLayer = freeCustomLayers[zoneId] || {};
+        return [appliedLayer, draftLayer].some(layer =>
+            Object.keys(layer).some(key =>
+                String(hardwareZonesMap[key] ?? '0') !== zoneId)
+        );
+    });
 }
 
 function clampBrightnessValue(value, fallback = 100) {
@@ -1648,7 +1738,7 @@ function syncFreeColorInput() {
 function updateFreeModeControls() {
     const mode = freeModes[activeFreeZone] || 'static';
     const mapped = activeFreeZoneIsMapped();
-    const savesBlocked = matrixSavesBlockedByHardwareTransition();
+    const savesBlocked = freeZoneEditorBlocked();
     const colorField = document.getElementById('free_color_field');
     const colorLabel = document.getElementById('free_color_label');
     const clearBtn = document.getElementById('free_erase_btn');
@@ -1677,7 +1767,7 @@ function updateFreeModeControls() {
 
 function updateZoneViewControls() {
     const isOverview = zoneViewMode === 'overview';
-    const savesBlocked = matrixSavesBlockedByHardwareTransition();
+    const savesBlocked = freeZoneEditorBlocked();
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
@@ -1690,7 +1780,7 @@ function updateZoneViewControls() {
 
 function updateFreeViewControls() {
     const mapped = activeFreeZoneIsMapped();
-    const savesBlocked = matrixSavesBlockedByHardwareTransition();
+    const savesBlocked = freeZoneEditorBlocked();
     if (!mapped && freeViewMode === 'edit') {
         freeViewMode = 'overview';
     }
@@ -1819,7 +1909,7 @@ function setHardwareConfigMessage(text, isError = false) {
 }
 
 function updateStatusEditorControls() {
-    const blocked = matrixSavesBlockedByHardwareTransition();
+    const blocked = freeZoneEditorBlocked();
     const solidMode = statusEditMode === 'solid';
     const scopeSelect = document.getElementById('status_scope_select');
     const modeSelect = document.getElementById('status_mode_select');
@@ -1854,7 +1944,11 @@ function updateStatusEditorControls() {
 
 function matrixSavesBlockedByHardwareTransition() {
     return hardwareConfigSaveInProgress || hardwareRestartInProgress ||
-        zoneMapSaveInProgress || statusSaveInProgress;
+        zoneMapSaveInProgress || statusSaveInProgress || freeZoneSaveInProgress;
+}
+
+function freeZoneEditorBlocked() {
+    return matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress;
 }
 
 function hasPendingMatrixChanges(includeTopology = true) {
@@ -1864,12 +1958,13 @@ function hasPendingMatrixChanges(includeTopology = true) {
         Object.values(statusLayerDirty).some(Boolean) ||
         Object.values(freeZoneDirty).some(Boolean) ||
         Object.values(freeBrightnessDirty).some(Boolean) ||
+        Object.values(uncertainFreeZoneState).some(Boolean) ||
         portsBrightnessSaveTimer !== null ||
         Object.keys(freeBrightnessSaveTimers).length > 0;
 }
 
 function updateMatrixSaveControls() {
-    const blocked = matrixSavesBlockedByHardwareTransition();
+    const blocked = freeZoneEditorBlocked();
     [
         'hardware_rows',
         'hardware_cols',
@@ -1888,6 +1983,7 @@ function updateMatrixSaveControls() {
         'clear_zone_btn',
         'clear_all_zones_btn',
         'clear_status_btn',
+        'free_zone_select',
         'free_erase_btn',
         'ports_brightness',
         'ports_brightness_input',
@@ -1935,6 +2031,7 @@ function applyConfig(cfg) {
     zoneMapDirty = false;
     statusLayerDirty = { waiting: false, charging: false, error: false };
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
+    uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
     portsBrightnessDirty = false;
     freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
     statusColorLayers.waiting = sanitizeStatusLayerForPortZones(cfg.layers?.wait || {});
@@ -1947,26 +2044,21 @@ function applyConfig(cfg) {
     };
     statusBrushColors = { ...statusDefaults };
     document.getElementById('status_color').value = statusBrushColors[activeStatus];
-    Object.keys(freeCustomLayers).forEach(zoneId => {
-        freeCustomLayers[zoneId] = sanitizeLayerForSize(freeCustomLayers[zoneId]);
-    });
     zoneMeta = zonesForActivePortCount(
         Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
         activePortCount
     );
     portsBrightnessValue = setBrightnessPair('ports_brightness', 'ports_brightness_input', cfg.b_ports || 120);
-    freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
+    appliedFreeZones = {};
+    FREE_ZONE_IDS.forEach(zoneId => setAppliedFreeZoneState(zoneId, defaultFreeZoneState(zoneId)));
     if (Array.isArray(cfg.free_zones)) {
         cfg.free_zones.forEach(fz => {
             const zoneId = String(fz.zoneId ?? fz.id);
             if (!isFreeZone(zoneId)) return;
-            freeModes[zoneId] = fz.mode || freeModes[zoneId] || 'static';
-            freeStaticColors[zoneId] = fz.staticColor || freeStaticColors[zoneId] || '#ffffff';
-            freeBrushColors[zoneId] = freeBrushColors[zoneId] || freeStaticColors[zoneId];
-            freeBrightness[zoneId] = Number(fz.brightness) || freeBrightness[zoneId] || 100;
-            freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(fz.customLayer || {}, zoneId);
+            setAppliedFreeZoneState(zoneId, fz);
         });
     }
+    FREE_ZONE_IDS.forEach(zoneId => loadFreeZoneDraftFromApplied(zoneId));
 }
 
 function zoneById(id) {
@@ -2061,11 +2153,18 @@ function updateDirtyIndicators() {
     const freeIndicator = document.getElementById('free_dirty_indicator');
 
     const hasDirtyStatusLayer = portsBrightnessDirty || Object.values(statusLayerDirty).some(Boolean);
-    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean) || Object.values(freeBrightnessDirty).some(Boolean);
+    const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean) ||
+        Object.values(freeBrightnessDirty).some(Boolean) ||
+        Object.values(uncertainFreeZoneState).some(Boolean);
 
     zonesIndicator?.classList.toggle('field-hidden', !zoneMapDirty);
     statusIndicator?.classList.toggle('field-hidden', !hasDirtyStatusLayer);
     freeIndicator?.classList.toggle('field-hidden', !hasDirtyFreeZone);
+    if (freeIndicator) {
+        freeIndicator.textContent = Object.values(uncertainFreeZoneState).some(Boolean)
+            ? 'состояние не подтверждено'
+            : 'черновик не сохранён';
+    }
 }
 
 function zonePixelCountInMap(map, zoneId) {
@@ -2260,8 +2359,10 @@ function buildSelects() {
 
     zoneSelect.value = activeZoneId;
     buildStatusScopeOptions();
-    if (!activeFreeZoneStillSelectable && firstMappedFreeZone !== null) {
+    if (!activeFreeZoneStillSelectable && firstMappedFreeZone !== null &&
+        !freeZoneDraftHasUnsavedChanges(activeFreeZone)) {
         activeFreeZone = firstMappedFreeZone;
+        loadFreeZoneDraftFromApplied(activeFreeZone);
     }
     freeZoneSelect.value = activeFreeZone;
     document.getElementById('free_mode_select').value = freeModes[activeFreeZone] || 'static';
@@ -2294,15 +2395,18 @@ function buildFreeLegend() {
 
     zoneMeta.filter(z => z.type === 'free').forEach(z => {
         const zoneId = String(z.id);
+        const applied = appliedFreeZoneState(zoneId);
         const item = document.createElement('div');
         item.className = 'legend-item' + (zoneId === activeFreeZone ? ' selected' : '');
         const swatch = document.createElement('span');
         swatch.className = 'swatch';
-        swatch.style.background = freeModes[zoneId] === 'rainbow'
+        swatch.style.background = applied.mode === 'rainbow'
             ? 'linear-gradient(90deg, #ff3b30, #ff9500, #34c759, #0055ff, #af52de)'
-            : freeZoneColor('0-0', zoneId);
+            : applied.mode === 'custom'
+                ? (Object.values(applied.customLayer)[0] || '#000000')
+                : applied.staticColor;
         const text = document.createElement('span');
-        text.textContent = `${zoneDisplayName(z)} · ${modeLabel(freeModes[zoneId])}`;
+        text.textContent = `${zoneDisplayName(z)} · ${modeLabel(applied.mode)}`;
         item.appendChild(swatch);
         item.appendChild(text);
         legend.appendChild(item);
@@ -2318,19 +2422,30 @@ function pixelStatusColor(key, zoneId) {
     return zoneColors['0'];
 }
 
-function freeZoneColor(key, zoneId) {
-    const mode = freeModes[zoneId] || 'static';
-    if (mode === 'custom' && freeCustomLayers[zoneId] && freeCustomLayers[zoneId][key]) {
-        return freeCustomLayers[zoneId][key];
+function freeZoneStateColor(key, state) {
+    const mode = state?.mode || 'static';
+    if (mode === 'custom' && state.customLayer && state.customLayer[key]) {
+        return state.customLayer[key];
     }
     if (mode === 'rainbow') {
         const n = Number(key.split('-')[0]) + Number(key.split('-')[1]) + rainbowTick;
         return `hsl(${(n * 28) % 360}, 92%, 54%)`;
     }
-    if (mode === 'custom') {
-        return zoneColors[zoneId] || '#e8e8ed';
-    }
-    return freeStaticColors[zoneId] || '#ffffff';
+    if (mode === 'custom') return '#000000';
+    return state?.staticColor || '#ffffff';
+}
+
+function freeZoneDraftColor(key, zoneId) {
+    const id = String(zoneId);
+    return freeZoneStateColor(key, {
+        mode: freeModes[id],
+        staticColor: freeStaticColors[id],
+        customLayer: freeCustomLayers[id],
+    });
+}
+
+function freeZoneAppliedColor(key, zoneId) {
+    return freeZoneStateColor(key, appliedFreeZoneState(zoneId));
 }
 
 function shouldLockPixel(zoneId) {
@@ -2368,7 +2483,13 @@ function redrawMatrix() {
                 ? `${matrixSize} · ${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${statusEditModeLabel()}`
                 : (freeViewMode === 'overview'
                     ? `${matrixSize} · Обзор свободных зон`
-                    : `${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])}`);
+                    : `${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])} · ${
+                        uncertainFreeZoneState[activeFreeZone]
+                            ? 'состояние не подтверждено'
+                            : freeZoneDraftHasUnsavedChanges(activeFreeZone)
+                                ? 'черновик не сохранён'
+                                : 'применено'
+                    }`);
 
     grid.querySelectorAll('.pixel').forEach(p => {
         const key = keyOf(p.dataset.x, p.dataset.y);
@@ -2384,9 +2505,11 @@ function redrawMatrix() {
         if (activeTab === 'status') {
             p.style.background = pixelStatusColor(key, zoneId);
         } else if (activeTab === 'free') {
-            p.style.background = isFreeZone(zoneId) && (freeViewMode === 'overview' || zoneId === activeFreeZone)
-                ? freeZoneColor(key, zoneId)
-                : (zoneColors[zoneId] || zoneColors['0']);
+            p.style.background = isFreeZone(zoneId) && freeViewMode === 'overview'
+                ? freeZoneAppliedColor(key, zoneId)
+                : isFreeZone(zoneId) && zoneId === activeFreeZone
+                    ? freeZoneDraftColor(key, zoneId)
+                    : (zoneColors[zoneId] || zoneColors['0']);
         } else {
             p.style.background = zoneColors[zoneId] || zoneColors['0'];
         }
@@ -2412,7 +2535,7 @@ function updateEditState() {
 }
 
 function paintPixel(pixel) {
-    if (matrixSavesBlockedByHardwareTransition()) return;
+    if (freeZoneEditorBlocked()) return;
     if (!pixel || !pixel.classList.contains('pixel')) return;
     const key = keyOf(pixel.dataset.x, pixel.dataset.y);
     const currentZone = hardwareZonesMap[key] || '0';
@@ -2539,13 +2662,39 @@ document.getElementById('zone_overview_mode_btn').addEventListener('click', () =
 });
 
 document.getElementById('free_zone_select').addEventListener('change', e => {
-    activeFreeZone = e.target.value;
+    const previousZoneId = String(activeFreeZone);
+    const nextZoneId = String(e.target.value);
+    if (freeZoneEditorBlocked()) {
+        e.target.value = previousZoneId;
+        return;
+    }
+    if (freeBrightnessSaveInProgress[previousZoneId]) {
+        alert('Дождитесь завершения сохранения яркости выбранной свободной зоны.');
+        e.target.value = previousZoneId;
+        return;
+    }
+    if (uncertainFreeZoneState[previousZoneId] || uncertainFreeZoneState[nextZoneId]) {
+        alert('Состояние свободной зоны не подтверждено контроллером. Перечитайте конфигурацию перед переключением зоны.');
+        e.target.value = previousZoneId;
+        return;
+    }
+    if (freeZoneDraftHasUnsavedChanges(previousZoneId) &&
+        !confirm(`В зоне «${zoneDisplayName(previousZoneId)}» есть несохранённый черновик. Отказаться от него и перейти к другой зоне?`)) {
+        e.target.value = previousZoneId;
+        return;
+    }
+    if (freeZoneDraftHasUnsavedChanges(previousZoneId)) {
+        discardFreeZoneDraft(previousZoneId);
+    }
+    activeFreeZone = nextZoneId;
+    loadFreeZoneDraftFromApplied(activeFreeZone);
     document.getElementById('free_mode_select').value = freeModes[activeFreeZone] || 'static';
     syncFreeColorInput();
     redrawMatrix();
 });
 
 document.getElementById('free_mode_select').addEventListener('change', e => {
+    if (freeZoneEditorBlocked()) return;
     freeModes[activeFreeZone] = e.target.value;
     freeZoneDirty[activeFreeZone] = true;
     syncFreeColorInput();
@@ -2563,6 +2712,7 @@ document.getElementById('free_overview_mode_btn').addEventListener('click', () =
 });
 
 document.getElementById('free_color').addEventListener('input', e => {
+    if (freeZoneEditorBlocked()) return;
     if ((freeModes[activeFreeZone] || 'static') === 'custom') {
         freeBrushColors[activeFreeZone] = e.target.value;
     } else {
@@ -2573,7 +2723,7 @@ document.getElementById('free_color').addEventListener('input', e => {
 });
 
 function applyStatusSolidColor() {
-    if (matrixSavesBlockedByHardwareTransition() || statusEditMode !== 'solid') return;
+    if (freeZoneEditorBlocked() || statusEditMode !== 'solid') return;
     const color = document.getElementById('status_color').value;
     let targetCount = 0;
     for (let y = 0; y < ROWS; y++) {
@@ -2590,7 +2740,7 @@ function applyStatusSolidColor() {
 }
 
 function resetSelectedStatusScope() {
-    if (matrixSavesBlockedByHardwareTransition() || statusEditMode !== 'pixels') return;
+    if (freeZoneEditorBlocked() || statusEditMode !== 'pixels') return;
     if (activeStatusScope === 'all' &&
         !confirm(`Сбросить ${STATUS_RESET_LABELS[activeStatus]} всех активных портов к заводскому базовому цвету?`)) {
         return;
@@ -2641,7 +2791,7 @@ document.getElementById('zone_erase_btn').addEventListener('click', () => {
 });
 
 document.getElementById('free_erase_btn').addEventListener('click', () => {
-    if (matrixSavesBlockedByHardwareTransition()) return;
+    if (freeZoneEditorBlocked()) return;
     if (freeViewMode !== 'edit' || (freeModes[activeFreeZone] || 'static') !== 'custom') return;
     freeCustomLayers[activeFreeZone] = {};
     freeZoneDirty[activeFreeZone] = true;
@@ -2966,8 +3116,10 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
             savedHardwareZonesMap = { ...submittedZoneMap };
             uncertainZoneMapSubmission = null;
             zoneMapDirty = false;
-            Object.keys(freeCustomLayers).forEach(zoneId => {
+            FREE_ZONE_IDS.forEach(zoneId => {
                 freeCustomLayers[zoneId] = sanitizeFreeLayerForZone(freeCustomLayers[zoneId], zoneId);
+                const applied = appliedFreeZoneState(zoneId);
+                applied.customLayer = sanitizeFreeLayerForZone(applied.customLayer, zoneId);
             });
             zonesSaved = true;
         } else if (resultUncertain) {
@@ -2985,8 +3137,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         schedulePortsBrightnessSave(portsBrightnessValue, true);
     }
     if (zonesSaved) {
-        updateDirtyIndicators();
-        updateEditState();
+        redrawMatrix();
     }
     if (!zoneMapDirty) {
         flushPendingFreeZoneBrightness();
@@ -2994,7 +3145,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
 });
 
 document.getElementById('clear_zone_btn').addEventListener('click', () => {
-    if (matrixSavesBlockedByHardwareTransition()) return;
+    if (freeZoneEditorBlocked()) return;
     if (zonePixelCount(activeZoneId) === 0) return;
     if (isPortZone(activeZoneId)) {
         const message = isRequiredActivePortZone(activeZoneId)
@@ -3012,7 +3163,7 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
 });
 
 document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
-    if (matrixSavesBlockedByHardwareTransition()) return;
+    if (freeZoneEditorBlocked()) return;
     if (!confirm('Очистить всю разметку матрицы? Все пиксели останутся без зоны только в браузере. Сохранить такую разметку нельзя, пока активные порты не будут размечены.')) return;
     hardwareZonesMap = {};
     zoneMapDirty = true;
@@ -3162,6 +3313,9 @@ document.getElementById('ports_brightness_input').addEventListener('change', e =
 });
 
 function setActiveFreeBrightness(value) {
+    if (freeZoneEditorBlocked()) {
+        return clampBrightnessValue(freeBrightness[activeFreeZone], 100);
+    }
     const zoneId = String(activeFreeZone);
     const previous = Number(freeBrightness[activeFreeZone]) || 100;
     const safe = setBrightnessPair('free_brightness', 'free_brightness_input', value);
@@ -3194,17 +3348,16 @@ document.getElementById('free_brightness_input').addEventListener('change', e =>
     scheduleFreeZoneBrightnessSave(activeFreeZone, value, true);
 });
 
-function buildFreeZonePayload(zoneId) {
+function buildFreeZonePayload(zoneId, state = captureFreeZoneDraft(zoneId)) {
     const id = String(zoneId);
-    const payload = {
+    return {
         zoneId: Number(id),
         enabled: true,
-        mode: freeModes[id] || 'static',
-        staticColor: freeStaticColors[id] || '#ffffff',
-        brightness: freeBrightness[id] || 100,
+        mode: state.mode,
+        staticColor: state.staticColor,
+        brightness: state.brightness,
+        customLayer: { ...state.customLayer },
     };
-    if (payload.mode === 'custom') payload.customLayer = freeCustomLayers[id] || {};
-    return payload;
 }
 
 function buildFreeZoneBrightnessPayload(zoneId, brightness) {
@@ -3214,14 +3367,19 @@ function buildFreeZoneBrightnessPayload(zoneId, brightness) {
     };
 }
 
-async function saveFreeZonePayload(payload) {
+async function saveFreeZonePayload(payload, signal) {
     if (matrixSavesBlockedByHardwareTransition()) return false;
     const res = await fetch('/save_free_zone', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal,
     });
-    return res.ok && (await res.text()) === 'OK';
+    const text = await res.text();
+    return {
+        ok: res.ok && text === 'OK',
+        uncertain: res.status >= 500 || (res.ok && text !== 'OK'),
+    };
 }
 
 function cancelFreeZoneBrightnessSave(zoneId) {
@@ -3235,30 +3393,56 @@ function cancelFreeZoneBrightnessSave(zoneId) {
 async function persistFreeZoneBrightness(zoneId, brightness, revision, showError = true) {
     const id = String(zoneId);
     if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
-        zoneMapDirty || validateActivePortZones()) return false;
+        zoneMapDirty || validateActivePortZones() || freeBrightnessSaveInProgress[id]) return false;
 
+    freeBrightnessSaveInProgress[id] = true;
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
-        const ok = await saveFreeZonePayload(buildFreeZoneBrightnessPayload(id, brightness));
+        const result = await saveFreeZonePayload(
+            buildFreeZoneBrightnessPayload(id, brightness),
+            saveController.signal
+        );
+        const ok = Boolean(result?.ok);
+        if (result?.uncertain) {
+            uncertainFreeZoneState[id] = true;
+            updateDirtyIndicators();
+        }
+        if (ok) appliedFreeZoneState(id).brightness = clampBrightnessValue(brightness);
         if (revision === freeBrightnessRevisions[id]) {
             freeBrightnessDirty[id] = !ok;
             updateDirtyIndicators();
         }
-        if (!ok && showError) alert(`Не удалось сохранить яркость зоны «${zoneDisplayName(id)}».`);
+        if (!ok && showError) {
+            alert(result?.uncertain
+                ? `Результат сохранения яркости зоны «${zoneDisplayName(id)}» неизвестен. Перечитайте конфигурацию контроллера.`
+                : `Не удалось сохранить яркость зоны «${zoneDisplayName(id)}».`);
+        }
         return ok;
     } catch (err) {
+        uncertainFreeZoneState[id] = true;
+        updateDirtyIndicators();
         if (revision === freeBrightnessRevisions[id]) {
             freeBrightnessDirty[id] = true;
             updateDirtyIndicators();
         }
-        if (showError) alert('Контроллер недоступен: яркость свободной зоны изменена только в браузере.');
+        if (showError) alert('Не удалось подтвердить сохранение яркости свободной зоны. Перечитайте конфигурацию контроллера.');
         return false;
+    } finally {
+        const newerDraftExists = revision !== freeBrightnessRevisions[id];
+        clearTimeout(saveTimeout);
+        delete freeBrightnessSaveInProgress[id];
+        if (newerDraftExists && freeBrightnessDirty[id]) {
+            scheduleFreeZoneBrightnessSave(id, freeBrightness[id]);
+        }
     }
 }
 
 function scheduleFreeZoneBrightnessSave(zoneId, brightness, immediate = false) {
     const id = String(zoneId);
     cancelFreeZoneBrightnessSave(id);
-    if (!freeBrightnessDirty[id] || !backendAvailable || matrixSavesBlockedByHardwareTransition()) return;
+    if (!freeBrightnessDirty[id] || !backendAvailable ||
+        matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress) return;
 
     const revision = freeBrightnessRevisions[id];
     freeBrightnessSaveTimers[id] = setTimeout(() => {
@@ -3276,10 +3460,11 @@ function flushPendingFreeZoneBrightness() {
 }
 
 function ensureFreeZoneSaveAllowed() {
-    if (matrixSavesBlockedByHardwareTransition()) {
+    if (freeZoneEditorBlocked()) {
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return false;
     }
+    if (mockMode) return true;
     if (!backendAvailable) {
         alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
         return false;
@@ -3300,23 +3485,74 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
     if (!ensureFreeZoneSaveAllowed()) return;
 
     const zoneId = String(activeFreeZone);
+    if (freeBrightnessSaveInProgress[zoneId]) {
+        alert('Дождитесь завершения сохранения яркости выбранной свободной зоны.');
+        return;
+    }
     cancelFreeZoneBrightnessSave(zoneId);
+    const submittedState = captureFreeZoneDraft(zoneId);
+    const payload = buildFreeZonePayload(zoneId, submittedState);
+
+    if (mockMode) {
+        setAppliedFreeZoneState(zoneId, submittedState);
+        loadFreeZoneDraftFromApplied(zoneId);
+        freeZoneDirty[zoneId] = false;
+        freeBrightnessDirty[zoneId] = false;
+        uncertainFreeZoneState[zoneId] = false;
+        updateDirtyIndicators();
+        redrawMatrix();
+        alert('Демонстрационный режим: черновик применён только к локальному предпросмотру. Запрос к ESP32 не отправлялся.');
+        return;
+    }
+
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
+    let saved = false;
+    let resultMessage = '';
+    freeZoneSaveInProgress = true;
+    updateMatrixSaveControls();
     try {
-        const ok = await saveFreeZonePayload(buildFreeZonePayload(zoneId));
+        const res = await fetch('/save_free_zone', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: saveController.signal,
+        });
+        const responseText = await res.text();
+        const ok = res.ok && responseText === 'OK';
         if (ok) {
+            setAppliedFreeZoneState(zoneId, submittedState);
+            loadFreeZoneDraftFromApplied(zoneId);
             freeZoneDirty[zoneId] = false;
             freeBrightnessDirty[zoneId] = false;
-            updateDirtyIndicators();
-            updateEditState();
+            uncertainFreeZoneState[zoneId] = false;
+            saved = true;
+        } else if (res.status >= 500 || res.ok) {
+            uncertainFreeZoneState[zoneId] = true;
         }
-        alert(ok ? 'Настройки свободной зоны сохранены.' : 'Не удалось сохранить свободную зону.');
+        resultMessage = ok
+            ? 'Настройки свободной зоны сохранены и применены.'
+            : res.status >= 500 || res.ok
+                ? 'Результат сохранения свободной зоны неизвестен. Черновик сохранён в браузере; перечитайте конфигурацию перед дальнейшей работой.'
+                : 'Не удалось сохранить свободную зону. Черновик оставлен для повторной попытки.';
     } catch (err) {
-        alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
+        uncertainFreeZoneState[zoneId] = true;
+        resultMessage = 'Не удалось подтвердить сохранение свободной зоны. Черновик сохранён в браузере; перечитайте конфигурацию контроллера.';
+    } finally {
+        clearTimeout(saveTimeout);
+        freeZoneSaveInProgress = false;
+        updateMatrixSaveControls();
     }
+    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    if (saved && !zoneMapDirty) flushPendingFreeZoneBrightness();
+    updateDirtyIndicators();
+    updateEditState();
+    redrawMatrix();
+    alert(resultMessage);
 });
 
 document.getElementById('apply_free_brightness_all_btn').addEventListener('click', async () => {
-    if (matrixSavesBlockedByHardwareTransition()) {
+    if (freeZoneEditorBlocked()) {
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return;
     }
@@ -3327,14 +3563,26 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
     }
 
     const value = clampBrightnessValue(document.getElementById('free_brightness').value);
-    if (!backendAvailable) {
+    if (mockMode) {
         mappedZones.forEach(zoneId => {
             freeBrightness[zoneId] = value;
-            freeBrightnessRevisions[zoneId] += 1;
-            freeBrightnessDirty[zoneId] = true;
+            appliedFreeZoneState(zoneId).brightness = value;
+            freeBrightnessDirty[zoneId] = false;
+            cancelFreeZoneBrightnessSave(zoneId);
         });
+        syncFreeColorInput();
+        updateDirtyIndicators();
         redrawMatrix();
-        alert('Контроллер недоступен: яркость свободных зон изменена только в браузере.');
+        alert(`Демонстрационный режим: яркость ${value} применена только к локальному предпросмотру. Запрос к ESP32 не отправлялся.`);
+        return;
+    }
+    if (!backendAvailable) {
+        const zoneId = String(activeFreeZone);
+        freeBrightness[zoneId] = value;
+        freeBrightnessRevisions[zoneId] += 1;
+        freeBrightnessDirty[zoneId] = true;
+        redrawMatrix();
+        alert('Контроллер недоступен: яркость выбранной зоны оставлена в черновике.');
         return;
     }
     const zoneValidationError = validateActivePortZones();
@@ -3346,9 +3594,21 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         alert('Сначала сохраните разметку зон. Настройки свободной зоны применяются к сохранённой карте матрицы.');
         return;
     }
+    if (mappedZones.some(zoneId => freeBrightnessSaveInProgress[zoneId])) {
+        alert('Дождитесь завершения текущего сохранения яркости свободной зоны.');
+        return;
+    }
+    if (mappedZones.some(zoneId => uncertainFreeZoneState[zoneId])) {
+        alert('Состояние одной из свободных зон не подтверждено. Перечитайте конфигурацию контроллера перед общей настройкой яркости.');
+        return;
+    }
+    mappedZones.forEach(cancelFreeZoneBrightnessSave);
 
+    const failedZones = [];
+    const uncertainZones = [];
+    freeBrightnessBatchInProgress = true;
+    updateMatrixSaveControls();
     try {
-        const failedZones = [];
         for (const zoneId of mappedZones) {
             cancelFreeZoneBrightnessSave(zoneId);
             freeBrightness[zoneId] = value;
@@ -3356,16 +3616,28 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
             freeBrightnessDirty[zoneId] = true;
             const revision = freeBrightnessRevisions[zoneId];
             const ok = await persistFreeZoneBrightness(zoneId, value, revision, false);
-            if (!ok) failedZones.push(zoneDisplayName(zoneId));
-        }
-        redrawMatrix();
-        if (failedZones.length) {
-            alert(`Не удалось сохранить яркость зон: ${failedZones.join(', ')}.`);
-        } else {
-            alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
+            if (!ok) {
+                failedZones.push(zoneDisplayName(zoneId));
+                if (uncertainFreeZoneState[zoneId]) uncertainZones.push(zoneDisplayName(zoneId));
+                if (zoneId !== String(activeFreeZone)) {
+                    freeBrightnessDirty[zoneId] = false;
+                    loadFreeZoneDraftFromApplied(zoneId);
+                }
+            }
         }
     } catch (err) {
-        alert('Не удалось сохранить яркость для всех свободных зон.');
+        failedZones.push('неизвестная зона');
+    } finally {
+        freeBrightnessBatchInProgress = false;
+        updateMatrixSaveControls();
+    }
+    redrawMatrix();
+    if (uncertainZones.length) {
+        alert(`Результат сохранения яркости зон неизвестен: ${uncertainZones.join(', ')}. Перечитайте конфигурацию контроллера.`);
+    } else if (failedZones.length) {
+        alert(`Не удалось сохранить яркость зон: ${failedZones.join(', ')}.`);
+    } else {
+        alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
     }
 });
 
@@ -4002,7 +4274,10 @@ function renderDiagCards(containerId, cards, emptyText = '') {
 
 setInterval(() => {
     rainbowTick++;
-    if (activeTab === 'free' && freeModes[activeFreeZone] === 'rainbow') redrawMatrix();
+    const freeRainbowVisible = freeViewMode === 'overview'
+        ? FREE_ZONE_IDS.some(zoneId => appliedFreeZoneState(zoneId).mode === 'rainbow')
+        : freeModes[activeFreeZone] === 'rainbow';
+    if (activeTab === 'free' && freeRainbowVisible) redrawMatrix();
 }, 160);
 
 setInterval(() => {
