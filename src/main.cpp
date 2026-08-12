@@ -1232,7 +1232,7 @@ void handleSetBright() {
 
     const String type = server.arg("type");
     int parsedValue = 0;
-    if (!parseStrictInt(server.arg("val"), parsedValue) || parsedValue < 1 || parsedValue > 255) {
+    if (!parseStrictInt(server.arg("val"), parsedValue) || parsedValue < 0 || parsedValue > 255) {
         server.send(400, "text/plain", "BAD_BRIGHTNESS");
         return;
     }
@@ -1389,7 +1389,7 @@ void handleSaveFreeZone() {
 
     if (jsonHasField(body, "brightness")) {
         int brightness = 0;
-        if (!extractJsonIntField(body, "brightness", brightness) || brightness < 1 || brightness > 255) {
+        if (!extractJsonIntField(body, "brightness", brightness) || brightness < 0 || brightness > 255) {
             server.send(400, "text/plain", "BAD_BRIGHTNESS");
             return;
         }

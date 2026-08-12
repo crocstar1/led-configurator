@@ -926,10 +926,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <div>
                         <label for="ports_brightness">Общая яркость портовых зон</label>
                         <div class="brightness-control">
-                            <input type="range" id="ports_brightness" min="1" max="255" value="120">
-                            <input type="number" id="ports_brightness_input" min="1" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
+                            <input type="range" id="ports_brightness" min="0" max="255" value="120">
+                            <input type="number" id="ports_brightness_input" min="0" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
                         </div>
-                        <div class="hint">Яркость применяется автоматически после изменения.</div>
+                        <div class="hint">Яркость применяется автоматически после изменения. Значение 0 полностью выключает индикацию портов, включая ошибку.</div>
                     </div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
@@ -968,10 +968,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <div>
                             <label for="free_brightness">Яркость выбранной свободной зоны</label>
                             <div class="brightness-control">
-                                <input type="range" id="free_brightness" min="1" max="255" value="100">
-                                <input type="number" id="free_brightness_input" min="1" max="255" value="100" inputmode="numeric" aria-label="Яркость свободной зоны числом">
+                                <input type="range" id="free_brightness" min="0" max="255" value="100">
+                                <input type="number" id="free_brightness_input" min="0" max="255" value="100" inputmode="numeric" aria-label="Яркость свободной зоны числом">
                             </div>
-                            <div class="hint">Яркость применяется автоматически после изменения.</div>
+                            <div class="hint">Яркость применяется автоматически после изменения. Значение 0 выключает зону, не удаляя её режим и рисунок.</div>
                         </div>
                     </div>
                     <div class="btn-row">
@@ -1712,9 +1712,10 @@ function freeCustomLayersLosePixelsWithCurrentZoneMap() {
 }
 
 function clampBrightnessValue(value, fallback = 100) {
+    if (value === null || value === undefined || value === '') return fallback;
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return fallback;
-    return Math.max(1, Math.min(255, Math.round(parsed)));
+    return Math.max(0, Math.min(255, Math.round(parsed)));
 }
 
 function configHexColor(value, fallback) {
@@ -1736,7 +1737,11 @@ function syncFreeColorInput() {
         ? (freeBrushColors[activeFreeZone] || '#ffffff')
         : (freeStaticColors[activeFreeZone] || '#ffffff');
     document.getElementById('free_color').value = color;
-    setBrightnessPair('free_brightness', 'free_brightness_input', freeBrightness[activeFreeZone] || 100);
+    setBrightnessPair(
+        'free_brightness',
+        'free_brightness_input',
+        freeBrightness[activeFreeZone] ?? 100
+    );
 }
 
 function updateFreeModeControls() {
@@ -2103,7 +2108,11 @@ function applyConfig(cfg) {
         Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
         activePortCount
     );
-    portsBrightnessValue = setBrightnessPair('ports_brightness', 'ports_brightness_input', cfg.b_ports || 120);
+    portsBrightnessValue = setBrightnessPair(
+        'ports_brightness',
+        'ports_brightness_input',
+        cfg.b_ports ?? 120
+    );
     appliedFreeZones = {};
     FREE_ZONE_IDS.forEach(zoneId => setAppliedFreeZoneState(zoneId, defaultFreeZoneState(zoneId)));
     if (Array.isArray(cfg.free_zones)) {
@@ -3471,7 +3480,7 @@ function setActiveFreeBrightness(value) {
         return clampBrightnessValue(freeBrightness[activeFreeZone], 100);
     }
     const zoneId = String(activeFreeZone);
-    const previous = Number(freeBrightness[activeFreeZone]) || 100;
+    const previous = clampBrightnessValue(freeBrightness[activeFreeZone], 100);
     const safe = setBrightnessPair('free_brightness', 'free_brightness_input', value);
     freeBrightness[zoneId] = safe;
     if (safe !== previous) {

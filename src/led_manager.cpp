@@ -251,6 +251,9 @@ CRGB renderPortPixel(size_t logicalIndex,
   if (status == PORT_STATUS_DISABLED) {
     return CRGB::Black;
   }
+  if (activeState.portBrightness == 0) {
+    return CRGB::Black;
+  }
 
   CRGB color;
   const MatrixStateStoredLayer *layer = statusLayer(status);
