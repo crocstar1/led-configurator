@@ -824,12 +824,12 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                 <strong id="hardware_config_title">Аппаратная конфигурация</strong>
                                 <div class="grid-2">
                                     <div>
-                                        <label for="hardware_cols">Столбцы</label>
-                                        <input id="hardware_cols" type="number" min="1" max="500" step="1" inputmode="numeric">
+                                        <label for="hardware_rows">Строки матрицы</label>
+                                        <input id="hardware_rows" type="number" min="1" max="500" step="1" inputmode="numeric">
                                     </div>
                                     <div>
-                                        <label for="hardware_rows">Строки</label>
-                                        <input id="hardware_rows" type="number" min="1" max="500" step="1" inputmode="numeric">
+                                        <label for="hardware_cols">Столбцы матрицы</label>
+                                        <input id="hardware_cols" type="number" min="1" max="500" step="1" inputmode="numeric">
                                     </div>
                                 </div>
                                 <div class="grid-2">
@@ -845,7 +845,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                     <div>
                                         <label for="hardware_protocol">Тип светодиодов</label>
                                         <select id="hardware_protocol">
-                                            <option value="ws2811_800k">WS2811 · 800 кГц</option>
+                                            <option value="ws2811_800k">WS2811</option>
                                         </select>
                                     </div>
                                 </div>
@@ -860,7 +860,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                         <option value="BGR">BGR</option>
                                     </select>
                                 </div>
-                                <div class="notice">Размер или число портов сбрасывают разметку и нарисованные слои. Любое изменение применяется после перезагрузки.</div>
+                                <div class="notice">Указывайте фактический размер подключённой матрицы. Это не обрезка изображения. Чтобы отключить часть матрицы, оставьте физический размер неизменным и назначьте ненужным пикселям «Без зоны».</div>
+                                <div class="hint">Изменение строк, столбцов или числа активных портов сбрасывает разметку зон и семь пространственных слоёв. Тип светодиодов и порядок цветов применяются после перезагрузки без очистки этих данных.</div>
                                 <div class="btn-row">
                                     <button class="btn primary" id="save_hardware_config_btn" type="button">Сохранить аппаратные настройки</button>
                                 </div>
@@ -868,11 +869,11 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             </div>
                             <div class="section-divider"></div>
                             <div>
-                                <label for="topology_select">Топология матрицы</label>
+                                <label for="topology_select">Схема физического соединения светодиодов</label>
                                 <select id="topology_select"></select>
                             </div>
                             <div class="status-line" id="topology_summary"></div>
-                            <div class="notice">Смена топологии меняет физический порядок вывода разметки зон и цветовых слоёв. Если матрица светится не в той области, выберите другой вариант.</div>
+                            <div class="notice">Выберите вариант, соответствующий реальному соединению светодиодов. Эта настройка не поворачивает рисунок. Неверный вариант может зеркально отобразить или перемешать зоны на физической матрице.</div>
                             <div class="topology-preview" id="topology_preview" aria-label="Порядок светодиодов"></div>
                             <div class="btn-row">
                                 <button class="btn primary" id="save_topology_btn">Сохранить топологию</button>
@@ -1306,6 +1307,8 @@ let hardwareConfigInitialized = false;
 let hardwareConfigSaveInProgress = false;
 let hardwareRestartInProgress = false;
 let hardwareRestartPollToken = 0;
+let topologySaveInProgress = false;
+let uncertainTopologySubmission = null;
 let zoneMapDirty = false;
 let zoneMapSaveInProgress = false;
 let uncertainZoneMapSubmission = null;
@@ -1319,6 +1322,7 @@ let portsBrightnessValue = 120;
 let portsBrightnessDirty = false;
 let portsBrightnessRevision = 0;
 let portsBrightnessSaveTimer = null;
+let portsBrightnessSaveInProgress = 0;
 let freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
 let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
 let freeBrightnessSaveTimers = {};
@@ -1942,13 +1946,59 @@ function updateStatusEditorControls() {
     });
 }
 
-function matrixSavesBlockedByHardwareTransition() {
+function matrixSaveOperationInProgress() {
     return hardwareConfigSaveInProgress || hardwareRestartInProgress ||
-        zoneMapSaveInProgress || statusSaveInProgress || freeZoneSaveInProgress;
+        topologySaveInProgress || zoneMapSaveInProgress ||
+        statusSaveInProgress || freeZoneSaveInProgress;
+}
+
+function matrixSavesBlockedByHardwareTransition() {
+    return matrixSaveOperationInProgress() || uncertainTopologySubmission !== null;
 }
 
 function freeZoneEditorBlocked() {
     return matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress;
+}
+
+function layerMapsEqual(left = {}, right = {}) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return leftKeys.length === rightKeys.length && leftKeys.every(key =>
+        String(left[key]).toLowerCase() === String(right[key]).toLowerCase()
+    );
+}
+
+function hasUnsavedFreeZoneScalarDrafts() {
+    return FREE_ZONE_IDS.some(zoneId => {
+        const draft = captureFreeZoneDraft(zoneId);
+        const applied = appliedFreeZoneState(zoneId);
+        return draft.mode !== applied.mode ||
+            draft.staticColor.toLowerCase() !== applied.staticColor.toLowerCase() ||
+            Number(draft.brightness) !== Number(applied.brightness);
+    });
+}
+
+function hasUnsavedSpatialDrafts() {
+    return zoneMapDirty ||
+        Object.values(statusLayerDirty).some(Boolean) ||
+        FREE_ZONE_IDS.some(zoneId =>
+            !layerMapsEqual(captureFreeZoneDraft(zoneId).customLayer, appliedFreeZoneState(zoneId).customLayer)
+        );
+}
+
+function brightnessSavePendingOrInProgress() {
+    return portsBrightnessSaveTimer !== null ||
+        portsBrightnessSaveInProgress > 0 ||
+        Object.keys(freeBrightnessSaveTimers).length > 0 ||
+        Object.keys(freeBrightnessSaveInProgress).length > 0 ||
+        freeBrightnessBatchInProgress;
+}
+
+function hasUnsavedPreservedSettings() {
+    return portsBrightnessDirty ||
+        Object.values(freeBrightnessDirty).some(Boolean) ||
+        Object.values(uncertainFreeZoneState).some(Boolean) ||
+        hasUnsavedFreeZoneScalarDrafts();
 }
 
 function hasPendingMatrixChanges(includeTopology = true) {
@@ -1995,6 +2045,10 @@ function updateMatrixSaveControls() {
         const element = document.getElementById(id);
         if (element) element.disabled = blocked;
     });
+    if (uncertainTopologySubmission !== null && !matrixSaveOperationInProgress()) {
+        document.getElementById('topology_select').disabled = false;
+        document.getElementById('save_topology_btn').disabled = false;
+    }
     updateFreeModeControls();
     updateZoneViewControls();
     updateFreeViewControls();
@@ -2014,6 +2068,7 @@ function applyConfig(cfg) {
         topology: Number(matrix.topology ?? 0),
     };
     pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
+    uncertainTopologySubmission = null;
     activePortCount = hardwareConfigApplied.activePortCount;
     if (!preserveHardwarePending) syncHardwareConfigForm();
     hardwareConfigInitialized = true;
@@ -2897,13 +2952,6 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
     }
     const requested = validation.config;
 
-    if (hasPendingMatrixChanges()) {
-        setHardwareConfigMessage(
-            'Сначала сохраните изменения зон, слоёв, яркости и топологии.',
-            true
-        );
-        return;
-    }
     if (configLoadInProgress) {
         setHardwareConfigMessage('Дождитесь завершения загрузки текущей конфигурации.', true);
         return;
@@ -2920,9 +2968,47 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
     const spatialChange = requested.rows !== hardwareConfigApplied.rows ||
         requested.cols !== hardwareConfigApplied.cols ||
         requested.activePortCount !== hardwareConfigApplied.activePortCount;
+
+    if (Number(pendingTopology) !== Number(matrixConfig.topology)) {
+        const appliedTopology = topologyOption(matrixConfig.topology).label;
+        setHardwareConfigMessage(
+            `Сначала сохраните выбранную схему физического соединения либо верните выбор к применённому варианту «${appliedTopology}».`,
+            true
+        );
+        return;
+    }
+    if (brightnessSavePendingOrInProgress()) {
+        setHardwareConfigMessage(
+            'Дождитесь завершения сохранения яркости портов и свободных зон.',
+            true
+        );
+        return;
+    }
+    if (hasUnsavedPreservedSettings()) {
+        setHardwareConfigMessage(
+            'Режимы, статичные цвета и яркость сохраняются при изменении геометрии. Сначала сохраните или отмените их несохранённые изменения.',
+            true
+        );
+        return;
+    }
+    if (!spatialChange && (
+        hasPendingMatrixChanges(false) ||
+        hasUnsavedSpatialDrafts() ||
+        uncertainZoneMapSubmission !== null
+    )) {
+        setHardwareConfigMessage(
+            'Тип светодиодов и порядок цветов применяются после перезагрузки без очистки зон и слоёв. Сначала сохраните или отмените все несохранённые изменения редактора.',
+            true
+        );
+        return;
+    }
+
+    const browserDraftWarning = hasUnsavedSpatialDrafts() || uncertainZoneMapSubmission !== null
+        ? ' Несохранённая разметка и несохранённые рисунки в браузере также будут отброшены.'
+        : '';
     const confirmation = spatialChange
-        ? 'Изменение размера матрицы или количества портов очистит разметку зон и все нарисованные слои. Продолжить?'
-        : 'Новые параметры светодиодов начнут действовать после перезагрузки контроллера. Продолжить?';
+        ? `Изменение фактических строк, столбцов или числа активных портов очистит сохранённую разметку зон и все семь пространственных слоёв.${browserDraftWarning} Схема физического соединения, яркость, режимы и статичные цвета сохранятся. Продолжить?`
+        : 'Тип светодиодов или порядок цветов изменится после перезагрузки контроллера. Разметка зон и семь пространственных слоёв не очищаются. Продолжить?';
     if (!confirm(confirmation)) return;
 
     hardwareConfigSaveInProgress = true;
@@ -3015,18 +3101,36 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
 document.getElementById('topology_select').addEventListener('change', e => {
     pendingTopology = Number(e.target.value);
     renderTopologyControls();
-    setTopologyMessage('');
+    setTopologyMessage(
+        pendingTopology === Number(matrixConfig.topology)
+            ? 'Выбран применённый вариант.'
+            : 'Предварительная схема обновлена. Физический порядок не изменится до успешного сохранения.'
+    );
 });
 
 document.getElementById('save_topology_btn').addEventListener('click', async () => {
-    if (matrixSavesBlockedByHardwareTransition()) {
-        setTopologyMessage('Сохранение матрицы заблокировано до перезагрузки контроллера.', true);
+    const retryingUncertainTopology = uncertainTopologySubmission !== null &&
+        Number(pendingTopology) === Number(uncertainTopologySubmission);
+    if (matrixSaveOperationInProgress()) {
+        setTopologyMessage('Другое сохранение матрицы ещё не завершено.', true);
         return;
     }
-    if (hasPendingMatrixChanges(false)) {
-        const message = 'Сначала сохраните изменения зон, статусов, свободных зон и яркости.';
-        setTopologyMessage(message, true);
-        alert(message);
+    if (uncertainTopologySubmission !== null && !retryingUncertainTopology) {
+        setTopologyMessage(
+            `Результат предыдущего сохранения неизвестен. Повторите сохранение варианта «${topologyOption(uncertainTopologySubmission).label}» либо перечитайте конфигурацию контроллера.`,
+            true
+        );
+        return;
+    }
+    if (brightnessSavePendingOrInProgress()) {
+        setTopologyMessage('Дождитесь завершения сохранения яркости.', true);
+        return;
+    }
+    if (hasPendingMatrixChanges(false) || uncertainZoneMapSubmission !== null) {
+        setTopologyMessage(
+            'Сначала разрешите несохранённые или неподтверждённые изменения матрицы. Перед сменой физического размера можно вместо этого вернуть выбор схемы к применённому варианту.',
+            true
+        );
         return;
     }
 
@@ -3035,32 +3139,70 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
         return;
     }
 
-    if (!confirm('Смена топологии изменит физический порядок светодиодов. Разметка зон останется на своих местах в редакторе.')) {
+    if (!confirm('Схема должна соответствовать реальному соединению светодиодов. Логический рисунок и координаты зон не перемещаются. Сохранить выбранный физический порядок?')) {
         return;
     }
 
     if (!backendAvailable) {
-        matrixConfig.topology = pendingTopology;
-        setTopologyMessage('Контроллер недоступен: топология изменена только в браузере.');
+        setTopologyMessage('Контроллер недоступен: показана только предварительная схема, выбор не сохранён.', true);
         return;
     }
 
+    const submittedTopology = Number(pendingTopology);
     const body = new URLSearchParams();
-    body.set('topology', String(pendingTopology));
+    body.set('topology', String(submittedTopology));
 
+    topologySaveInProgress = true;
+    updateMatrixSaveControls();
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
         const res = await fetch('/save_topology', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
+            signal: saveController.signal,
         });
-        if (!res.ok || (await res.text()) !== 'OK') throw new Error('SAVE_FAILED');
-        matrixConfig.topology = pendingTopology;
-        await loadConfig();
-        setTopologyMessage('Топология сохранена.');
+        const responseText = (await res.text()).trim();
+        if (res.status === 200 && responseText === 'OK') {
+            matrixConfig.topology = submittedTopology;
+            pendingTopology = submittedTopology;
+            uncertainTopologySubmission = null;
+            renderTopologyControls();
+            setTopologyMessage('Схема физического соединения сохранена и применена.');
+        } else if (res.status === 409 && responseText === 'RESTART_PENDING') {
+            hardwareRestartInProgress = true;
+            setTopologyMessage(
+                'Контроллер уже ожидает перезагрузки после аппаратного сохранения. Перезагрузите его и обновите страницу.',
+                true
+            );
+        } else if (
+            (res.status === 400 && responseText === 'BAD_TOPOLOGY') ||
+            (res.status === 500 && responseText === 'STATE_UNAVAILABLE')
+        ) {
+            setTopologyMessage('Контроллер отклонил сохранение схемы. Применённое состояние не изменено.', true);
+        } else {
+            uncertainTopologySubmission = submittedTopology;
+            setTopologyMessage(
+                responseText === 'APPLY_FAILED_REBOOT_REQUIRED'
+                    ? 'Схема записана, но не применена в работающей прошивке. Перезагрузите контроллер и перечитайте конфигурацию.'
+                    : 'Результат сохранения схемы неизвестен. Повторите сохранение того же варианта либо перечитайте конфигурацию контроллера.',
+                true
+            );
+        }
     } catch (err) {
-        setTopologyMessage('Не удалось сохранить топологию.', true);
+        uncertainTopologySubmission = submittedTopology;
+        setTopologyMessage(
+            'Не удалось подтвердить сохранение схемы. Повторите сохранение того же варианта либо перечитайте конфигурацию контроллера.',
+            true
+        );
+    } finally {
+        clearTimeout(saveTimeout);
+        topologySaveInProgress = false;
+        updateMatrixSaveControls();
     }
+    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    if (!zoneMapDirty) flushPendingFreeZoneBrightness();
 });
 
 document.getElementById('save_zones_btn').addEventListener('click', async () => {
@@ -3253,8 +3395,12 @@ function updatePortsBrightness(value) {
 }
 
 async function persistPortsBrightness(value, revision) {
-    if (!backendAvailable || matrixSavesBlockedByHardwareTransition()) return false;
+    if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
+        portsBrightnessSaveInProgress > 0) return false;
 
+    portsBrightnessSaveInProgress = 1;
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
         const body = new URLSearchParams();
         body.set('type', 'ports');
@@ -3263,6 +3409,7 @@ async function persistPortsBrightness(value, revision) {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
+            signal: saveController.signal,
         });
         const ok = res.ok && (await res.text()) === 'OK';
         if (revision === portsBrightnessRevision) {
@@ -3278,6 +3425,13 @@ async function persistPortsBrightness(value, revision) {
         }
         alert('Контроллер недоступен: яркость портовых зон изменена только в браузере.');
         return false;
+    } finally {
+        const newerDraftExists = revision !== portsBrightnessRevision;
+        clearTimeout(saveTimeout);
+        portsBrightnessSaveInProgress = 0;
+        if (newerDraftExists && portsBrightnessDirty) {
+            schedulePortsBrightnessSave(portsBrightnessValue, true);
+        }
     }
 }
 
