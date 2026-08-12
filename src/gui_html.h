@@ -505,6 +505,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             flex-wrap: wrap;
         }
 
+        .service-action-row {
+            justify-content: flex-end;
+        }
+
         .btn {
             border: 1px solid var(--line);
             border-radius: 10px;
@@ -761,8 +765,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </g>
             </svg>
             <div class="brand-copy">
-                <h1>НЕК | Контроллер LED-индикации</h1>
-                <span>инженерная настройка матрицы</span>
+                <h1>Контроллер LED-индикации</h1>
+                <span>Настройка матрицы</span>
             </div>
         </div>
         <div class="top-actions">
@@ -1005,13 +1009,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <button class="tab-btn" data-service="diagnostics" type="button">Диагностика</button>
             </div>
 
-            <section class="service-section" id="service_diagnostics">
+            <section class="service-section" id="service_diagnostics" aria-label="Диагностика">
                 <div class="section">
-                    <div class="row">
-                        <strong>Диагностика</strong>
+                    <div class="btn-row service-action-row">
                         <button class="btn" id="refresh_diag_btn" type="button">Обновить данные</button>
                     </div>
-                    <div class="hint" id="diagnostics_message"></div>
+                    <div class="hint" id="diagnostics_source" aria-live="polite"></div>
+                    <div class="hint" id="diagnostics_message" aria-live="polite"></div>
                     <div>
                         <label>Прошивка</label>
                         <div class="diag-grid" id="diag_firmware"></div>
@@ -1023,7 +1027,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="section-divider"></div>
                     <div>
-                        <label>Рабочие задачи</label>
+                        <label>Фоновые процессы</label>
                         <div class="diag-grid" id="diag_tasks"></div>
                     </div>
                     <div class="section-divider"></div>
@@ -1038,7 +1042,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="section-divider"></div>
                     <div>
-                        <label>Входы Data1..Data8</label>
+                        <label>Входы Data1…Data8</label>
                         <div class="diag-grid" id="diag_inputs"></div>
                     </div>
                     <div class="section-divider"></div>
@@ -1054,10 +1058,9 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </div>
             </section>
 
-            <section class="service-section active" id="service_network">
+            <section class="service-section active" id="service_network" aria-label="Сеть">
                 <div class="section">
-                    <div class="row">
-                        <strong>Сеть</strong>
+                    <div class="btn-row service-action-row">
                         <button class="btn" id="refresh_network_btn" type="button">Обновить статус сети</button>
                     </div>
                     <div class="diag-grid" id="network_summary"></div>
@@ -1117,11 +1120,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </div>
             </section>
 
-            <section class="service-section" id="service_firmware">
+            <section class="service-section" id="service_firmware" aria-label="Прошивка">
                 <div class="section">
-                    <div class="row">
-                        <strong>Прошивка</strong>
-                    </div>
                     <form id="firmware_form" class="section">
                         <div>
                             <label for="firmware_file">Файл прошивки</label>
@@ -1139,11 +1139,8 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 </div>
             </section>
 
-            <section class="service-section" id="service_security">
+            <section class="service-section" id="service_security" aria-label="Безопасность">
                 <div class="section">
-                    <div class="row">
-                        <strong>Безопасность</strong>
-                    </div>
                     <form id="auth_form" class="section">
                         <div>
                             <label for="auth_username">Логин</label>
@@ -4342,24 +4339,27 @@ function renderDiagnostics() {
     const ledRuntime = diagnostics.ledRuntime || {};
     const networkRuntime = diagnostics.networkRuntime || {};
     const inputUpdateMode = mockMode
-        ? 'локальный предпросмотр'
+        ? 'демонстрационные данные'
         : !hasInputRuntime
         ? 'нет данных'
         : (inputRuntime.taskStarted
-            ? 'отдельная задача'
-            : (inputRuntime.loopFallback ? 'основной цикл (резерв)' : 'не запущено'));
+            ? 'работает отдельно'
+            : (inputRuntime.loopFallback ? 'работает через резервный основной цикл' : 'не запущено'));
     const ledUpdateMode = mockMode
-        ? 'локальный предпросмотр'
+        ? 'демонстрационные данные'
         : !hasLedRuntime
         ? 'нет данных'
         : (ledRuntime.taskStarted
-            ? 'отдельная задача'
-            : (ledRuntime.loopFallback ? 'основной цикл (резерв)' : 'не запущено'));
+            ? 'работает отдельно'
+            : (ledRuntime.loopFallback ? 'работает через резервный основной цикл' : 'не запущено'));
     const ledMutexStatus = mockMode
         ? 'нет данных'
         : !hasLedRuntime
         ? 'нет данных'
-        : (ledRuntime.mutexReady ? 'готов' : 'не создан');
+        : (ledRuntime.mutexReady ? 'работает' : 'не запущена');
+    document.getElementById('diagnostics_source').textContent = mockMode
+        ? 'Демонстрационные данные — ESP32 недоступна'
+        : 'Данные диагностики — получены от контроллера';
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
 
@@ -4377,11 +4377,11 @@ function renderDiagnostics() {
     ]);
 
     renderDiagCards('diag_tasks', [
-        ['Чтение Data-входов', inputUpdateMode],
+        ['Чтение входов Data1…Data8', inputUpdateMode],
         ['Последнее чтение входов', formatRuntimeAge(inputRuntime.lastUpdateAgeMs)],
         ['Обновление матрицы', ledUpdateMode],
         ['Последний кадр матрицы', formatRuntimeAge(ledRuntime.lastRefreshAgeMs)],
-        ['LED mutex', ledMutexStatus],
+        ['Защита состояния матрицы', ledMutexStatus],
     ]);
 
     renderDiagCards('diag_network_runtime', [
@@ -4390,10 +4390,7 @@ function renderDiagnostics() {
 
     renderDiagCards('diag_summary', [
         ['Активных портов', diagnostics.activePortCount ?? 1],
-        ['Рабочий режим', runtimeModeLabel(mode)],
-        ['Состояние редактора', 'предпросмотр в браузере'],
         ['Основной выход матрицы', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
-        ['Источник данных', mockMode ? 'локальная конфигурация по умолчанию' : 'контроллер'],
     ]);
 
     renderDiagCards('diag_inputs', (diagnostics.inputs || []).map(input => [
