@@ -275,7 +275,7 @@ CRGB renderPortPixel(size_t logicalIndex,
 
   if (status == PORT_STATUS_ERROR) {
     color = visibleErrorColor(color);
-    return ((millis() / 500U) % 2U) == 0 ? color : CRGB::Black;
+    return color;
   }
   if (status == PORT_STATUS_WAITING) {
     color.nscale8_video(pulseBrightness);
