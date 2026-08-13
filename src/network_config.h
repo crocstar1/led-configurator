@@ -37,7 +37,9 @@ int network_scan_complete();
 void network_scan_finish();
 const NetworkConfig &network_config_get();
 bool network_config_save(const NetworkConfig &config, String &error);
+bool network_config_clear_saved_settings();
 void network_schedule_apply(unsigned long delayMs);
+bool network_force_ap_fallback();
 
 NetworkRuntimeMode network_runtime_mode();
 const char *network_runtime_mode_string();

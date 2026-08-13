@@ -157,5 +157,6 @@ MatrixStateValidationResult matrix_state_storage_validate(
 // explicitly whether to apply factory defaults.
 MatrixStateLoadResult matrix_state_storage_load(MatrixStateV2 &state);
 MatrixStateSaveResult matrix_state_storage_save(const MatrixStateV2 &state);
+bool matrix_state_storage_clear_saved_state();
 
 #endif

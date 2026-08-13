@@ -32,11 +32,22 @@ static unsigned long hardwareConfigRestartAt = 0;
 
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
 static constexpr uint32_t HARDWARE_CONFIG_RESTART_DELAY_MS = 1000;
+static constexpr uint32_t SERVICE_BUTTON_DEBOUNCE_MS = 40;
+static constexpr uint32_t SERVICE_BUTTON_AP_HOLD_MS = 3000;
+static constexpr uint32_t SERVICE_BUTTON_RESET_HOLD_MS = 10000;
 // Worst current 500-pixel chunk is 9007 bytes (a full free-zone layer at 1x500/500x1).
 static constexpr size_t GET_CONFIG_CHUNK_RESERVE = 12U * 1024U;
 static bool inputTaskStarted = false;
 static uint64_t lastInputUpdateMs = 0;
 static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
+static bool serviceButtonRawPressed = false;
+static bool serviceButtonStablePressed = false;
+static bool serviceButtonArmed = false;
+static bool serviceButtonApHandled = false;
+static bool serviceButtonResetHandled = false;
+static bool serviceButtonRestartPending = false;
+static unsigned long serviceButtonRawChangedAt = 0;
+static unsigned long serviceButtonHoldStartedAt = 0;
 
 static uint64_t monotonicMillis() {
     return (uint64_t)esp_timer_get_time() / 1000ULL;
@@ -110,6 +121,103 @@ static const char *resetReasonString() {
         case ESP_RST_SDIO: return "sdio";
         case ESP_RST_UNKNOWN:
         default: return "unknown";
+    }
+}
+
+static bool serviceButtonIsPressed() {
+    return digitalRead(BOARD_SERVICE_BUTTON_PIN) ==
+        BOARD_SERVICE_BUTTON_ACTIVE_LEVEL;
+}
+
+static void setupServiceButton() {
+    pinMode(BOARD_SERVICE_BUTTON_PIN, INPUT_PULLUP);
+    serviceButtonRawPressed = serviceButtonIsPressed();
+    serviceButtonStablePressed = serviceButtonRawPressed;
+    serviceButtonRawChangedAt = millis();
+    // A low level already present during setup may come from the programmer.
+    // Require one stable release before accepting a service-button hold.
+    serviceButtonArmed = !serviceButtonStablePressed;
+}
+
+static void handleServiceButtonApHold() {
+    serviceButtonApHandled = true;
+    Serial.println("BOOT service button held for 3 seconds");
+    const bool apStarted = network_force_ap_fallback();
+    Serial.printf("BOOT forced AP: %s\n", apStarted ? "enabled" : "failed");
+    Serial.print("BOOT AP SSID: ");
+    Serial.println(network_config_get().apSsid);
+    Serial.print("BOOT AP IP: ");
+    Serial.println(network_ap_ip_string());
+}
+
+static void handleServiceButtonFactoryReset() {
+    serviceButtonResetHandled = true;
+    Serial.println("BOOT service button held for 10 seconds; factory reset started");
+
+    const bool matrixCleared = matrix_state_storage_clear_saved_state();
+    const bool networkCleared = network_config_clear_saved_settings();
+    const bool authCleared = auth_config_clear_saved_settings();
+    Serial.printf("Factory reset matrix/state_v2: %s\n",
+        matrixCleared ? "cleared" : "failed");
+    Serial.printf("Factory reset net_cfg: %s\n",
+        networkCleared ? "cleared" : "failed");
+    Serial.printf("Factory reset auth_cfg: %s\n",
+        authCleared ? "cleared" : "failed");
+
+    if (matrixCleared && networkCleared && authCleared) {
+        serviceButtonRestartPending = true;
+        Serial.println("Factory reset complete; release BOOT to restart ESP32");
+        return;
+    }
+
+    const bool apStarted = network_force_ap_fallback();
+    Serial.printf("Factory reset incomplete; forced AP remains %s. "
+                  "Release BOOT and hold it again to retry.\n",
+        apStarted ? "enabled" : "unavailable");
+}
+
+static void pollServiceButton() {
+    const unsigned long now = millis();
+    const bool rawPressed = serviceButtonIsPressed();
+    if (rawPressed != serviceButtonRawPressed) {
+        serviceButtonRawPressed = rawPressed;
+        serviceButtonRawChangedAt = now;
+    }
+
+    if (serviceButtonRawPressed != serviceButtonStablePressed &&
+        now - serviceButtonRawChangedAt >= SERVICE_BUTTON_DEBOUNCE_MS) {
+        serviceButtonStablePressed = serviceButtonRawPressed;
+        if (serviceButtonStablePressed) {
+            if (serviceButtonArmed) {
+                serviceButtonHoldStartedAt = serviceButtonRawChangedAt;
+                serviceButtonApHandled = false;
+                serviceButtonResetHandled = false;
+                serviceButtonRestartPending = false;
+            }
+        } else {
+            if (serviceButtonRestartPending) {
+                Serial.println("BOOT released after factory reset; restarting ESP32");
+                Serial.flush();
+                ESP.restart();
+            }
+            serviceButtonArmed = true;
+            serviceButtonHoldStartedAt = 0;
+            serviceButtonApHandled = false;
+            serviceButtonResetHandled = false;
+            serviceButtonRestartPending = false;
+        }
+    }
+
+    if (!serviceButtonArmed || !serviceButtonStablePressed ||
+        !serviceButtonRawPressed) return;
+
+    const unsigned long heldMs = now - serviceButtonHoldStartedAt;
+    if (!serviceButtonApHandled && heldMs >= SERVICE_BUTTON_AP_HOLD_MS) {
+        handleServiceButtonApHold();
+    }
+    if (!serviceButtonResetHandled &&
+        heldMs >= SERVICE_BUTTON_RESET_HOLD_MS) {
+        handleServiceButtonFactoryReset();
     }
 }
 
@@ -1747,6 +1855,7 @@ void handleDiagnostics() {
 
 void setup() {
     Serial.begin(115200);
+    setupServiceButton();
     auth_config_setup();
 
     matrix_state_storage_set_factory_defaults(matrixStateCandidate);
@@ -1864,6 +1973,11 @@ void setup() {
 }
 
 void loop() {
+    pollServiceButton();
+    if (serviceButtonRestartPending) return;
+    const bool serviceButtonReleased =
+        !serviceButtonRawPressed && !serviceButtonStablePressed;
+
     server.handleClient();
     network_loop();
     led_loop();
@@ -1875,12 +1989,12 @@ void loop() {
             updatePortStatusFromInputs();
         }
     }
-    if (hardwareConfigRestartScheduled &&
+    if (serviceButtonReleased && hardwareConfigRestartScheduled &&
         static_cast<int32_t>(millis() - hardwareConfigRestartAt) >= 0) {
         hardwareConfigRestartScheduled = false;
         ESP.restart();
     }
-    if (otaRestartPending && millis() >= otaRestartAt) {
+    if (serviceButtonReleased && otaRestartPending && millis() >= otaRestartAt) {
         otaRestartPending = false;
         ESP.restart();
     }

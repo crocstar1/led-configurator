@@ -452,3 +452,36 @@ MatrixStateSaveResult matrix_state_storage_save(const MatrixStateV2 &state) {
   Serial.println("matrix_nvs readback verification failed; partition not erased");
   return MatrixStateSaveResult::VERIFY_FAILED;
 }
+
+bool matrix_state_storage_clear_saved_state() {
+  if (!initializeMatrixPartition()) {
+    return false;
+  }
+
+  nvs_handle_t handle = 0;
+  const esp_err_t openError = nvs_open_from_partition(
+      MATRIX_NVS_PARTITION, MATRIX_NVS_NAMESPACE, NVS_READWRITE, &handle);
+  if (openError != ESP_OK) {
+    logNvsError("open for clear", openError);
+    return false;
+  }
+
+  const esp_err_t eraseError = nvs_erase_key(handle, MATRIX_NVS_KEY);
+  if (eraseError == ESP_ERR_NVS_NOT_FOUND) {
+    nvs_close(handle);
+    return true;
+  }
+  if (eraseError != ESP_OK) {
+    logNvsError("erase state", eraseError);
+    nvs_close(handle);
+    return false;
+  }
+
+  const esp_err_t commitError = nvs_commit(handle);
+  nvs_close(handle);
+  if (commitError != ESP_OK) {
+    logNvsError("commit clear", commitError);
+    return false;
+  }
+  return true;
+}

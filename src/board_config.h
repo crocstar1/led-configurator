@@ -8,6 +8,10 @@ static constexpr uint8_t LED_OUTPUT_COUNT = 4;
 static constexpr uint8_t MAX_PORT_COUNT = 4;
 static constexpr uint8_t DEFAULT_ACTIVE_PORT_COUNT = 2;
 
+// USP-1 BOOT service button: external 10 kOhm pull-up, pressed to GND.
+static constexpr uint8_t BOARD_SERVICE_BUTTON_PIN = 0;
+static constexpr uint8_t BOARD_SERVICE_BUTTON_ACTIVE_LEVEL = LOW;
+
 // Board optocoupler outputs are active-low at the ESP32 GPIO.
 static constexpr bool BOARD_INPUT_ACTIVE_LOW = true;
 

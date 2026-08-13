@@ -158,7 +158,7 @@ static void loadConfig() {
     }
 }
 
-static void startApFallback(const char *reason, bool allowStaRetry) {
+static bool startApFallback(const char *reason, bool allowStaRetry) {
     if (scanActive) network_scan_finish();
     WiFi.disconnect(true);
     WiFi.mode(WIFI_AP);
@@ -178,6 +178,7 @@ static void startApFallback(const char *reason, bool allowStaRetry) {
     Serial.print(networkConfig.apSsid);
     Serial.print(" / ");
     Serial.println(WiFi.softAPIP());
+    return apStarted;
 }
 
 static void startStaAttempt(NetworkRuntimeMode mode, bool fromFallback) {
@@ -371,8 +372,36 @@ bool network_config_save(const NetworkConfig &config, String &error) {
     return true;
 }
 
+bool network_config_clear_saved_settings() {
+    Preferences preferences;
+    if (!preferences.begin(NVS_NAMESPACE, false)) {
+        return false;
+    }
+
+    const bool cleared = preferences.clear();
+    preferences.end();
+    return cleared;
+}
+
 void network_schedule_apply(unsigned long delayMs) {
     pendingApplyAt = millis() + delayMs;
+}
+
+bool network_force_ap_fallback() {
+    pendingApplyAt = 0;
+    if (scanActive) network_scan_finish();
+
+    fallbackStaRetryEnabled = false;
+    retryStartedFromFallback = false;
+    if (runtimeMode == NETWORK_MODE_AP_FALLBACK &&
+        apStartState == NETWORK_AP_START_OK) {
+        connectionStatus = "manual_ap";
+        stateStartedAt = millis();
+        fallbackStartedAt = stateStartedAt;
+        return true;
+    }
+
+    return startApFallback("manual_ap", false);
 }
 
 NetworkRuntimeMode network_runtime_mode() {

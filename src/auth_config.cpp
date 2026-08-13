@@ -117,3 +117,12 @@ bool auth_config_save_credentials(const String &username, const String &password
     error = "";
     return true;
 }
+
+bool auth_config_clear_saved_settings() {
+    Preferences preferences;
+    if (!preferences.begin(NVS_NAMESPACE, false)) return false;
+
+    const bool cleared = preferences.clear();
+    preferences.end();
+    return cleared;
+}
