@@ -682,6 +682,33 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             line-height: 1.35;
         }
 
+        .network-scan-result {
+            width: 100%;
+            min-width: 0;
+            min-height: 44px;
+            box-sizing: border-box;
+            color: var(--text);
+            text-align: left;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }
+
+        button.network-scan-result {
+            cursor: pointer;
+            font: inherit;
+        }
+
+        button.network-scan-result:hover,
+        button.network-scan-result:focus-visible,
+        button.network-scan-result[aria-pressed="true"] {
+            border-color: var(--blue);
+            background: #eef4ff;
+        }
+
+        .network-scan-result.non-selectable {
+            color: var(--muted);
+        }
+
         .status-line {
             display: flex;
             gap: 8px;
@@ -1072,7 +1099,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                         <div>
                             <label for="network_password">Пароль Wi-Fi</label>
-                            <input id="network_password" name="password" type="password" autocomplete="new-password" placeholder="пусто = не менять пароль">
+                            <input id="network_password" name="password" type="password" autocomplete="new-password" placeholder="Введите пароль сети. Для уже сохранённого SSID поле можно оставить пустым">
                         </div>
                         <label class="row" style="justify-content:flex-start;">
                             <input id="network_dhcp" name="dhcp" type="checkbox" checked>
@@ -1116,7 +1143,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                     </form>
                     <div class="diag-grid" id="network_scan"></div>
-                    <div class="hint" id="network_message"></div>
+                    <div class="hint" id="network_message" aria-live="polite"></div>
                 </div>
             </section>
 
@@ -1325,6 +1352,11 @@ let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
 let freeBrightnessSaveTimers = {};
 let freeBrightnessSaveInProgress = {};
 let networkScanInFlight = false;
+let networkSaveInFlight = false;
+let networkFormDirty = false;
+let networkFormRevision = 0;
+let networkStatusRequestRevision = 0;
+let selectedScannedNetwork = null;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
@@ -1494,6 +1526,7 @@ function buildMockNetworkStatus() {
         configured: false,
         connected: false,
         ssid: '',
+        passwordConfigured: false,
         connectedSsid: '',
         ip: '',
         staMac: 'A4:CF:12:34:56:78',
@@ -1510,28 +1543,16 @@ function buildMockNetworkStatus() {
     };
 }
 
-function networkModeLabel(mode) {
-    const labels = {
-        sta: 'Подключение к Wi-Fi',
-        ap_fallback: 'Резервная точка доступа',
-        connecting: 'Подключение',
-        reconnecting: 'Переподключение',
-    };
-    return labels[mode] || mode || 'неизвестно';
-}
-
 function networkStatusLabel(status) {
     const labels = {
-        connected: 'Подключено',
-        connecting: 'Подключается',
-        reconnecting: 'Переподключается',
-        not_configured: 'Не настроено',
-        connect_failed: 'Резервная точка доступа: сеть недоступна',
-        connect_timeout: 'Резервная точка доступа: превышено время ожидания',
-        connection_lost: 'Резервная точка доступа: подключение потеряно',
-        mock: 'Локальный предпросмотр',
+        connected: 'Подключено к роутеру',
+        connecting: 'Подключение к роутеру',
+        reconnecting: 'Повторное подключение к роутеру',
+        not_configured: 'Сеть роутера не выбрана',
+        connect_failed: 'Не удалось подключиться к роутеру; включён режим резервной точки доступа',
+        connection_lost: 'Связь с роутером потеряна; включён режим резервной точки доступа',
     };
-    return labels[status] || status || 'неизвестно';
+    return labels[status] || 'Неизвестное состояние';
 }
 
 function sanitizeZoneMapForSize(map) {
@@ -2693,6 +2714,7 @@ document.querySelectorAll('[data-service]').forEach(btn => {
 document.getElementById('refresh_network_btn').addEventListener('click', loadNetworkStatus);
 document.getElementById('scan_network_btn').addEventListener('click', scanNetworks);
 document.getElementById('network_dhcp').addEventListener('change', updateNetworkStaticFields);
+document.getElementById('network_form').addEventListener('input', handleNetworkFormInput);
 document.getElementById('network_form').addEventListener('submit', e => {
     e.preventDefault();
     saveNetworkConfig();
@@ -3968,7 +3990,41 @@ function setNetworkMessage(text, isError = false) {
     el.style.color = isError ? 'var(--red)' : 'var(--muted)';
 }
 
+function resetNetworkPasswordField() {
+    const passwordInput = document.getElementById('network_password');
+    passwordInput.readOnly = false;
+    passwordInput.placeholder = 'Введите пароль сети. Для уже сохранённого SSID поле можно оставить пустым';
+}
+
+function updateNetworkActionControls() {
+    document.getElementById('scan_network_btn').disabled = networkSaveInFlight || networkScanInFlight;
+    document.getElementById('network_save_connect_btn').disabled =
+        networkSaveInFlight || networkScanInFlight;
+    document.querySelectorAll('#network_scan button.network-scan-result').forEach(button => {
+        button.disabled = networkSaveInFlight;
+    });
+}
+
+function clearSelectedScannedNetwork() {
+    selectedScannedNetwork = null;
+    document.querySelectorAll('#network_scan button.network-scan-result').forEach(button => {
+        button.setAttribute('aria-pressed', 'false');
+    });
+    resetNetworkPasswordField();
+}
+
+function handleNetworkFormInput(event) {
+    networkFormDirty = true;
+    networkFormRevision += 1;
+    if (event.target.id === 'network_ssid' && selectedScannedNetwork &&
+        event.target.value !== selectedScannedNetwork.ssid) {
+        clearSelectedScannedNetwork();
+        setNetworkMessage('SSID изменён вручную. Выбор из результатов сканирования снят.');
+    }
+}
+
 function fillNetworkForm(status) {
+    clearSelectedScannedNetwork();
     document.getElementById('network_ssid').value = status.ssid || '';
     document.getElementById('network_password').value = '';
     document.getElementById('network_dhcp').checked = status.dhcp !== false;
@@ -3978,6 +4034,8 @@ function fillNetworkForm(status) {
     document.getElementById('network_dns').value = status.dns || '8.8.8.8';
     document.getElementById('network_ap_ssid').value = status.apSsid || 'LED_MATRIX_A1B2C3';
     document.getElementById('network_ap_password').value = '';
+    networkFormDirty = false;
+    networkFormRevision += 1;
     updateNetworkStaticFields();
 }
 
@@ -3987,6 +4045,7 @@ function updateNetworkStaticFields() {
 }
 
 async function loadNetworkStatus() {
+    const requestRevision = ++networkStatusRequestRevision;
     if (!backendAvailable) {
         networkStatus = buildMockNetworkStatus();
         renderNetworkStatus();
@@ -3997,10 +4056,13 @@ async function loadNetworkStatus() {
     try {
         const res = await fetch('/network_status');
         if (!res.ok) throw new Error(`network_status ${res.status}`);
-        networkStatus = await res.json();
+        const receivedStatus = await res.json();
+        if (requestRevision !== networkStatusRequestRevision) return;
+        networkStatus = receivedStatus;
         renderNetworkStatus();
-        setNetworkMessage('');
+        if (!networkFormDirty) setNetworkMessage('');
     } catch (err) {
+        if (requestRevision !== networkStatusRequestRevision) return;
         const hasLastKnownStatus = Boolean(networkStatus);
         if (!hasLastKnownStatus) {
             renderDiagCards('network_summary', [
@@ -4023,18 +4085,29 @@ function renderNetworkStatus() {
         'field-hidden',
         mockMode || !backendAvailable || networkStatus.defaultApPassword !== true
     );
-    renderDiagCards('network_summary', [
-        ['Режим', networkModeLabel(networkStatus.mode)],
-        ['Состояние', networkStatus.connected ? 'Подключено' : networkStatusLabel(networkStatus.status)],
-        ['Сеть Wi-Fi', networkStatus.connectedSsid || networkStatus.ssid || 'не задана'],
-        ['IP-адрес Wi-Fi', networkStatus.ip || 'нет'],
-        ['MAC контроллера', networkStatus.staMac || 'нет данных'],
-        ['Резервная точка доступа', networkStatus.apSsid || 'не задана'],
-        ['IP-адрес точки доступа', networkStatus.apIp || 'нет'],
-        ['Уровень сигнала', networkStatus.connected ? `${networkStatus.rssi} dBm` : 'нет'],
+    const connected = networkStatus.connected === true;
+    const cards = [
+        ['Состояние', mockMode
+            ? 'Демонстрационные данные — ESP32 недоступна'
+            : networkStatusLabel(networkStatus.status)],
+        ['Сохранённая сеть', networkStatus.ssid || 'не выбрана'],
+    ];
+    if (connected) {
+        cards.push(['Подключённая сеть', networkStatus.connectedSsid || networkStatus.ssid || 'нет данных']);
+    }
+    cards.push(
+        ['IP-адрес в сети роутера', networkStatus.ip || 'нет'],
         ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Статический IP'],
-    ]);
-    fillNetworkForm(networkStatus);
+        ['MAC контроллера', networkStatus.staMac || 'нет данных'],
+        ['SSID резервной точки доступа', networkStatus.apSsid || 'не задан'],
+        ['IP-адрес резервной точки доступа', networkStatus.apIp || 'нет']
+    );
+    if (connected) {
+        const rssi = Number(networkStatus.rssi);
+        cards.push(['Уровень сигнала', Number.isFinite(rssi) ? `${rssi} dBm` : 'нет данных']);
+    }
+    renderDiagCards('network_summary', cards);
+    if (!networkFormDirty && !networkSaveInFlight) fillNetworkForm(networkStatus);
 }
 
 function networkSaveErrorLabel(code) {
@@ -4044,49 +4117,160 @@ function networkSaveErrorLabel(code) {
     return labels[code] || code || 'неизвестная ошибка';
 }
 
+function selectScannedNetwork(network, rowIndex, button) {
+    if (mockMode || !backendAvailable || networkSaveInFlight || !network.ssid) return;
+
+    const ssid = String(network.ssid);
+    const secure = network.secure === true;
+    selectedScannedNetwork = { ssid, secure, rowIndex };
+    document.querySelectorAll('#network_scan button.network-scan-result').forEach(candidate => {
+        candidate.setAttribute('aria-pressed', candidate === button ? 'true' : 'false');
+    });
+
+    const ssidInput = document.getElementById('network_ssid');
+    const passwordInput = document.getElementById('network_password');
+    const canReusePassword = secure && ssid === String(networkStatus?.ssid ?? '') &&
+        networkStatus?.passwordConfigured === true;
+    ssidInput.value = ssid;
+    passwordInput.value = '';
+    passwordInput.readOnly = !secure;
+    passwordInput.placeholder = !secure
+        ? 'пароль не требуется для выбранной открытой сети'
+        : (canReusePassword ? 'пусто = сохранить прежний пароль' : 'введите пароль выбранной сети');
+    networkFormDirty = true;
+    networkFormRevision += 1;
+
+    if (!secure) {
+        setNetworkMessage('Открытая сеть выбрана, но ещё не сохранена. Пароль не требуется.');
+    } else if (canReusePassword) {
+        setNetworkMessage('Сохранённая сеть выбрана. Изменения формы ещё не сохранены; пустое поле сохранит прежний пароль.');
+    } else {
+        setNetworkMessage('Сеть выбрана, но ещё не сохранена. Введите пароль выбранной сети.');
+        passwordInput.focus();
+    }
+}
+
+function renderNetworkScanResults(networks, demonstration = false) {
+    const container = document.getElementById('network_scan');
+    const results = Array.isArray(networks) ? networks : [];
+    if (demonstration) {
+        if (selectedScannedNetwork) clearSelectedScannedNetwork();
+    } else if (selectedScannedNetwork) {
+        const previousIndex = selectedScannedNetwork.rowIndex;
+        const matchesSelection = network => typeof network?.ssid === 'string' &&
+            network.ssid === selectedScannedNetwork.ssid &&
+            (network.secure === true) === selectedScannedNetwork.secure;
+        let matchingIndex = Number.isInteger(previousIndex) &&
+            matchesSelection(results[previousIndex])
+            ? previousIndex
+            : results.findIndex(matchesSelection);
+
+        if (matchingIndex < 0 && !selectedScannedNetwork.secure) {
+            matchingIndex = results.findIndex(network => typeof network?.ssid === 'string' &&
+                network.ssid === selectedScannedNetwork.ssid && network.secure === true);
+            if (matchingIndex >= 0) {
+                selectedScannedNetwork.secure = true;
+                const passwordInput = document.getElementById('network_password');
+                const canReusePassword = selectedScannedNetwork.ssid ===
+                    String(networkStatus?.ssid ?? '') && networkStatus?.passwordConfigured === true;
+                passwordInput.readOnly = false;
+                passwordInput.placeholder = canReusePassword
+                    ? 'пусто = сохранить прежний пароль'
+                    : 'введите пароль выбранной сети';
+            }
+        }
+        selectedScannedNetwork.rowIndex = matchingIndex >= 0 ? matchingIndex : null;
+    }
+
+    const nodes = results.map((network, rowIndex) => {
+        const ssid = typeof network?.ssid === 'string' ? network.ssid : '';
+        const secure = network?.secure === true;
+        const rssi = Number(network?.rssi);
+        const details = [];
+        if (demonstration) details.push('демонстрационный результат');
+        details.push(Number.isFinite(rssi) ? `${rssi} dBm` : 'уровень сигнала неизвестен');
+        details.push(secure ? 'требуется пароль' : 'открытая сеть');
+
+        const selectable = !demonstration && ssid.length > 0;
+        const row = document.createElement(selectable ? 'button' : 'div');
+        row.className = `diag-card network-scan-result${selectable ? '' : ' non-selectable'}`;
+        if (selectable) {
+            row.type = 'button';
+            const isSelected = selectedScannedNetwork?.rowIndex === rowIndex &&
+                selectedScannedNetwork?.ssid === ssid && selectedScannedNetwork?.secure === secure;
+            row.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            row.addEventListener('click', () => selectScannedNetwork({ ssid, secure }, rowIndex, row));
+        }
+
+        const title = document.createElement('strong');
+        const description = document.createElement('span');
+        title.textContent = ssid || 'Скрытая сеть';
+        description.textContent = details.join(' · ');
+        row.append(title, description);
+        return row;
+    });
+
+    if (!nodes.length) {
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+        notice.textContent = 'Сети не найдены.';
+        nodes.push(notice);
+    }
+    container.replaceChildren(...nodes);
+}
+
 async function scanNetworks() {
     if (!backendAvailable) {
-        renderDiagCards('network_scan', [
-            ['LED_MATRIX_A1B2C3', 'пример · -45 dBm'],
-            ['Пример сети Wi-Fi', 'пример · -62 dBm'],
-        ]);
-        setNetworkMessage('Сканирование работает только через контроллер.');
+        renderNetworkScanResults([
+            { ssid: 'Демонстрационная защищённая сеть', rssi: -45, secure: true },
+            { ssid: 'Демонстрационная открытая сеть', rssi: -62, secure: false },
+        ], true);
+        setNetworkMessage('Демонстрационные результаты — ESP32 недоступна. Выбор и сохранение отключены.');
+        return;
+    }
+    if (networkSaveInFlight) {
+        setNetworkMessage('Дождитесь завершения сохранения настроек сети.', true);
         return;
     }
     if (networkScanInFlight) return;
 
-    const button = document.getElementById('scan_network_btn');
     const startedAt = Date.now();
+    const scanController = new AbortController();
+    const scanTimeout = setTimeout(() => scanController.abort(), NETWORK_SCAN_UI_TIMEOUT_MS);
     networkScanInFlight = true;
-    button.disabled = true;
+    updateNetworkActionControls();
     setNetworkMessage('Сканирование сетей...');
     try {
         while (Date.now() - startedAt < NETWORK_SCAN_UI_TIMEOUT_MS) {
-            const res = await fetch('/scan_networks', { cache: 'no-store' });
+            const res = await fetch('/scan_networks', {
+                cache: 'no-store',
+                signal: scanController.signal,
+            });
             if (res.status === 202) {
-                await new Promise(resolve => setTimeout(resolve, NETWORK_SCAN_POLL_MS));
+                const remainingMs = NETWORK_SCAN_UI_TIMEOUT_MS - (Date.now() - startedAt);
+                if (remainingMs <= 0) throw new Error('scan timeout');
+                await new Promise(resolve => setTimeout(resolve,
+                    Math.min(NETWORK_SCAN_POLL_MS, remainingMs)));
                 continue;
             }
             if (!res.ok) throw new Error(`scan ${res.status}`);
 
             const networks = await res.json();
-            renderDiagCards(
-                'network_scan',
-                (networks || []).map(net => [
-                    net.ssid || '(скрытая сеть)',
-                    `${net.rssi} dBm · канал ${net.channel}${net.secure ? ' · пароль' : ' · открытая'}`,
-                ]),
-                'Сети не найдены.'
-            );
-            setNetworkMessage('');
+            renderNetworkScanResults(networks);
+            const hasSelectableNetwork = Array.isArray(networks) && networks.some(network =>
+                typeof network?.ssid === 'string' && network.ssid.length > 0);
+            setNetworkMessage(hasSelectableNetwork
+                ? 'Выберите сеть из списка или введите SSID вручную.'
+                : 'Доступны только скрытые сети либо сети не найдены. SSID можно ввести вручную.');
             return;
         }
         throw new Error('scan timeout');
     } catch (err) {
         setNetworkMessage('Не удалось выполнить сканирование.', true);
     } finally {
+        clearTimeout(scanTimeout);
         networkScanInFlight = false;
-        button.disabled = false;
+        updateNetworkActionControls();
     }
 }
 
@@ -4095,11 +4279,40 @@ async function saveNetworkConfig() {
         setNetworkMessage('Контроллер недоступен, настройки сети не сохранены.', true);
         return;
     }
+    if (networkSaveInFlight) return;
+    if (networkScanInFlight) {
+        setNetworkMessage('Дождитесь завершения сканирования сетей.', true);
+        return;
+    }
 
-    const button = document.getElementById('network_save_connect_btn');
+    const ssidInput = document.getElementById('network_ssid');
+    const passwordInput = document.getElementById('network_password');
+    const previousSavedSsid = String(networkStatus?.ssid ?? '');
+    const selected = selectedScannedNetwork && ssidInput.value === selectedScannedNetwork.ssid
+        ? selectedScannedNetwork
+        : null;
+    const submittedRevision = networkFormRevision;
+    const enteredSsid = ssidInput.value;
+    const ssid = selected
+        ? selected.ssid
+        : (enteredSsid === previousSavedSsid ? enteredSsid : enteredSsid.trim());
+    let password = passwordInput.value;
+    if (selected?.secure) {
+        const canReusePassword = selected.ssid === previousSavedSsid &&
+            networkStatus?.passwordConfigured === true;
+        if (!password.length && !canReusePassword) {
+            setNetworkMessage('Введите пароль выбранной сети.', true);
+            passwordInput.focus();
+            return;
+        }
+    } else if (selected) {
+        password = '';
+    }
+    const previousPasswordConfigured = networkStatus?.passwordConfigured === true;
+
     const body = new URLSearchParams();
-    body.set('ssid', document.getElementById('network_ssid').value.trim());
-    body.set('password', document.getElementById('network_password').value);
+    body.set('ssid', ssid);
+    body.set('password', password);
     body.set('dhcp', document.getElementById('network_dhcp').checked ? '1' : '0');
     body.set('static_ip', document.getElementById('network_static_ip').value.trim());
     body.set('gateway', document.getElementById('network_gateway').value.trim());
@@ -4108,8 +4321,11 @@ async function saveNetworkConfig() {
     body.set('ap_ssid', document.getElementById('network_ap_ssid').value.trim());
     body.set('ap_password', document.getElementById('network_ap_password').value);
 
+    let settingsSaved = false;
+    let formChangedDuringSave = false;
+    networkSaveInFlight = true;
+    updateNetworkActionControls();
     try {
-        button.disabled = true;
         setNetworkMessage('Сохранение настроек сети...');
         const res = await fetch('/save_network', {
             method: 'POST',
@@ -4117,17 +4333,39 @@ async function saveNetworkConfig() {
             body,
         });
         if (!res.ok) throw new Error(await res.text());
-        document.getElementById('network_ap_password').value = '';
+        settingsSaved = true;
+        networkStatusRequestRevision += 1;
+        networkStatus = {
+            ...(networkStatus || {}),
+            configured: ssid.length > 0,
+            ssid,
+            passwordConfigured: password.length > 0 ||
+                (ssid === previousSavedSsid && previousPasswordConfigured),
+        };
 
         const reconnect = await fetch('/network_reconnect', { method: 'POST' });
         if (!reconnect.ok) throw new Error(await reconnect.text());
 
-        setNetworkMessage('Настройки сохранены. Переподключение запущено, интерфейс может временно пропасть.');
+        formChangedDuringSave = networkFormRevision !== submittedRevision;
+        setNetworkMessage(formChangedDuringSave
+            ? 'Отправленные настройки сохранены, переподключение запущено. Более новые изменения формы ещё не сохранены.'
+            : 'Настройки сохранены. Переподключение запущено, интерфейс может временно пропасть.');
         setTimeout(loadNetworkStatus, 4000);
     } catch (err) {
-        setNetworkMessage(`Не удалось сохранить или применить сеть: ${networkSaveErrorLabel(err.message)}`, true);
+        formChangedDuringSave = networkFormRevision !== submittedRevision;
+        setNetworkMessage(settingsSaved
+            ? `Настройки сохранены, но не удалось запустить переподключение: ${networkSaveErrorLabel(err.message)}.${formChangedDuringSave ? ' Более новые изменения формы ещё не сохранены.' : ''}`
+            : `Не удалось сохранить сеть: ${networkSaveErrorLabel(err.message)}`, true);
     } finally {
-        button.disabled = false;
+        formChangedDuringSave = networkFormRevision !== submittedRevision;
+        if (settingsSaved && !formChangedDuringSave) {
+            networkFormDirty = false;
+            passwordInput.value = '';
+            document.getElementById('network_ap_password').value = '';
+            clearSelectedScannedNetwork();
+        }
+        networkSaveInFlight = false;
+        updateNetworkActionControls();
     }
 }
 
