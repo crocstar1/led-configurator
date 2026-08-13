@@ -222,6 +222,7 @@ static void pollServiceButton() {
 }
 
 bool authRequestAuthenticated() {
+    if (!auth_config_enabled()) return true;
     return server.authenticate(auth_config_username(), auth_config_password());
 }
 
@@ -1715,7 +1716,9 @@ void handleNetworkReconnect() {
 void handleAuthStatus() {
     if (!requireHttpAuth()) return;
 
-    String json = "{\"username\":\"";
+    String json = "{\"enabled\":";
+    json += auth_config_enabled() ? "true" : "false";
+    json += ",\"username\":\"";
     json += jsonEscape(auth_config_username_string());
     json += "\",\"defaultCredentials\":";
     json += auth_config_uses_default_credentials() ? "true" : "false";
@@ -1726,26 +1729,34 @@ void handleAuthStatus() {
 void handleSaveAuth() {
     if (!requireHttpAuth()) return;
 
+    const String enabledValue = server.arg("enabled");
+    if (enabledValue != "0" && enabledValue != "1") {
+        server.send(400, "text/plain", "INVALID_ENABLED");
+        return;
+    }
+    const bool enabled = enabledValue == "1";
     String username = server.arg("username");
     String password = server.arg("password");
     String confirm = server.hasArg("confirm") ? server.arg("confirm") : server.arg("password_confirm");
 
-    username.trim();
-    if (username.length() == 0) {
-        server.send(400, "text/plain", "USERNAME_REQUIRED");
-        return;
-    }
-    if (password.length() == 0) {
-        server.send(400, "text/plain", "PASSWORD_REQUIRED");
-        return;
-    }
-    if (password != confirm) {
-        server.send(400, "text/plain", "PASSWORD_CONFIRM_MISMATCH");
-        return;
+    if (enabled) {
+        username.trim();
+        if (username.length() == 0) {
+            server.send(400, "text/plain", "USERNAME_REQUIRED");
+            return;
+        }
+        if (password.length() == 0) {
+            server.send(400, "text/plain", "PASSWORD_REQUIRED");
+            return;
+        }
+        if (password != confirm) {
+            server.send(400, "text/plain", "PASSWORD_CONFIRM_MISMATCH");
+            return;
+        }
     }
 
     String error;
-    if (!auth_config_save_credentials(username, password, error)) {
+    if (!auth_config_save_settings(enabled, username, password, error)) {
         server.send(isStorageError(error) ? 500 : 400, "text/plain", error);
         return;
     }

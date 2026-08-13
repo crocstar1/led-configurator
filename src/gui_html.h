@@ -1169,23 +1169,29 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             <section class="service-section" id="service_security" aria-label="Безопасность">
                 <div class="section">
                     <form id="auth_form" class="section">
-                        <div>
-                            <label for="auth_username">Логин</label>
-                            <input id="auth_username" name="username" type="text" autocomplete="username" value="admin">
-                        </div>
-                        <div>
-                            <label for="auth_password">Новый пароль</label>
-                            <input id="auth_password" name="password" type="password" autocomplete="new-password">
-                        </div>
-                        <div>
-                            <label for="auth_confirm">Повтор пароля</label>
-                            <input id="auth_confirm" name="confirm" type="password" autocomplete="new-password">
+                        <label class="row" style="justify-content:flex-start; text-transform:none; letter-spacing:normal; font-size:13px; color:var(--text);">
+                            <input id="auth_enabled" name="enabled" type="checkbox" role="switch" aria-controls="auth_credentials_fields">
+                            <span>Требовать логин и пароль при входе</span>
+                        </label>
+                        <div class="section field-hidden" id="auth_credentials_fields">
+                            <div>
+                                <label for="auth_username">Логин</label>
+                                <input id="auth_username" name="username" type="text" autocomplete="username" value="admin">
+                            </div>
+                            <div>
+                                <label for="auth_password">Новый пароль</label>
+                                <input id="auth_password" name="password" type="password" autocomplete="new-password">
+                            </div>
+                            <div>
+                                <label for="auth_confirm">Повтор пароля</label>
+                                <input id="auth_confirm" name="confirm" type="password" autocomplete="new-password">
+                            </div>
                         </div>
                         <div class="btn-row">
-                            <button class="btn primary" type="submit">Сохранить пароль</button>
+                            <button class="btn primary" id="auth_save_btn" type="submit">Сохранить</button>
                         </div>
                     </form>
-                    <div class="hint" id="auth_message"></div>
+                    <div class="hint" id="auth_message" aria-live="polite"></div>
                 </div>
             </section>
         </section>
@@ -1357,6 +1363,12 @@ let networkFormDirty = false;
 let networkFormRevision = 0;
 let networkStatusRequestRevision = 0;
 let selectedScannedNetwork = null;
+let authAppliedEnabled = false;
+let authStatusLoaded = false;
+let authStatusRequestInFlight = false;
+let authSaveInProgress = false;
+let authReloadRequired = false;
+let firmwareUploadInProgress = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
@@ -1370,6 +1382,7 @@ const HARDWARE_SUPPORTED_PROTOCOL = 'ws2811_800k';
 const HARDWARE_COLOR_ORDERS = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'];
 const NETWORK_SCAN_POLL_MS = 500;
 const NETWORK_SCAN_UI_TIMEOUT_MS = 14000;
+const AUTH_SAVE_REQUEST_TIMEOUT_MS = 10000;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -1973,7 +1986,8 @@ function updateStatusEditorControls() {
 function matrixSaveOperationInProgress() {
     return hardwareConfigSaveInProgress || hardwareRestartInProgress ||
         topologySaveInProgress || zoneMapSaveInProgress ||
-        statusSaveInProgress || freeZoneSaveInProgress;
+        statusSaveInProgress || freeZoneSaveInProgress ||
+        authSaveInProgress || authReloadRequired;
 }
 
 function matrixSavesBlockedByHardwareTransition() {
@@ -2724,6 +2738,7 @@ document.getElementById('auth_form').addEventListener('submit', e => {
     e.preventDefault();
     saveAuthConfig();
 });
+document.getElementById('auth_enabled').addEventListener('change', updateAuthControls);
 document.getElementById('firmware_file').addEventListener('change', updateFirmwareFileState);
 document.getElementById('firmware_form').addEventListener('submit', e => {
     e.preventDefault();
@@ -3864,7 +3879,7 @@ async function loadConfigInternal() {
 }
 
 async function loadConfig() {
-    if (configLoadInProgress) return;
+    if (configLoadInProgress || authBackendRequestsBlocked()) return;
     configLoadInProgress = true;
     try {
         await loadConfigInternal();
@@ -3874,7 +3889,7 @@ async function loadConfig() {
 }
 
 async function loadDiagnostics() {
-    if (hardwareRestartInProgress) return;
+    if (hardwareRestartInProgress || authBackendRequestsBlocked()) return;
     if (!backendAvailable) {
         diagnostics = buildMockDiagnostics();
         renderDiagnostics();
@@ -3998,11 +4013,13 @@ function resetNetworkPasswordField() {
 }
 
 function updateNetworkActionControls() {
-    document.getElementById('scan_network_btn').disabled = networkSaveInFlight || networkScanInFlight;
+    const blocked = authBackendRequestsBlocked();
+    document.getElementById('scan_network_btn').disabled =
+        blocked || networkSaveInFlight || networkScanInFlight;
     document.getElementById('network_save_connect_btn').disabled =
-        networkSaveInFlight || networkScanInFlight;
+        blocked || networkSaveInFlight || networkScanInFlight;
     document.querySelectorAll('#network_scan button.network-scan-result').forEach(button => {
-        button.disabled = networkSaveInFlight;
+        button.disabled = blocked || networkSaveInFlight;
     });
 }
 
@@ -4046,6 +4063,7 @@ function updateNetworkStaticFields() {
 }
 
 async function loadNetworkStatus() {
+    if (authBackendRequestsBlocked()) return;
     const requestRevision = ++networkStatusRequestRevision;
     if (!backendAvailable) {
         networkStatus = buildMockNetworkStatus();
@@ -4221,6 +4239,7 @@ function renderNetworkScanResults(networks, demonstration = false) {
 }
 
 async function scanNetworks() {
+    if (authBackendRequestsBlocked()) return;
     if (!backendAvailable) {
         renderNetworkScanResults([
             { ssid: 'Демонстрационная защищённая сеть', rssi: -45, secure: true },
@@ -4276,6 +4295,7 @@ async function scanNetworks() {
 }
 
 async function saveNetworkConfig() {
+    if (authBackendRequestsBlocked()) return;
     if (!backendAvailable) {
         setNetworkMessage('Контроллер недоступен, настройки сети не сохранены.', true);
         return;
@@ -4376,73 +4396,186 @@ function setAuthMessage(text, isError = false) {
     el.style.color = isError ? 'var(--red)' : 'var(--muted)';
 }
 
+function authBackendRequestsBlocked() {
+    return authSaveInProgress || authReloadRequired;
+}
+
+function updateAuthControls() {
+    const enabled = document.getElementById('auth_enabled').checked;
+    const unavailable = !authStatusLoaded || mockMode || !backendAvailable ||
+        authStatusRequestInFlight || authSaveInProgress || authReloadRequired;
+    const credentials = document.getElementById('auth_credentials_fields');
+    const username = document.getElementById('auth_username');
+    const password = document.getElementById('auth_password');
+    const confirm = document.getElementById('auth_confirm');
+    const saveButton = document.getElementById('auth_save_btn');
+    document.getElementById('auth_form').setAttribute(
+        'aria-busy',
+        authStatusRequestInFlight || authSaveInProgress ? 'true' : 'false'
+    );
+
+    credentials.classList.toggle('field-hidden', !enabled);
+    document.getElementById('auth_enabled').disabled = unavailable;
+    username.disabled = unavailable || !enabled;
+    password.disabled = unavailable || !enabled;
+    confirm.disabled = unavailable || !enabled;
+    saveButton.disabled = unavailable;
+
+    if (authReloadRequired) saveButton.textContent = 'Обновите страницу';
+    else if (enabled && !authAppliedEnabled) saveButton.textContent = 'Включить авторизацию';
+    else if (enabled) saveButton.textContent = 'Сохранить логин и пароль';
+    else if (authAppliedEnabled) saveButton.textContent = 'Отключить авторизацию';
+    else saveButton.textContent = 'Сохранить';
+}
+
+function authOtherRequestInProgress() {
+    return configLoadInProgress || authStatusRequestInFlight ||
+        networkScanInFlight || networkSaveInFlight || firmwareUploadInProgress ||
+        matrixSaveOperationInProgress() || brightnessSavePendingOrInProgress();
+}
+
 async function loadAuthStatus() {
+    if (authBackendRequestsBlocked() || authStatusRequestInFlight || authStatusLoaded) return;
     document.getElementById('auth_password').value = '';
     document.getElementById('auth_confirm').value = '';
 
     if (!backendAvailable) {
+        authAppliedEnabled = false;
+        authStatusLoaded = true;
+        document.getElementById('auth_enabled').checked = false;
         document.getElementById('auth_username').value = 'admin';
-        setAuthMessage('Контроллер недоступен, пароль не будет сохранён.');
+        updateAuthControls();
+        setAuthMessage('Демонстрация: авторизация выключена, запросы не выполняются.');
         return;
     }
 
+    authStatusRequestInFlight = true;
+    updateAuthControls();
     try {
         const res = await fetch('/auth_status');
         if (!res.ok) throw new Error(`auth_status ${res.status}`);
         const data = await res.json();
+        if (typeof data.enabled !== 'boolean' ||
+            typeof data.username !== 'string' ||
+            typeof data.defaultCredentials !== 'boolean') {
+            throw new Error('auth_status invalid');
+        }
+        authAppliedEnabled = data.enabled === true;
+        authStatusLoaded = true;
+        document.getElementById('auth_enabled').checked = authAppliedEnabled;
         document.getElementById('auth_username').value = data.username || 'admin';
-        setAuthMessage(data.defaultCredentials
-            ? 'Используется стандартный пароль admin/admin. Смените пароль перед эксплуатацией.'
+        setAuthMessage(authAppliedEnabled && data.defaultCredentials
+            ? 'Используются заводские данные входа. Задайте новые перед эксплуатацией.'
             : '');
     } catch (err) {
         setAuthMessage('Не удалось загрузить настройки безопасности.', true);
+    } finally {
+        authStatusRequestInFlight = false;
+        updateAuthControls();
     }
 }
 
 async function saveAuthConfig() {
-    if (!backendAvailable) {
-        setAuthMessage('Контроллер недоступен, пароль не сохранён.', true);
+    if (authReloadRequired) return;
+    if (!backendAvailable || mockMode) {
+        setAuthMessage('Демонстрация: настройки не сохраняются.', true);
+        return;
+    }
+    if (authStatusRequestInFlight || authSaveInProgress) return;
+    if (authOtherRequestInProgress()) {
+        setAuthMessage('Дождитесь завершения текущей операции.', true);
         return;
     }
 
+    const enabled = document.getElementById('auth_enabled').checked;
     const username = document.getElementById('auth_username').value.trim();
     const password = document.getElementById('auth_password').value;
     const confirm = document.getElementById('auth_confirm').value;
 
-    if (!username) {
-        setAuthMessage('Введите логин.', true);
-        return;
-    }
-    if (!password) {
-        setAuthMessage('Введите новый пароль.', true);
-        return;
-    }
-    if (password.length < 6) {
-        setAuthMessage('Пароль должен быть не короче 6 символов.', true);
-        return;
-    }
-    if (password !== confirm) {
-        setAuthMessage('Пароли не совпадают.', true);
-        return;
+    if (enabled) {
+        if (!username) {
+            setAuthMessage('Введите логин.', true);
+            document.getElementById('auth_username').focus();
+            return;
+        }
+        if (!password) {
+            setAuthMessage('Введите новый пароль.', true);
+            document.getElementById('auth_password').focus();
+            return;
+        }
+        if (password.length < 6) {
+            setAuthMessage('Пароль должен быть не короче 6 символов.', true);
+            document.getElementById('auth_password').focus();
+            return;
+        }
+        if (password !== confirm) {
+            setAuthMessage('Пароли не совпадают.', true);
+            document.getElementById('auth_confirm').focus();
+            return;
+        }
     }
 
     const body = new URLSearchParams();
-    body.set('username', username);
-    body.set('password', password);
-    body.set('confirm', confirm);
+    body.set('enabled', enabled ? '1' : '0');
+    if (enabled) {
+        body.set('username', username);
+        body.set('password', password);
+        body.set('confirm', confirm);
+    }
 
+    authSaveInProgress = true;
+    updateAuthControls();
+    updateMatrixSaveControls();
+    updateNetworkActionControls();
+    document.getElementById('firmware_upload_btn').disabled = true;
+    let outcomeUncertain = true;
+    const saveController = new AbortController();
+    const saveTimeout = setTimeout(
+        () => saveController.abort(),
+        AUTH_SAVE_REQUEST_TIMEOUT_MS
+    );
     try {
         const res = await fetch('/save_auth', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
+            signal: saveController.signal,
         });
-        if (!res.ok) throw new Error(await res.text());
+        const responseText = (await res.text()).trim();
+        if (!res.ok && responseText !== 'NVS_WRITE_FAILED_ROLLBACK_FAILED') {
+            outcomeUncertain = false;
+        }
+        if (!res.ok || responseText !== 'OK') {
+            throw new Error(responseText || `HTTP_${res.status}`);
+        }
+        outcomeUncertain = false;
+
+        authAppliedEnabled = enabled;
         document.getElementById('auth_password').value = '';
         document.getElementById('auth_confirm').value = '';
-        setAuthMessage('Пароль сохранён. Обновите страницу и войдите заново.');
+        if (enabled) {
+            authReloadRequired = true;
+            setAuthMessage('Авторизация включена. Обновите страницу и войдите с новыми данными.');
+        } else {
+            document.getElementById('auth_enabled').checked = false;
+            setAuthMessage('Авторизация выключена. Логин и пароль сохранены.');
+        }
     } catch (err) {
-        setAuthMessage(`Не удалось сохранить пароль: ${err.message}`, true);
+        if (outcomeUncertain) {
+            authReloadRequired = true;
+            document.getElementById('auth_password').value = '';
+            document.getElementById('auth_confirm').value = '';
+            setAuthMessage('Результат неизвестен. Обновите страницу и проверьте вход.', true);
+        } else {
+            setAuthMessage(`Не удалось сохранить настройки авторизации: ${err.message}`, true);
+        }
+    } finally {
+        clearTimeout(saveTimeout);
+        authSaveInProgress = false;
+        updateAuthControls();
+        updateMatrixSaveControls();
+        updateNetworkActionControls();
+        updateFirmwareFileState();
     }
 }
 
@@ -4480,7 +4613,7 @@ function updateFirmwareFileState() {
     const file = input.files && input.files[0];
 
     setFirmwareProgress(0);
-    button.disabled = !file;
+    button.disabled = !file || firmwareUploadInProgress || authBackendRequestsBlocked();
 
     if (!file) {
         label.textContent = 'Файл не выбран.';
@@ -4507,6 +4640,7 @@ function updateFirmwareFileState() {
 }
 
 function uploadFirmware() {
+    if (authBackendRequestsBlocked() || firmwareUploadInProgress) return;
     if (!backendAvailable) {
         setFirmwareMessage('Контроллер недоступен, загрузка прошивки невозможна.', true);
         return;
@@ -4533,6 +4667,7 @@ function uploadFirmware() {
     form.append('update', file, file.name);
 
     const xhr = new XMLHttpRequest();
+    firmwareUploadInProgress = true;
     button.disabled = true;
     setFirmwareProgress(0);
     setFirmwareMessage('Загрузка прошивки...');
@@ -4553,14 +4688,18 @@ function uploadFirmware() {
             window.setTimeout(() => setFirmwareMessage('Перезагрузка устройства...'), 700);
             return;
         }
+        firmwareUploadInProgress = false;
+        updateFirmwareFileState();
         setFirmwareMessage(`Ошибка прошивки: ${firmwareErrorLabel(response || String(xhr.status))}.`, true);
     };
     xhr.onerror = () => {
-        button.disabled = false;
+        firmwareUploadInProgress = false;
+        updateFirmwareFileState();
         setFirmwareMessage('Ошибка соединения при загрузке прошивки.', true);
     };
     xhr.onabort = () => {
-        button.disabled = false;
+        firmwareUploadInProgress = false;
+        updateFirmwareFileState();
         setFirmwareMessage('Загрузка прошивки прервана.', true);
     };
     xhr.send(form);
