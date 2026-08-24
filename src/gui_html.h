@@ -614,6 +614,23 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             background: var(--blue-soft);
         }
 
+        .matrix-mobile-legend {
+            display: none;
+        }
+
+        .matrix-mobile-legend .legend-item {
+            flex: 0 0 auto;
+            min-height: 28px;
+            padding: 5px 7px;
+            white-space: nowrap;
+        }
+
+        .matrix-mobile-legend .swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+        }
+
         .swatch {
             width: 14px;
             height: 14px;
@@ -753,6 +770,17 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             .topology-preview { --topology-cell-width: 28px; --topology-cell-height: 24px; }
             .topology-preview.dense { --topology-cell-width: 22px; --topology-cell-height: 20px; }
             .legend { grid-template-columns: 1fr; }
+            .matrix-mobile-legend {
+                display: flex;
+                gap: 6px;
+                min-width: 0;
+                max-width: 100%;
+                margin-top: 8px;
+                padding: 1px 1px 4px;
+                overflow-x: auto;
+                overscroll-behavior-inline: contain;
+                -webkit-overflow-scrolling: touch;
+            }
             .diag-grid { grid-template-columns: 1fr; }
             .service-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
@@ -824,6 +852,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             <div class="matrix-shell">
                 <div class="matrix" id="matrix_grid"></div>
             </div>
+            <div id="matrix_mobile_legend" class="matrix-mobile-legend field-hidden" role="list" aria-label="Краткая легенда зон" tabindex="0"></div>
             <div class="status-line field-hidden" id="edit_state_line"></div>
         </section>
 
@@ -1125,17 +1154,17 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                         <div class="grid-2">
                             <div>
-                                <label for="network_ap_ssid">SSID резервной точки доступа</label>
+                                <label for="network_ap_ssid">SSID точки доступа</label>
                                 <input id="network_ap_ssid" name="ap_ssid" type="text">
                             </div>
                             <div>
-                                <label for="network_ap_password">Пароль резервной точки доступа</label>
+                                <label for="network_ap_password">Пароль точки доступа</label>
                                 <input id="network_ap_password" name="ap_password" type="password" autocomplete="new-password">
                                 <div class="hint">Оставьте пустым, чтобы сохранить текущий пароль. Новый пароль: от 8 до 64 символов.</div>
                             </div>
                         </div>
                         <div class="notice safety-warning field-hidden" id="network_ap_password_warning">
-                            Используется стандартный пароль резервной точки доступа. Измените его перед установкой контроллера.
+                            Используется стандартный пароль точки доступа. Измените его перед установкой контроллера.
                         </div>
                         <div class="btn-row">
                             <button class="btn" id="scan_network_btn" type="button">Сканировать сети</button>
@@ -1149,6 +1178,14 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
 
             <section class="service-section" id="service_firmware" aria-label="Прошивка">
                 <div class="section">
+                    <div>
+                        <label>Установленная прошивка</label>
+                        <div class="diag-grid" id="firmware_installed">
+                            <div class="diag-card"><strong>Версия</strong><span>нет данных</span></div>
+                            <div class="diag-card"><strong>Идентификатор сборки</strong><span>нет данных</span></div>
+                        </div>
+                    </div>
+                    <div class="section-divider"></div>
                     <form id="firmware_form" class="section">
                         <div>
                             <label for="firmware_file">Файл прошивки</label>
@@ -1162,7 +1199,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <button class="btn primary" id="firmware_upload_btn" type="submit" disabled>Загрузить прошивку</button>
                         </div>
                     </form>
-                    <div class="hint" id="firmware_message">Выберите файл прошивки firmware.bin.</div>
+                    <div class="hint" id="firmware_message">Выберите файл прошивки с расширением .bin.</div>
                 </div>
             </section>
 
@@ -1314,6 +1351,7 @@ let freeBrushColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrightness = { '5': 100, '6': 100, '7': 100, '8': 100 };
 let appliedFreeZones = {};
 let diagnostics = null;
+let diagnosticsAvailable = false;
 let networkStatus = null;
 let rainbowTick = 0;
 let backendAvailable = false;
@@ -1562,9 +1600,9 @@ function networkStatusLabel(status) {
         connecting: 'Подключение к роутеру',
         reconnecting: 'Повторное подключение к роутеру',
         not_configured: 'Сеть роутера не выбрана',
-        connect_failed: 'Не удалось подключиться к роутеру; включён режим резервной точки доступа',
-        connection_lost: 'Связь с роутером потеряна; включён режим резервной точки доступа',
-        manual_ap: 'Режим резервной точки доступа выбран кнопкой BOOT',
+        connect_failed: 'Не удалось подключиться к роутеру; включён режим точки доступа',
+        connection_lost: 'Связь с роутером потеряна; включён режим точки доступа',
+        manual_ap: 'Режим точки доступа выбран кнопкой BOOT',
     };
     return labels[status] || 'Неизвестное состояние';
 }
@@ -2469,7 +2507,9 @@ function buildSelects() {
 
 function buildLegend() {
     const legend = document.getElementById('zone_legend');
+    const mobileLegend = document.getElementById('matrix_mobile_legend');
     legend.innerHTML = '';
+    const mobileItems = [];
 
     zoneMeta.forEach(z => {
         if (z.id === 0) return;
@@ -2483,7 +2523,29 @@ function buildLegend() {
         item.appendChild(swatch);
         item.appendChild(text);
         legend.appendChild(item);
+
+        const zoneId = String(z.id);
+        const mobileLabel = z.type === 'port'
+            ? `П${z.linked_port ?? z.linkedPort ?? z.id}`
+            : ({ '5': 'Лого', '6': 'QR', '7': 'Сервис' })[zoneId];
+        if (!mobileLabel) return;
+
+        const mobileItem = document.createElement('div');
+        mobileItem.className = item.className;
+        mobileItem.setAttribute('role', 'listitem');
+        mobileItem.setAttribute('aria-label', `${zoneDisplayName(z)}${z.reserved ? ' — резерв' : ''}`);
+        const mobileSwatch = document.createElement('span');
+        mobileSwatch.className = 'swatch';
+        mobileSwatch.setAttribute('aria-hidden', 'true');
+        mobileSwatch.style.background = zoneColors[zoneId] || '#d1d1d6';
+        const mobileText = document.createElement('span');
+        mobileText.textContent = mobileLabel;
+        mobileItem.append(mobileSwatch, mobileText);
+        mobileItems.push(mobileItem);
     });
+
+    mobileLegend.replaceChildren(...mobileItems);
+    mobileLegend.classList.toggle('field-hidden', activeTab !== 'zones');
 }
 
 function buildFreeLegend() {
@@ -2707,6 +2769,10 @@ function setServiceOpen(open) {
     if (open && activeServiceSection === 'diagnostics') loadDiagnostics();
     if (open && activeServiceSection === 'network') loadNetworkStatus();
     if (open && activeServiceSection === 'security') loadAuthStatus();
+    if (open && activeServiceSection === 'firmware') {
+        renderInstalledFirmwareInfo();
+        loadDiagnostics();
+    }
 }
 
 document.getElementById('service_open_btn').addEventListener('click', () => setServiceOpen(true));
@@ -2722,7 +2788,11 @@ document.querySelectorAll('[data-service]').forEach(btn => {
         if (activeServiceSection === 'diagnostics') loadDiagnostics();
         if (activeServiceSection === 'network') loadNetworkStatus();
         if (activeServiceSection === 'security') loadAuthStatus();
-        if (activeServiceSection === 'firmware') updateFirmwareFileState();
+        if (activeServiceSection === 'firmware') {
+            renderInstalledFirmwareInfo();
+            loadDiagnostics();
+            updateFirmwareFileState();
+        }
     });
 });
 
@@ -3891,6 +3961,7 @@ async function loadConfig() {
 async function loadDiagnostics() {
     if (hardwareRestartInProgress || authBackendRequestsBlocked()) return;
     if (!backendAvailable) {
+        diagnosticsAvailable = false;
         diagnostics = buildMockDiagnostics();
         renderDiagnostics();
         setDiagnosticsMessage('Локальный предпросмотр: данные контроллера недоступны.');
@@ -3906,11 +3977,14 @@ async function loadDiagnostics() {
         const receivedDiagnostics = await res.json();
         if (hardwareRestartInProgress) return;
         diagnostics = receivedDiagnostics;
+        diagnosticsAvailable = true;
         renderDiagnostics();
         const runtimeWarning = diagnosticsRuntimeWarning();
         setDiagnosticsMessage(runtimeWarning, Boolean(runtimeWarning));
     } catch (err) {
         if (hardwareRestartInProgress) return;
+        diagnosticsAvailable = false;
+        renderInstalledFirmwareInfo();
         setDiagnosticsMessage('Связь с контроллером потеряна. Повторная проверка будет выполнена автоматически.', true);
         document.getElementById('runtime_label').textContent = 'связь с контроллером потеряна';
         document.getElementById('runtime_dot').style.background = 'var(--orange)';
@@ -3988,7 +4062,7 @@ function diagnosticsRuntimeWarning() {
         warnings.push('давно не обновлялась физическая матрица');
     }
     if (diagnostics.networkRuntime?.apStartState === 'failed') {
-        warnings.push('резервная точка доступа не запустилась');
+        warnings.push('точка доступа не запустилась');
     }
 
     return warnings.length ? `Внимание: ${warnings.join('; ')}.` : '';
@@ -4118,8 +4192,8 @@ function renderNetworkStatus() {
         ['IP-адрес в сети роутера', networkStatus.ip || 'нет'],
         ['Адресация', networkStatus.dhcp ? 'DHCP' : 'Статический IP'],
         ['MAC контроллера', networkStatus.staMac || 'нет данных'],
-        ['SSID резервной точки доступа', networkStatus.apSsid || 'не задан'],
-        ['IP-адрес резервной точки доступа', networkStatus.apIp || 'нет']
+        ['SSID точки доступа', networkStatus.apSsid || 'не задан'],
+        ['IP-адрес точки доступа', networkStatus.apIp || 'нет']
     );
     if (connected) {
         const rssi = Number(networkStatus.rssi);
@@ -4131,7 +4205,7 @@ function renderNetworkStatus() {
 
 function networkSaveErrorLabel(code) {
     const labels = {
-        BAD_AP_PASSWORD: 'Пароль резервной точки доступа должен содержать от 8 до 64 символов.',
+        BAD_AP_PASSWORD: 'Пароль точки доступа должен содержать от 8 до 64 символов.',
     };
     return labels[code] || code || 'неизвестная ошибка';
 }
@@ -4617,7 +4691,7 @@ function updateFirmwareFileState() {
 
     if (!file) {
         label.textContent = 'Файл не выбран.';
-        setFirmwareMessage('Выберите файл прошивки firmware.bin.');
+        setFirmwareMessage('Выберите файл прошивки с расширением .bin.');
         return;
     }
 
@@ -4651,7 +4725,7 @@ function uploadFirmware() {
     const file = input.files && input.files[0];
 
     if (!file) {
-        setFirmwareMessage('Выберите файл прошивки firmware.bin.', true);
+        setFirmwareMessage('Выберите файл прошивки с расширением .bin.', true);
         return;
     }
     if (!file.name.toLowerCase().endsWith('.bin')) {
@@ -4705,6 +4779,16 @@ function uploadFirmware() {
     xhr.send(form);
 }
 
+function renderInstalledFirmwareInfo() {
+    const firmware = diagnosticsAvailable && backendAvailable && !mockMode
+        ? diagnostics?.firmware
+        : null;
+    renderDiagCards('firmware_installed', [
+        ['Версия', firmware?.version || 'нет данных'],
+        ['Идентификатор сборки', firmware?.build || 'нет данных'],
+    ]);
+}
+
 function renderDiagnostics() {
     if (!diagnostics) return;
     const mode = diagnostics.runtimeMode || diagnostics.mode || 'runtime';
@@ -4740,6 +4824,7 @@ function renderDiagnostics() {
         : 'Данные диагностики — получены от контроллера';
     document.getElementById('runtime_label').textContent = `${mockMode ? 'локально' : 'режим'}: ${runtimeModeLabel(mode)} · Порт 1 ${statusLabel(port1)}`;
     document.getElementById('runtime_dot').style.background = port1 === 'error' ? 'var(--red)' : port1 === 'charging' ? 'var(--blue)' : 'var(--green)';
+    renderInstalledFirmwareInfo();
 
     renderDiagCards('diag_firmware', [
         ['Версия', firmware.version || 'нет данных'],
@@ -4763,7 +4848,7 @@ function renderDiagnostics() {
     ]);
 
     renderDiagCards('diag_network_runtime', [
-        ['Последний запуск резервной точки', apStartStateLabel(networkRuntime.apStartState)],
+        ['Последний запуск точки доступа', apStartStateLabel(networkRuntime.apStartState)],
     ]);
 
     renderDiagCards('diag_summary', [
