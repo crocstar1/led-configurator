@@ -10,11 +10,13 @@
 
 namespace {
 
-static CRGB leds[MAX_LED_COUNT_PER_OUTPUT];
+static CRGB leds[MAX_TOTAL_LED_COUNT];
 static MatrixStateV3 activeState;
-static size_t activeLedCount = 0;
+static MatrixStateV3OutputLayout activeLayout[LED_OUTPUT_COUNT] = {};
+static size_t activeTotalLedCount = 0;
+static uint8_t activeEnabledOutputCount = 0;
+static uint8_t registeredControllerCount = 0;
 static bool activeStateReady = false;
-static bool ledControllerRegistered = false;
 static bool ledOutputStoppedForRestart = false;
 
 static float breatheScale = 0.2f;
@@ -32,39 +34,40 @@ static constexpr uint16_t STARTUP_COLOR_MS = 180;
 static constexpr uint16_t STARTUP_ERROR_POLL_MS = 20;
 static constexpr uint32_t LED_STATE_MUTEX_TIMEOUT_MS = 50;
 
-bool hasEnabledSecondaryOutput(const MatrixStateV3 &state) {
-  for (size_t outputIndex = 1; outputIndex < LED_OUTPUT_COUNT;
-       ++outputIndex) {
-    if (state.outputs[outputIndex].enabled != 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool calculateActiveLedCount(const MatrixStateV3 &state, size_t &ledCount) {
+bool calculateRuntimeLayout(
+    const MatrixStateV3 &state,
+    MatrixStateV3OutputLayout (&layout)[LED_OUTPUT_COUNT],
+    size_t &totalLedCount,
+    uint8_t &enabledOutputCount) {
   if (matrix_state_storage_validate_v3(state) !=
       MatrixStateValidationResult::VALID) {
     return false;
   }
 
-  MatrixStateV3OutputLayout layout[LED_OUTPUT_COUNT] = {};
-  size_t totalLedCount = 0;
-  if (!matrix_state_v3_calculate_output_layout(
-          state, layout, totalLedCount) ||
-      state.outputs[0].enabled != 1 || hasEnabledSecondaryOutput(state) ||
-      layout[0].offset != 0 || layout[0].length == 0 ||
-      layout[0].length > MAX_LED_COUNT_PER_OUTPUT ||
-      totalLedCount != layout[0].length) {
+  if (!matrix_state_v3_calculate_output_layout(state, layout, totalLedCount)) {
     return false;
   }
 
-  ledCount = layout[0].length;
+  enabledOutputCount = 0;
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    if (layout[outputIndex].length > 0) {
+      ++enabledOutputCount;
+    }
+  }
   return true;
 }
 
-bool registerLedController(const MatrixStateV3 &state) {
-  const MatrixStateV3Output &output = state.outputs[0];
+template <uint8_t DATA_PIN>
+bool registerLedControllerForPin(
+    const MatrixStateV3Output &output,
+    const MatrixStateV3OutputLayout &layout) {
+  if (layout.length == 0 ||
+      static_cast<size_t>(layout.offset) + layout.length >
+          MAX_TOTAL_LED_COUNT) {
+    return false;
+  }
+
   const LedProtocol protocol = static_cast<LedProtocol>(output.ledProtocol);
   const LedColorOrder colorOrder =
       static_cast<LedColorOrder>(output.colorOrder);
@@ -72,32 +75,28 @@ bool registerLedController(const MatrixStateV3 &state) {
     return false;
   }
 
+  CRGB *const outputLeds = leds + layout.offset;
+  const int outputLength = static_cast<int>(layout.length);
   switch (protocol) {
     case LedProtocol::WS2811_800K:
       switch (colorOrder) {
         case LedColorOrder::RGB:
-          FastLED.addLeds<WS2811, LED_PIN, RGB>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, RGB>(outputLeds, outputLength);
           return true;
         case LedColorOrder::RBG:
-          FastLED.addLeds<WS2811, LED_PIN, RBG>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, RBG>(outputLeds, outputLength);
           return true;
         case LedColorOrder::GRB:
-          FastLED.addLeds<WS2811, LED_PIN, GRB>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, GRB>(outputLeds, outputLength);
           return true;
         case LedColorOrder::GBR:
-          FastLED.addLeds<WS2811, LED_PIN, GBR>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, GBR>(outputLeds, outputLength);
           return true;
         case LedColorOrder::BRG:
-          FastLED.addLeds<WS2811, LED_PIN, BRG>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, BRG>(outputLeds, outputLength);
           return true;
         case LedColorOrder::BGR:
-          FastLED.addLeds<WS2811, LED_PIN, BGR>(
-              leds, static_cast<int>(activeLedCount));
+          FastLED.addLeds<WS2811, DATA_PIN, BGR>(outputLeds, outputLength);
           return true;
         default:
           return false;
@@ -105,6 +104,40 @@ bool registerLedController(const MatrixStateV3 &state) {
     default:
       return false;
   }
+}
+
+bool registerOutputController(size_t outputIndex,
+                              const MatrixStateV3Output &output,
+                              const MatrixStateV3OutputLayout &layout) {
+  switch (outputIndex) {
+    case 0:
+      return registerLedControllerForPin<LED_OUTPUT_PINS[0]>(output, layout);
+    case 1:
+      return registerLedControllerForPin<LED_OUTPUT_PINS[1]>(output, layout);
+    case 2:
+      return registerLedControllerForPin<LED_OUTPUT_PINS[2]>(output, layout);
+    case 3:
+      return registerLedControllerForPin<LED_OUTPUT_PINS[3]>(output, layout);
+    default:
+      return false;
+  }
+}
+
+bool registerEnabledControllers(const MatrixStateV3 &state) {
+  registeredControllerCount = 0;
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    if (activeLayout[outputIndex].length == 0) {
+      continue;
+    }
+    if (!registerOutputController(outputIndex,
+                                  state.outputs[outputIndex],
+                                  activeLayout[outputIndex])) {
+      return false;
+    }
+    ++registeredControllerCount;
+  }
+  return registeredControllerCount == activeEnabledOutputCount;
 }
 
 bool startupErrorActive() {
@@ -130,27 +163,30 @@ bool stopLedOutputForRestart() {
   if (ledOutputStoppedForRestart) {
     return true;
   }
-  if (!ledControllerRegistered) {
+  if (registeredControllerCount == 0) {
     ledOutputStoppedForRestart = true;
     return true;
   }
-  if (!activeStateReady || activeLedCount == 0 ||
-      activeLedCount > MAX_LED_COUNT_PER_OUTPUT) {
+  if (!activeStateReady || activeTotalLedCount == 0 ||
+      activeTotalLedCount > MAX_TOTAL_LED_COUNT) {
     return false;
   }
 
   ledOutputStoppedForRestart = true;
-  fill_solid(leds, activeLedCount, CRGB::Black);
+  fill_solid(leds, activeTotalLedCount, CRGB::Black);
   FastLED.show();
   return true;
 }
 
 bool startupShowColor(const CRGB &color) {
+  if (registeredControllerCount == 0) {
+    return true;
+  }
   if (startupErrorActive()) {
     return false;
   }
 
-  fill_solid(leds, activeLedCount, color);
+  fill_solid(leds, activeTotalLedCount, color);
   FastLED.show();
 
   const unsigned long startedAt = millis();
@@ -172,7 +208,8 @@ void runStartupAnimation() {
 // Preserve the four existing topology meanings for arbitrary rows/cols.
 int logicalToPhysicalIndex(uint16_t x,
                            uint16_t y,
-                           const MatrixStateV3Output &output) {
+                           const MatrixStateV3Output &output,
+                           size_t outputLedCount) {
   if (x >= output.cols || y >= output.rows) {
     return -1;
   }
@@ -206,13 +243,15 @@ int logicalToPhysicalIndex(uint16_t x,
       return -1;
   }
 
-  return physicalIndex < activeLedCount ? static_cast<int>(physicalIndex) : -1;
+  return physicalIndex < outputLedCount
+             ? static_cast<int>(physicalIndex)
+             : -1;
 }
 
 bool storedLayerColor(const MatrixStateV3StoredLayer &layer,
                       size_t logicalIndex,
                       CRGB &color) {
-  if (logicalIndex >= activeLedCount ||
+  if (logicalIndex >= activeTotalLedCount ||
       (layer.present[logicalIndex / 8U] &
        (1U << (logicalIndex % 8U))) == 0) {
     return false;
@@ -238,15 +277,16 @@ const MatrixStateV3StoredLayer *statusLayer(PortStatus status) {
   return nullptr;
 }
 
-const MatrixStateStoredFreeZone *freeZoneConfig(uint8_t zoneId,
+const MatrixStateStoredFreeZone *freeZoneConfig(size_t outputIndex,
+                                                uint8_t zoneId,
                                                 size_t &zoneIndex) {
   const int index = free_zone_index(zoneId);
-  if (index < 0) {
+  if (outputIndex >= LED_OUTPUT_COUNT || index < 0) {
     return nullptr;
   }
 
   zoneIndex = static_cast<size_t>(index);
-  return &activeState.freeZones[0][zoneIndex];
+  return &activeState.freeZones[outputIndex][zoneIndex];
 }
 
 CRGB visibleErrorColor(CRGB preferred) {
@@ -302,17 +342,20 @@ CRGB renderPortPixel(size_t logicalIndex,
   return color;
 }
 
-CRGB renderFreeZonePixel(size_t logicalIndex,
+CRGB renderFreeZonePixel(size_t outputIndex,
+                         size_t globalLogicalIndex,
+                         size_t localLogicalIndex,
                          uint8_t zoneId,
                          uint8_t rainbowHue) {
   size_t zoneIndex = 0;
-  const MatrixStateStoredFreeZone *config = freeZoneConfig(zoneId, zoneIndex);
+  const MatrixStateStoredFreeZone *config =
+      freeZoneConfig(outputIndex, zoneId, zoneIndex);
   if (config == nullptr || config->enabled == 0) {
     return CRGB::Black;
   }
 
   if (config->mode == FREE_ZONE_RAINBOW) {
-    return CHSV(rainbowHue + static_cast<uint8_t>(logicalIndex * 4U),
+    return CHSV(rainbowHue + static_cast<uint8_t>(localLogicalIndex * 4U),
                 255,
                 config->brightness);
   }
@@ -321,7 +364,7 @@ CRGB renderFreeZonePixel(size_t logicalIndex,
   if (config->mode == FREE_ZONE_CUSTOM) {
     const MatrixStateV3StoredLayer &layer =
         activeState.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
-    if (!storedLayerColor(layer, logicalIndex, color)) {
+    if (!storedLayerColor(layer, globalLogicalIndex, color)) {
       return CRGB::Black;
     }
   } else {
@@ -335,6 +378,10 @@ CRGB renderFreeZonePixel(size_t logicalIndex,
 }
 
 void refreshInternal() {
+  if (registeredControllerCount == 0 || activeTotalLedCount == 0) {
+    return;
+  }
+
   static uint8_t rainbowHue = 0;
   ++rainbowHue;
 
@@ -345,27 +392,43 @@ void refreshInternal() {
 
   StatusMapperState ports;
   status_mapper_get_snapshot(ports);
-  fill_solid(leds, activeLedCount, CRGB::Black);
+  fill_solid(leds, activeTotalLedCount, CRGB::Black);
 
-  const MatrixStateV3Output &output = activeState.outputs[0];
-
-  for (size_t logicalIndex = 0; logicalIndex < activeLedCount;
-       ++logicalIndex) {
-    const uint16_t x = logicalIndex % output.cols;
-    const uint16_t y = logicalIndex / output.cols;
-    const uint8_t zoneId = activeState.zoneMap[logicalIndex];
-
-    CRGB color = CRGB::Black;
-    if (zone_is_port(zoneId)) {
-      color = renderPortPixel(logicalIndex, zoneId, ports, pulseBrightness);
-    } else if (zone_is_free(zoneId)) {
-      // A hidden free-layer pixel is visible only while zoneMap selects it.
-      color = renderFreeZonePixel(logicalIndex, zoneId, rainbowHue);
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    const MatrixStateV3Output &output = activeState.outputs[outputIndex];
+    const MatrixStateV3OutputLayout &layout = activeLayout[outputIndex];
+    if (layout.length == 0) {
+      continue;
     }
 
-    const int physicalIndex = logicalToPhysicalIndex(x, y, output);
-    if (physicalIndex >= 0) {
-      leds[physicalIndex] = color;
+    for (size_t localIndex = 0; localIndex < layout.length; ++localIndex) {
+      const uint16_t x = localIndex % output.cols;
+      const uint16_t y = localIndex / output.cols;
+      const size_t globalIndex = layout.offset + localIndex;
+      const uint8_t zoneId = activeState.zoneMap[globalIndex];
+
+      CRGB color = CRGB::Black;
+      if (zone_is_port(zoneId)) {
+        color = renderPortPixel(globalIndex, zoneId, ports, pulseBrightness);
+      } else if (zone_is_free(zoneId)) {
+        // A hidden free-layer pixel is visible only while zoneMap selects it.
+        color = renderFreeZonePixel(outputIndex,
+                                    globalIndex,
+                                    localIndex,
+                                    zoneId,
+                                    rainbowHue);
+      }
+
+      const int localPhysicalIndex =
+          logicalToPhysicalIndex(x, y, output, layout.length);
+      if (localPhysicalIndex >= 0) {
+        const size_t bufferIndex =
+            layout.offset + static_cast<size_t>(localPhysicalIndex);
+        if (bufferIndex < activeTotalLedCount) {
+          leds[bufferIndex] = color;
+        }
+      }
     }
   }
 
@@ -409,26 +472,24 @@ void ledTaskWorker(void *) {
 }  // namespace
 
 void led_setup(const MatrixStateV3 &initialState) {
-  if (hasEnabledSecondaryOutput(initialState)) {
+  if (!calculateRuntimeLayout(initialState,
+                              activeLayout,
+                              activeTotalLedCount,
+                              activeEnabledOutputCount)) {
     Serial.println(
-        "MatrixStateV3 enables LED2, LED3 or LED4; this firmware stage "
-        "supports only LED1, so LED runtime was not started");
-    return;
-  }
-  if (!calculateActiveLedCount(initialState, activeLedCount)) {
-    Serial.println(
-        "Initial MatrixStateV3 is invalid or not compatible with the "
-        "LED1-only runtime; LED runtime not started");
+        "Initial MatrixStateV3 is invalid; LED runtime not started");
     return;
   }
   memcpy(&activeState, &initialState, sizeof(activeState));
   activeStateReady = true;
 
-  ledControllerRegistered = registerLedController(activeState);
-  if (!ledControllerRegistered) {
-    Serial.printf("Unsupported LED protocol/order: %u/%u; LED output disabled\n",
-                  activeState.outputs[0].ledProtocol,
-                  activeState.outputs[0].colorOrder);
+  if (activeEnabledOutputCount == 0) {
+    Serial.println("All LED outputs are disabled; LED task not started");
+    return;
+  }
+
+  if (!registerEnabledControllers(activeState)) {
+    Serial.println("LED controller registration failed; LED task not started");
     return;
   }
 
@@ -438,7 +499,7 @@ void led_setup(const MatrixStateV3 &initialState) {
     Serial.println("LED mutex creation failed; LED task will not start");
   }
 
-  fill_solid(leds, activeLedCount, CRGB::Black);
+  fill_solid(leds, activeTotalLedCount, CRGB::Black);
   FastLED.show();
   runStartupAnimation();
   refreshInternal();
@@ -460,7 +521,7 @@ void led_setup(const MatrixStateV3 &initialState) {
 }
 
 void led_loop() {
-  if (!activeStateReady || !ledControllerRegistered || !ledLoopFallback ||
+  if (!activeStateReady || registeredControllerCount == 0 || !ledLoopFallback ||
       ledOutputStoppedForRestart) {
     return;
   }
@@ -488,6 +549,8 @@ void led_get_runtime_state(LedRuntimeState &state) {
   state.mutexReady = ledMutexReady;
   state.taskStarted = ledTaskStarted;
   state.loopFallback = ledLoopFallback;
+  state.enabledOutputCount = activeEnabledOutputCount;
+  state.totalLedCount = static_cast<uint16_t>(activeTotalLedCount);
 
   uint64_t lastRefreshMs;
   portENTER_CRITICAL(&ledRuntimeMux);
@@ -521,10 +584,16 @@ bool led_get_matrix_state_snapshot(MatrixStateV3 &snapshot) {
 }
 
 bool led_apply_matrix_state_safe(const MatrixStateV3 &state) {
-  size_t nextLedCount = 0;
+  MatrixStateV3OutputLayout nextLayout[LED_OUTPUT_COUNT] = {};
+  size_t nextTotalLedCount = 0;
+  uint8_t nextEnabledOutputCount = 0;
   if (ledOutputStoppedForRestart || !activeStateReady ||
-      !calculateActiveLedCount(state, nextLedCount) ||
-      nextLedCount != activeLedCount ||
+      !calculateRuntimeLayout(state,
+                              nextLayout,
+                              nextTotalLedCount,
+                              nextEnabledOutputCount) ||
+      nextTotalLedCount != activeTotalLedCount ||
+      nextEnabledOutputCount != activeEnabledOutputCount ||
       state.activePortCount != activeState.activePortCount) {
     return false;
   }
@@ -540,14 +609,15 @@ bool led_apply_matrix_state_safe(const MatrixStateV3 &state) {
         next.cols != current.cols ||
         next.ledProtocol != current.ledProtocol ||
         next.colorOrder != current.colorOrder ||
-        (outputIndex != 0 && next.topology != current.topology)) {
+        nextLayout[outputIndex].offset != activeLayout[outputIndex].offset ||
+        nextLayout[outputIndex].length != activeLayout[outputIndex].length) {
       return false;
     }
   }
 
   if (!ledMutexReady) {
     memcpy(&activeState, &state, sizeof(activeState));
-    if (ledControllerRegistered) {
+    if (registeredControllerCount > 0) {
       refreshInternal();
     }
     return true;

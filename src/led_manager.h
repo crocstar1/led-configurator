@@ -6,12 +6,12 @@
 #include "board_config.h"
 #include "matrix_state_storage.h"
 
-#define LED_PIN PRIMARY_LED_PIN
-
 struct LedRuntimeState {
   bool mutexReady;
   bool taskStarted;
   bool loopFallback;
+  uint8_t enabledOutputCount;
+  uint16_t totalLedCount;
   uint64_t lastRefreshAgeMs;
 };
 

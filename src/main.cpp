@@ -28,7 +28,7 @@ unsigned long otaRestartAt = 0;
 
 static bool hardwareConfigRestartRequired = false;
 static bool hardwareConfigRestartScheduled = false;
-static bool matrixSavesBlockedByUnsupportedStoredV3 = false;
+static bool matrixUiRequiresMultiOutput = false;
 static unsigned long hardwareConfigRestartAt = 0;
 
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
@@ -562,7 +562,7 @@ bool activeLedCountForState(const MatrixStateV3 &state, size_t &ledCount) {
     return ledCount > 0 && ledCount <= MAX_LED_COUNT_PER_OUTPUT;
 }
 
-bool currentRuntimeSupportsMatrixState(const MatrixStateV3 &state) {
+bool currentUiSupportsMatrixState(const MatrixStateV3 &state) {
     size_t primaryLedCount = 0;
     if (!activeLedCountForState(state, primaryLedCount)) return false;
 
@@ -1075,7 +1075,7 @@ bool snapshotMatrixState() {
 }
 
 bool rejectUnavailableMatrixSave() {
-    if (matrixSavesBlockedByUnsupportedStoredV3) {
+    if (matrixUiRequiresMultiOutput) {
         server.send(409, "text/plain", "UNSUPPORTED_MULTI_OUTPUT_STATE");
         return true;
     }
@@ -1125,6 +1125,10 @@ void handleGetMatrixSize() {
 
 void handleGetConfig() {
     if (!requireHttpAuth()) return;
+    if (matrixUiRequiresMultiOutput) {
+        server.send(409, "text/plain", "MULTI_OUTPUT_UI_REQUIRED");
+        return;
+    }
     if (!snapshotMatrixState()) return;
 
     size_t ledCount = 0;
@@ -1814,6 +1818,10 @@ void handleDiagnostics() {
     json += ledRuntime.taskStarted ? "true" : "false";
     json += ",\"loopFallback\":";
     json += ledRuntime.loopFallback ? "true" : "false";
+    json += ",\"enabledOutputCount\":";
+    json += String((int)ledRuntime.enabledOutputCount);
+    json += ",\"totalLedCount\":";
+    json += String((unsigned int)ledRuntime.totalLedCount);
     json += ",\"lastRefreshAgeMs\":";
     json += uint64ToString(ledRuntime.lastRefreshAgeMs);
     json += "}";
@@ -1880,15 +1888,13 @@ void setup() {
     const MatrixStateLoadResult matrixLoadResult =
         matrix_state_storage_load_v3(matrixStateCandidate);
     if (matrixLoadResult == MatrixStateLoadResult::LOADED) {
-        if (currentRuntimeSupportsMatrixState(matrixStateCandidate)) {
-            Serial.println("Matrix state V3 loaded for LED1 runtime");
+        if (currentUiSupportsMatrixState(matrixStateCandidate)) {
+            Serial.println("Matrix state V3 loaded for the current matrix UI");
         } else {
             Serial.println(
-                "Matrix state V3 disables LED1 or enables LED2, LED3 or LED4; "
-                "using factory V3 in RAM and blocking matrix saves so the "
-                "stored state remains unchanged");
-            matrixSavesBlockedByUnsupportedStoredV3 = true;
-            matrix_state_storage_set_v3_factory_defaults(matrixStateCandidate);
+                "Matrix state V3 requires the multi-output UI; runtime will "
+                "use the stored state while matrix saves remain blocked");
+            matrixUiRequiresMultiOutput = true;
         }
     } else {
         Serial.printf("Matrix state V3 %s; using factory defaults without saving\n",
