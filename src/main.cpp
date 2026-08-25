@@ -157,8 +157,8 @@ static void handleServiceButtonFactoryReset() {
     const bool matrixCleared = matrix_state_storage_clear_saved_state();
     const bool networkCleared = network_config_clear_saved_settings();
     const bool authCleared = auth_config_clear_saved_settings();
-    Serial.printf("Factory reset matrix/state_v2: %s\n",
-        matrixCleared ? "cleared" : "failed");
+    Serial.printf("Factory reset matrix state: %s\n",
+        matrixCleared ? "success" : "failed");
     Serial.printf("Factory reset net_cfg: %s\n",
         networkCleared ? "cleared" : "failed");
     Serial.printf("Factory reset auth_cfg: %s\n",

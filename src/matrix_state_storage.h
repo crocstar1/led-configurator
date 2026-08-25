@@ -337,5 +337,8 @@ void matrix_state_storage_set_v3_factory_defaults(MatrixStateV3 &state);
 MatrixStateValidationResult matrix_state_storage_validate_v3(
     const MatrixStateV3 &state);
 void matrix_state_storage_clear_v3_spatial_data(MatrixStateV3 &state);
+MatrixStateLoadResult matrix_state_storage_load_v3(MatrixStateV3 &state);
+MatrixStateSaveResult matrix_state_storage_save_v3(
+    const MatrixStateV3 &state);
 
 #endif

@@ -11,6 +11,7 @@ namespace {
 static constexpr char MATRIX_NVS_PARTITION[] = "matrix_nvs";
 static constexpr char MATRIX_NVS_NAMESPACE[] = "matrix";
 static constexpr char MATRIX_NVS_KEY[] = "state_v2";
+static constexpr char MATRIX_NVS_V3_KEY[] = "state_v3";
 
 static constexpr uint8_t TOPOLOGY_MAX = 3;
 static constexpr uint8_t DEFAULT_PORT_BRIGHTNESS = 120;
@@ -58,6 +59,9 @@ static_assert(!v3CanAppendOutputLength(1000, 1),
 // One reusable buffer keeps the 11.5 KiB image off task stacks. The module is
 // deliberately synchronous and non-reentrant.
 MatrixStateV2 storageBuffer;
+// Temporary V3 scratch storage follows the same synchronous, non-reentrant
+// model and keeps the 23 KiB snapshot off task stacks.
+MatrixStateV3 v3StorageBuffer;
 bool matrixPartitionInitialized = false;
 
 enum class ReadBlobResult : uint8_t {
@@ -204,6 +208,43 @@ ReadBlobResult readBlob(nvs_handle_t handle, MatrixStateV2 &state) {
   }
   if (error != ESP_OK) {
     logNvsError("read", error);
+    return ReadBlobResult::ERROR;
+  }
+
+  return readSize == sizeof(state) ? ReadBlobResult::OK
+                                   : ReadBlobResult::INCOMPATIBLE;
+}
+
+ReadBlobResult readV3Blob(nvs_handle_t handle, MatrixStateV3 &state) {
+  size_t storedSize = 0;
+  esp_err_t error =
+      nvs_get_blob(handle, MATRIX_NVS_V3_KEY, nullptr, &storedSize);
+  if (error == ESP_ERR_NVS_NOT_FOUND) {
+    return ReadBlobResult::NOT_FOUND;
+  }
+  if (error == ESP_ERR_NVS_TYPE_MISMATCH) {
+    return ReadBlobResult::INCOMPATIBLE;
+  }
+  if (error != ESP_OK) {
+    logNvsError("read V3 length", error);
+    return ReadBlobResult::ERROR;
+  }
+  if (storedSize != sizeof(MatrixStateV3)) {
+    return ReadBlobResult::INCOMPATIBLE;
+  }
+
+  memset(&state, 0, sizeof(state));
+  size_t readSize = sizeof(state);
+  error = nvs_get_blob(handle, MATRIX_NVS_V3_KEY, &state, &readSize);
+  if (error == ESP_ERR_NVS_NOT_FOUND) {
+    return ReadBlobResult::CORRUPT;
+  }
+  if (error == ESP_ERR_NVS_TYPE_MISMATCH ||
+      error == ESP_ERR_NVS_INVALID_LENGTH) {
+    return ReadBlobResult::INCOMPATIBLE;
+  }
+  if (error != ESP_OK) {
+    logNvsError("read V3", error);
     return ReadBlobResult::ERROR;
   }
 
@@ -525,24 +566,32 @@ bool matrix_state_storage_clear_saved_state() {
     return false;
   }
 
-  const esp_err_t eraseError = nvs_erase_key(handle, MATRIX_NVS_KEY);
-  if (eraseError == ESP_ERR_NVS_NOT_FOUND) {
-    nvs_close(handle);
-    return true;
-  }
-  if (eraseError != ESP_OK) {
-    logNvsError("erase state", eraseError);
-    nvs_close(handle);
-    return false;
+  bool success = true;
+  bool commitRequired = false;
+
+  const esp_err_t eraseV2Error = nvs_erase_key(handle, MATRIX_NVS_KEY);
+  if (eraseV2Error == ESP_OK) {
+    commitRequired = true;
+  } else if (eraseV2Error != ESP_ERR_NVS_NOT_FOUND) {
+    logNvsError("erase state_v2", eraseV2Error);
+    success = false;
   }
 
-  const esp_err_t commitError = nvs_commit(handle);
+  const esp_err_t eraseV3Error = nvs_erase_key(handle, MATRIX_NVS_V3_KEY);
+  if (eraseV3Error == ESP_OK) {
+    commitRequired = true;
+  } else if (eraseV3Error != ESP_ERR_NVS_NOT_FOUND) {
+    logNvsError("erase state_v3", eraseV3Error);
+    success = false;
+  }
+
+  const esp_err_t commitError = commitRequired ? nvs_commit(handle) : ESP_OK;
   nvs_close(handle);
   if (commitError != ESP_OK) {
     logNvsError("commit clear", commitError);
     return false;
   }
-  return true;
+  return success;
 }
 
 bool matrix_state_v3_calculate_output_layout(
@@ -686,4 +735,103 @@ MatrixStateValidationResult matrix_state_storage_validate_v3(
   }
 
   return MatrixStateValidationResult::VALID;
+}
+
+MatrixStateLoadResult matrix_state_storage_load_v3(MatrixStateV3 &state) {
+  if (!initializeMatrixPartition()) {
+    return MatrixStateLoadResult::STORAGE_ERROR;
+  }
+
+  nvs_handle_t handle = 0;
+  const esp_err_t openError = nvs_open_from_partition(
+      MATRIX_NVS_PARTITION, MATRIX_NVS_NAMESPACE, NVS_READONLY, &handle);
+  if (openError == ESP_ERR_NVS_NOT_FOUND) {
+    return MatrixStateLoadResult::NOT_FOUND;
+  }
+  if (openError != ESP_OK) {
+    logNvsError("open for V3 read", openError);
+    return MatrixStateLoadResult::STORAGE_ERROR;
+  }
+
+  const ReadBlobResult readResult = readV3Blob(handle, v3StorageBuffer);
+  nvs_close(handle);
+
+  if (readResult == ReadBlobResult::NOT_FOUND) {
+    return MatrixStateLoadResult::NOT_FOUND;
+  }
+  if (readResult == ReadBlobResult::INCOMPATIBLE) {
+    return MatrixStateLoadResult::INCOMPATIBLE;
+  }
+  if (readResult == ReadBlobResult::CORRUPT) {
+    return MatrixStateLoadResult::CORRUPT;
+  }
+  if (readResult != ReadBlobResult::OK) {
+    return MatrixStateLoadResult::STORAGE_ERROR;
+  }
+
+  const MatrixStateValidationResult validation =
+      matrix_state_storage_validate_v3(v3StorageBuffer);
+  if (validation != MatrixStateValidationResult::VALID) {
+    return MatrixStateLoadResult::CORRUPT;
+  }
+
+  memcpy(&state, &v3StorageBuffer, sizeof(state));
+  return MatrixStateLoadResult::LOADED;
+}
+
+MatrixStateSaveResult matrix_state_storage_save_v3(
+    const MatrixStateV3 &state) {
+  memcpy(&v3StorageBuffer, &state, sizeof(v3StorageBuffer));
+  if (matrix_state_storage_validate_v3(v3StorageBuffer) !=
+      MatrixStateValidationResult::VALID) {
+    return MatrixStateSaveResult::INVALID_STATE;
+  }
+
+  if (!initializeMatrixPartition()) {
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
+  nvs_handle_t handle = 0;
+  const esp_err_t openError = nvs_open_from_partition(
+      MATRIX_NVS_PARTITION, MATRIX_NVS_NAMESPACE, NVS_READWRITE, &handle);
+  if (openError != ESP_OK) {
+    logNvsError("open for V3 write", openError);
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
+  const esp_err_t writeError = nvs_set_blob(
+      handle, MATRIX_NVS_V3_KEY, &v3StorageBuffer, sizeof(v3StorageBuffer));
+  if (writeError != ESP_OK) {
+    logNvsError("write V3", writeError);
+    nvs_close(handle);
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
+  const esp_err_t commitError = nvs_commit(handle);
+  if (commitError != ESP_OK) {
+    logNvsError("commit V3", commitError);
+    nvs_close(handle);
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
+  const ReadBlobResult readResult = readV3Blob(handle, v3StorageBuffer);
+  if (readResult == ReadBlobResult::ERROR) {
+    nvs_close(handle);
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
+  const bool verified =
+      readResult == ReadBlobResult::OK &&
+      matrix_state_storage_validate_v3(v3StorageBuffer) ==
+          MatrixStateValidationResult::VALID &&
+      memcmp(&v3StorageBuffer, &state, sizeof(state)) == 0;
+  nvs_close(handle);
+
+  if (verified) {
+    return MatrixStateSaveResult::SAVED;
+  }
+
+  Serial.println(
+      "matrix_nvs V3 readback verification failed; partition not erased");
+  return MatrixStateSaveResult::VERIFY_FAILED;
 }
