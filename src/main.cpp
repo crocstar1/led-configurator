@@ -601,48 +601,49 @@ bool currentUiSupportsMatrixState(const MatrixStateV3 &state) {
     return true;
 }
 
-bool pruneFreeCustomLayersForZoneMap(MatrixStateV3 &state) {
-    size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount)) return false;
-
+void pruneFreeCustomLayersForZoneMapSegment(
+    MatrixStateV3 &state,
+    const MatrixStateV3OutputLayout &outputLayout) {
     for (size_t zoneIndex = 0; zoneIndex < FREE_ZONE_COUNT; zoneIndex++) {
         const uint8_t zoneId = FREE_ZONE_IDS[zoneIndex];
         MatrixStateV3StoredLayer &layer =
             state.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
 
-        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-            if (state.zoneMap[logicalIndex] == zoneId) continue;
+        for (size_t localIndex = 0; localIndex < outputLayout.length;
+             localIndex++) {
+            const size_t globalIndex = outputLayout.offset + localIndex;
+            if (state.zoneMap[globalIndex] == zoneId) continue;
 
-            clearStoredLayerPixel(layer, logicalIndex);
+            clearStoredLayerPixel(layer, globalIndex);
         }
     }
-    return true;
 }
 
-bool clearStatusPixelsForChangedZones(
+void clearStatusPixelsForChangedZones(
     MatrixStateV3 &state,
-    const uint8_t oldZoneMap[MAX_TOTAL_LED_COUNT]) {
-    size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount)) return false;
-
-    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-        if (oldZoneMap[logicalIndex] == state.zoneMap[logicalIndex]) continue;
+    const uint8_t oldZoneMap[MAX_TOTAL_LED_COUNT],
+    const MatrixStateV3OutputLayout &outputLayout) {
+    for (size_t localIndex = 0; localIndex < outputLayout.length;
+         localIndex++) {
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        if (oldZoneMap[globalIndex] == state.zoneMap[globalIndex]) continue;
         for (size_t layerIndex = MATRIX_STATE_LAYER_WAITING;
              layerIndex <= MATRIX_STATE_LAYER_ERROR;
              layerIndex++) {
-            clearStoredLayerPixel(state.layers[layerIndex], logicalIndex);
+            clearStoredLayerPixel(state.layers[layerIndex], globalIndex);
         }
     }
-    return true;
 }
 
 bool statusLayerUsesOnlyActivePortZones(
     const MatrixStateV3 &state,
     const MatrixStateV3StoredLayer &layer,
-    size_t ledCount) {
-    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-        if (!storedLayerHasPixel(layer, logicalIndex)) continue;
-        const uint8_t zoneId = state.zoneMap[logicalIndex];
+    const MatrixStateV3OutputLayout &outputLayout) {
+    for (size_t localIndex = 0; localIndex < outputLayout.length;
+         localIndex++) {
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        if (!storedLayerHasPixel(layer, globalIndex)) continue;
+        const uint8_t zoneId = state.zoneMap[globalIndex];
         if (!zone_is_port(zoneId) ||
             zoneId - ZONE_ID_PORT1 >= state.activePortCount) {
             return false;
@@ -813,10 +814,9 @@ bool parseHardwareConfigPayload(const String &body, HardwareConfig &hardware) {
 
 bool parseMatrixCoordinate(
     const String &coordinate,
-    const MatrixStateV3 &state,
+    const MatrixStateV3Output &output,
     int &x,
     int &y) {
-    const MatrixStateV3Output &output = state.outputs[0];
     const int dash = coordinate.indexOf('-');
     if (dash <= 0 || dash != coordinate.lastIndexOf('-') || dash >= coordinate.length() - 1) return false;
     return parseStrictInt(coordinate.substring(0, dash), x) &&
@@ -824,18 +824,25 @@ bool parseMatrixCoordinate(
         x >= 0 && x < output.cols && y >= 0 && y < output.rows;
 }
 
-bool parseZoneMapPayload(const String &body, MatrixStateV3 &state) {
-    size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount) ||
+bool parseZoneMapPayload(
+    const String &body,
+    MatrixStateV3 &state,
+    size_t outputIndex,
+    const MatrixStateV3OutputLayout &outputLayout) {
+    const MatrixStateV3Output &output = state.outputs[outputIndex];
+    if (outputLayout.length == 0 ||
         state.activePortCount < 1 || state.activePortCount > MAX_PORT_COUNT ||
         body.length() < 2 ||
-        body.length() > (2 + (ledCount * 24)) || body[0] != '{' ||
+        body.length() > (2 + (outputLayout.length * 24U)) || body[0] != '{' ||
         body[body.length() - 1] != '}') {
         return false;
     }
 
-    memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
-    uint8_t seen[MATRIX_STATE_V3_LAYER_MASK_BYTES] = {};
+    for (size_t localIndex = 0; localIndex < outputLayout.length;
+         localIndex++) {
+        state.zoneMap[outputLayout.offset + localIndex] = ZONE_ID_OFF;
+    }
+    uint8_t seen[(MAX_LED_COUNT_PER_OUTPUT + 7U) / 8U] = {};
     size_t entryCount = 0;
     int position = 1;
     skipJsonWhitespace(body, position);
@@ -872,17 +879,21 @@ bool parseZoneMapPayload(const String &body, MatrixStateV3 &state) {
         int y = -1;
         int zoneId = -1;
         const int highestActivePortZone = ZONE_ID_PORT1 + state.activePortCount - 1;
-        if (!parseMatrixCoordinate(coordinate, state, x, y) || !parseStrictInt(zoneValue, zoneId) ||
+        if (!parseMatrixCoordinate(coordinate, output, x, y) ||
+            !parseStrictInt(zoneValue, zoneId) ||
             zoneId < ZONE_ID_OFF || zoneId > ZONE_ID_MAX || !zone_id_is_valid((uint8_t)zoneId) ||
             (zone_is_port((uint8_t)zoneId) && zoneId > highestActivePortZone)) {
             return false;
         }
-        const size_t logicalIndex =
-            (size_t)y * state.outputs[0].cols + x;
-        const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
-        if ((seen[logicalIndex / 8U] & bit) != 0 || entryCount >= ledCount) return false;
-        seen[logicalIndex / 8U] |= bit;
-        state.zoneMap[logicalIndex] = (uint8_t)zoneId;
+        const size_t localIndex = (size_t)y * output.cols + x;
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        const uint8_t bit = (uint8_t)(1U << (localIndex % 8U));
+        if ((seen[localIndex / 8U] & bit) != 0 ||
+            entryCount >= outputLayout.length) {
+            return false;
+        }
+        seen[localIndex / 8U] |= bit;
+        state.zoneMap[globalIndex] = (uint8_t)zoneId;
         entryCount++;
 
         skipJsonWhitespace(body, position);
@@ -899,18 +910,24 @@ bool parseZoneMapPayload(const String &body, MatrixStateV3 &state) {
 bool parseStoredLayerPayload(
     const String &payload,
     const MatrixStateV3 &state,
+    size_t outputIndex,
+    const MatrixStateV3OutputLayout &outputLayout,
     MatrixStateV3StoredLayer &layer) {
-    size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount)) return false;
+    const MatrixStateV3Output &output = state.outputs[outputIndex];
+    if (outputLayout.length == 0) return false;
 
     String body = payload;
     body.trim();
-    if (body.length() < 2 || body.length() > (2 + (ledCount * 32)) ||
+    if (body.length() < 2 ||
+        body.length() > (2 + (outputLayout.length * 32U)) ||
         body[0] != '{' || body[body.length() - 1] != '}') {
         return false;
     }
 
-    memset(&layer, 0, sizeof(layer));
+    for (size_t localIndex = 0; localIndex < outputLayout.length;
+         localIndex++) {
+        clearStoredLayerPixel(layer, outputLayout.offset + localIndex);
+    }
     size_t entryCount = 0;
     int position = 1;
     skipJsonWhitespace(body, position);
@@ -936,16 +953,19 @@ bool parseStoredLayerPayload(
 
         int x = -1;
         int y = -1;
-        if (!parseMatrixCoordinate(coordinate, state, x, y)) return false;
-        const size_t logicalIndex =
-            (size_t)y * state.outputs[0].cols + x;
-        const uint8_t bit = (uint8_t)(1U << (logicalIndex % 8U));
-        if ((layer.present[logicalIndex / 8U] & bit) != 0 || entryCount >= ledCount) return false;
+        if (!parseMatrixCoordinate(coordinate, output, x, y)) return false;
+        const size_t localIndex = (size_t)y * output.cols + x;
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        const uint8_t bit = (uint8_t)(1U << (globalIndex % 8U));
+        if ((layer.present[globalIndex / 8U] & bit) != 0 ||
+            entryCount >= outputLayout.length) {
+            return false;
+        }
 
         uint8_t parsedColor[3] = {};
         parseHexColor(colorText, parsedColor);
-        layer.present[logicalIndex / 8U] |= bit;
-        memcpy(&layer.rgb[logicalIndex * 3U], parsedColor, sizeof(parsedColor));
+        layer.present[globalIndex / 8U] |= bit;
+        memcpy(&layer.rgb[globalIndex * 3U], parsedColor, sizeof(parsedColor));
         entryCount++;
 
         skipJsonWhitespace(body, position);
@@ -1099,16 +1119,67 @@ bool snapshotMatrixState() {
     return false;
 }
 
-bool rejectUnavailableMatrixSave() {
-    if (matrixUiRequiresMultiOutput) {
-        server.send(409, "text/plain", "UNSUPPORTED_MULTI_OUTPUT_STATE");
-        return true;
-    }
+bool rejectMatrixSaveForRestart() {
     if (hardwareConfigRestartRequired) {
         server.send(409, "text/plain", "RESTART_PENDING");
         return true;
     }
     return false;
+}
+
+bool rejectUnavailableMatrixSave() {
+    if (rejectMatrixSaveForRestart()) return true;
+    if (matrixUiRequiresMultiOutput) {
+        server.send(409, "text/plain", "UNSUPPORTED_MULTI_OUTPUT_STATE");
+        return true;
+    }
+    return false;
+}
+
+bool prepareSelectedOutputSave(
+    bool requireEnabled,
+    size_t &outputIndex,
+    MatrixStateV3OutputLayout &selectedLayout) {
+    if (rejectMatrixSaveForRestart()) return false;
+
+    bool outputSpecified = false;
+    int parsedOutputIndex = 0;
+    for (int argIndex = 0; argIndex < server.args(); argIndex++) {
+        if (server.argName(argIndex) != "output") continue;
+        if (outputSpecified ||
+            !parseStrictInt(server.arg(argIndex), parsedOutputIndex) ||
+            parsedOutputIndex < 0 ||
+            parsedOutputIndex >= static_cast<int>(LED_OUTPUT_COUNT)) {
+            server.send(400, "text/plain", "BAD_OUTPUT_INDEX");
+            return false;
+        }
+        outputSpecified = true;
+    }
+
+    if (!snapshotMatrixState()) return false;
+
+    MatrixStateV3OutputLayout outputLayout[LED_OUTPUT_COUNT] = {};
+    size_t totalLedCount = 0;
+    if (!matrix_state_v3_calculate_output_layout(
+            matrixStateCandidate, outputLayout, totalLedCount)) {
+        server.send(500, "text/plain", "STATE_INVALID");
+        return false;
+    }
+
+    if (!outputSpecified && !currentUiSupportsMatrixState(matrixStateCandidate)) {
+        server.send(409, "text/plain", "OUTPUT_REQUIRED");
+        return false;
+    }
+
+    outputIndex = static_cast<size_t>(parsedOutputIndex);
+    selectedLayout = outputLayout[outputIndex];
+    const MatrixStateV3Output &output = matrixStateCandidate.outputs[outputIndex];
+    if (requireEnabled &&
+        (output.enabled != 1 || selectedLayout.length == 0)) {
+        server.send(409, "text/plain", "OUTPUT_DISABLED");
+        return false;
+    }
+    return true;
 }
 
 bool saveAndApplyMatrixState(const char *saveError) {
@@ -1385,30 +1456,25 @@ void handleSaveHardwareConfig() {
 
 void handleSaveZones() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    size_t outputIndex = 0;
+    MatrixStateV3OutputLayout outputLayout = {};
+    if (!prepareSelectedOutputSave(true, outputIndex, outputLayout)) return;
 
     String body = server.arg("plain");
     body.trim();
-    if (!snapshotMatrixState()) return;
     memcpy(previousZoneMap, matrixStateCandidate.zoneMap, sizeof(previousZoneMap));
-    if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
-    if (!parseZoneMapPayload(body, matrixStateCandidate)) {
+    pruneFreeCustomLayersForZoneMapSegment(
+        matrixStateCandidate, outputLayout);
+    if (!parseZoneMapPayload(
+            body, matrixStateCandidate, outputIndex, outputLayout)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
 
-    if (!pruneFreeCustomLayersForZoneMap(matrixStateCandidate)) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
-    if (!clearStatusPixelsForChangedZones(
-            matrixStateCandidate, previousZoneMap)) {
-        server.send(500, "text/plain", "SAVE_FAILED");
-        return;
-    }
+    pruneFreeCustomLayersForZoneMapSegment(
+        matrixStateCandidate, outputLayout);
+    clearStatusPixelsForChangedZones(
+        matrixStateCandidate, previousZoneMap, outputLayout);
 
     if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");
@@ -1416,7 +1482,9 @@ void handleSaveZones() {
 
 void handleSaveTopology() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    size_t outputIndex = 0;
+    MatrixStateV3OutputLayout outputLayout = {};
+    if (!prepareSelectedOutputSave(false, outputIndex, outputLayout)) return;
 
     int topology = -1;
     if (server.hasArg("topology")) {
@@ -1431,15 +1499,14 @@ void handleSaveTopology() {
         return;
     }
 
-    if (!snapshotMatrixState()) return;
-    matrixStateCandidate.outputs[0].topology = (uint8_t)topology;
+    matrixStateCandidate.outputs[outputIndex].topology = (uint8_t)topology;
     if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");
 }
 
 void handleSetBright() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    if (rejectMatrixSaveForRestart()) return;
 
     if (!server.hasArg("type") || !server.hasArg("val")) {
         server.send(400, "text/plain", "MISSING_ARG");
@@ -1467,18 +1534,14 @@ void handleSetBright() {
 
 void handleSaveStatusColors() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    size_t outputIndex = 0;
+    MatrixStateV3OutputLayout outputLayout = {};
+    if (!prepareSelectedOutputSave(true, outputIndex, outputLayout)) return;
 
     String body = server.arg("plain");
     body.trim();
-    if (!snapshotMatrixState()) return;
-    size_t ledCount = 0;
-    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
-        server.send(500, "text/plain", "STATE_INVALID");
-        return;
-    }
     if (!body.startsWith("{") || !body.endsWith("}") ||
-        body.length() > (2 + (ledCount * 32) + 128)) {
+        body.length() > (2 + (outputLayout.length * 32U) + 128U)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
@@ -1535,11 +1598,13 @@ void handleSaveStatusColors() {
     if (!parseStoredLayerPayload(
             colorsJson,
             matrixStateCandidate,
+            outputIndex,
+            outputLayout,
             matrixStateCandidate.layers[layerIndex]) ||
         !statusLayerUsesOnlyActivePortZones(
             matrixStateCandidate,
             matrixStateCandidate.layers[layerIndex],
-            ledCount)) {
+            outputLayout)) {
         server.send(400, "text/plain", "BAD_LAYER");
         return;
     }
@@ -1551,18 +1616,14 @@ void handleSaveStatusColors() {
 
 void handleSaveFreeZone() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    size_t outputIndex = 0;
+    MatrixStateV3OutputLayout outputLayout = {};
+    if (!prepareSelectedOutputSave(true, outputIndex, outputLayout)) return;
 
     String body = server.arg("plain");
     body.trim();
-    if (!snapshotMatrixState()) return;
-    size_t ledCount = 0;
-    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
-        server.send(500, "text/plain", "STATE_INVALID");
-        return;
-    }
     if (!body.startsWith("{") || !body.endsWith("}") ||
-        body.length() > (2 + (ledCount * 32) + 512)) {
+        body.length() > (2 + (outputLayout.length * 32U) + 512U)) {
         server.send(400, "text/plain", "BAD_JSON");
         return;
     }
@@ -1581,7 +1642,7 @@ void handleSaveFreeZone() {
     }
 
     MatrixStateStoredFreeZone &nextZone =
-        matrixStateCandidate.freeZones[0][zoneIndex];
+        matrixStateCandidate.freeZones[outputIndex][zoneIndex];
     bool hasConfigPayload = false;
 
     if (jsonHasField(body, "enabled")) {
@@ -1631,6 +1692,8 @@ void handleSaveFreeZone() {
             !parseStoredLayerPayload(
                 customLayer,
                 matrixStateCandidate,
+                outputIndex,
+                outputLayout,
                 matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex])) {
             server.send(400, "text/plain", "BAD_LAYER");
             return;
@@ -1638,9 +1701,11 @@ void handleSaveFreeZone() {
 
         const MatrixStateV3StoredLayer &newLayer =
             matrixStateCandidate.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
-        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-            if (storedLayerHasPixel(newLayer, logicalIndex) &&
-                matrixStateCandidate.zoneMap[logicalIndex] != nextZone.zoneId) {
+        for (size_t localIndex = 0; localIndex < outputLayout.length;
+             localIndex++) {
+            const size_t globalIndex = outputLayout.offset + localIndex;
+            if (storedLayerHasPixel(newLayer, globalIndex) &&
+                matrixStateCandidate.zoneMap[globalIndex] != nextZone.zoneId) {
                 server.send(400, "text/plain", "BAD_LAYER");
                 return;
             }
