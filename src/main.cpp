@@ -607,27 +607,6 @@ bool statusLayerUsesOnlyActivePortZones(
     return true;
 }
 
-bool zoneMapHasRequiredActivePortZones(const MatrixStateV2 &state) {
-    size_t ledCount = 0;
-    if (!activeLedCountForState(state, ledCount) ||
-        state.activePortCount < 1 || state.activePortCount > MAX_PORT_COUNT) {
-        return false;
-    }
-
-    for (uint8_t portIndex = 0; portIndex < state.activePortCount; portIndex++) {
-        const uint8_t requiredZoneId = (uint8_t)(ZONE_ID_PORT1 + portIndex);
-        bool found = false;
-        for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-            if (state.zoneMap[logicalIndex] == requiredZoneId) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return false;
-    }
-    return true;
-}
-
 void skipJsonWhitespace(const String &value, int &position) {
     while (position < value.length() && isspace((unsigned char)value[position])) position++;
 }
@@ -1285,11 +1264,6 @@ void handleSaveZones() {
     }
     if (!parseZoneMapPayload(body, matrixStateCandidate)) {
         server.send(400, "text/plain", "BAD_JSON");
-        return;
-    }
-
-    if (!zoneMapHasRequiredActivePortZones(matrixStateCandidate)) {
-        server.send(400, "text/plain", "ACTIVE_PORT_ZONE_EMPTY");
         return;
     }
 

@@ -44,10 +44,10 @@ static constexpr ZoneMetadata ZONE_METADATA[] = {
     {ZONE_ID_PORT2, "Port 2", ZONE_TYPE_PORT, false, true, 1, FREE_ZONE_STATIC},
     {ZONE_ID_PORT3, "Port 3", ZONE_TYPE_PORT, false, true, 2, FREE_ZONE_STATIC},
     {ZONE_ID_PORT4, "Port 4", ZONE_TYPE_PORT, false, true, 3, FREE_ZONE_STATIC},
-    {ZONE_ID_LOGO, "Logo", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
-    {ZONE_ID_QR, "QR", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
-    {ZONE_ID_SERVICE, "Service", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
-    {ZONE_ID_CUSTOM, "Custom", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_CUSTOM},
+    {ZONE_ID_LOGO, "Свободная зона 1", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
+    {ZONE_ID_QR, "Свободная зона 2", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
+    {ZONE_ID_SERVICE, "Свободная зона 3", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
+    {ZONE_ID_CUSTOM, "Свободная зона 4", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_CUSTOM},
 };
 
 static constexpr size_t ZONE_METADATA_COUNT = sizeof(ZONE_METADATA) / sizeof(ZONE_METADATA[0]);

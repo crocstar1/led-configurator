@@ -848,7 +848,6 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <h2 id="matrix_title">Матрица</h2>
                 <span class="hint" id="matrix_hint">12×8</span>
             </div>
-            <div class="notice safety-warning field-hidden" id="active_ports_warning"></div>
             <div class="matrix-shell">
                 <div class="matrix" id="matrix_grid"></div>
             </div>
@@ -1037,7 +1036,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <div class="btn-row">
                         <button class="btn secondary" id="apply_free_brightness_all_btn" type="button">Применить яркость ко всем зонам</button>
                     </div>
-                    <div class="hint">Сразу сохраняет яркость всех размеченных свободных зон.</div>
+                    <div class="hint">Сразу сохраняет яркость всех свободных зон.</div>
                     <div class="section-divider"></div>
                     <label>Легенда</label>
                     <div class="legend" id="free_legend"></div>
@@ -1242,10 +1241,10 @@ const DEFAULT_ZONES = [
     { id: 2, name: 'Порт 2', type: 'port', enabled: false, reserved: true, linked_port: 2, mode: null },
     { id: 3, name: 'Порт 3', type: 'port', enabled: false, reserved: true, linked_port: 3, mode: null },
     { id: 4, name: 'Порт 4', type: 'port', enabled: false, reserved: true, linked_port: 4, mode: null },
-    { id: 5, name: 'Логотип', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
-    { id: 6, name: 'QR', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
-    { id: 7, name: 'Сервис', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
-    { id: 8, name: 'Пользовательская', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'custom' },
+    { id: 5, name: 'Свободная зона 1', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
+    { id: 6, name: 'Свободная зона 2', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
+    { id: 7, name: 'Свободная зона 3', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
+    { id: 8, name: 'Свободная зона 4', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'custom' },
 ];
 
 const zoneColors = {
@@ -1305,10 +1304,10 @@ const ZONE_LABELS = {
     '2': 'Порт 2',
     '3': 'Порт 3',
     '4': 'Порт 4',
-    '5': 'Логотип',
-    '6': 'QR',
-    '7': 'Сервис',
-    '8': 'Своя зона',
+    '5': 'Свободная зона 1',
+    '6': 'Свободная зона 2',
+    '7': 'Свободная зона 3',
+    '8': 'Свободная зона 4',
 };
 
 const DEFAULT_FREE_STATIC_COLORS = {
@@ -1454,21 +1453,6 @@ function zoneOptionLabel(zone) {
     return `${zoneDisplayName(zone)}${zone.reserved ? ' · резерв' : ''}`;
 }
 
-function buildDefaultPortMap(cols = 12, rows = 8, portCount = 2) {
-    const map = {};
-    const activeCount = clampActivePortCount(portCount);
-    const activeLedCount = cols * rows;
-    if (!Number.isInteger(activeLedCount) || activeLedCount <= 0) return map;
-    for (let y = 0; y < rows; y++) {
-        for (let x = 0; x < cols; x++) {
-            const logicalIndex = y * cols + x;
-            const portOffset = Math.floor((logicalIndex * activeCount) / activeLedCount);
-            map[`${x}-${y}`] = String(1 + portOffset);
-        }
-    }
-    return map;
-}
-
 function clampActivePortCount(value) {
     const count = Number(value);
     return Number.isFinite(count) ? Math.max(1, Math.min(4, Math.trunc(count))) : 1;
@@ -1505,7 +1489,7 @@ function buildMockConfig() {
             colorOrder: 'BRG',
             maxLedCount: HARDWARE_MAX_LED_COUNT_FALLBACK,
         },
-        hardware_map: buildDefaultPortMap(12, 8, mockActivePortCount),
+        hardware_map: {},
         layers: { wait: {}, charge: {}, err: {} },
         zones: zonesForActivePortCount(DEFAULT_ZONES, mockActivePortCount),
         free_zones: [
@@ -1832,16 +1816,16 @@ function updateFreeModeControls() {
     colorField.classList.toggle('field-hidden', mode === 'rainbow');
     clearBtn.classList.toggle('field-hidden', mode !== 'custom' || !mapped);
     colorLabel.textContent = mode === 'custom' ? 'Цвет кисти' : 'Цвет зоны';
-    modeSelect.disabled = !mapped || savesBlocked;
-    colorInput.disabled = !mapped || mode === 'rainbow' || savesBlocked;
-    brightnessInput.disabled = !mapped || savesBlocked;
-    brightnessNumber.disabled = !mapped || savesBlocked;
-    applyBtn.disabled = !mapped || savesBlocked;
-    applyAllBtn.disabled = getMappedFreeZoneIds().length === 0 || savesBlocked;
+    modeSelect.disabled = savesBlocked;
+    colorInput.disabled = mode === 'rainbow' || savesBlocked;
+    brightnessInput.disabled = savesBlocked;
+    brightnessNumber.disabled = savesBlocked;
+    applyBtn.disabled = savesBlocked;
+    applyAllBtn.disabled = getConfigurableFreeZoneIds().length === 0 || savesBlocked;
     notice.classList.toggle('field-hidden', mapped);
     notice.textContent = mapped
         ? ''
-        : `${zoneDisplayName(activeFreeZone)} не размечена. Сначала назначьте этой зоне пиксели во вкладке «Зоны матрицы».`;
+        : `${zoneDisplayName(activeFreeZone)} не размечена. Настройки можно сохранить, но рисунок появится только после назначения пикселей.`;
 }
 
 function updateZoneViewControls() {
@@ -1953,9 +1937,6 @@ function validateHardwareConfigForm(pending = hardwareConfigPending) {
     }
     if (ports === null || ports < 1 || ports > 4) {
         return { error: 'Количество активных портов должно быть от 1 до 4.' };
-    }
-    if (total < ports) {
-        return { error: 'Количество пикселей не может быть меньше количества активных портов.' };
     }
     if (pending.ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL) {
         return { error: 'Выбран неподдерживаемый тип светодиодов.' };
@@ -2233,55 +2214,6 @@ function zoneHasPixels(zoneId) {
     return zonePixelCount(zoneId) > 0;
 }
 
-function isRequiredActivePortZone(zoneId) {
-    const z = zoneById(zoneId);
-    if (!z || z.type !== 'port' || z.reserved || !z.enabled) return false;
-    const portNumber = Number(z.linked_port || z.linkedPort || z.id);
-    const count = Number.isFinite(Number(activePortCount)) ? Number(activePortCount) : 1;
-    return portNumber >= 1 && portNumber <= count;
-}
-
-function missingActivePortZones(map = hardwareZonesMap) {
-    const count = clampActivePortCount(activePortCount);
-    const missing = [];
-
-    for (let port = 1; port <= count; port++) {
-        const zoneId = String(port);
-        if (zonePixelCountInMap(map, zoneId) === 0) {
-            missing.push(zoneDisplayName(zoneId));
-        }
-    }
-
-    return missing;
-}
-
-function activePortZoneErrorMessage(missingZones) {
-    const missing = Array.isArray(missingZones) ? missingZones : [zoneDisplayName(missingZones)];
-    return missing.length === 1
-        ? `Разметьте активную зону: ${missing[0]}.`
-        : `Разметьте активные зоны: ${missing.join(', ')}.`;
-}
-
-function validateActivePortZones(map = hardwareZonesMap) {
-    const missing = missingActivePortZones(map);
-    return missing.length ? activePortZoneErrorMessage(missing) : '';
-}
-
-function missingActivePortZoneNotice(map = hardwareZonesMap) {
-    const missing = missingActivePortZones(map);
-
-    return missing.length
-        ? `Не размечены активные зоны: ${missing.join(', ')}. Сигналы портов будут читаться, но индикации негде отображаться.`
-        : '';
-}
-
-function updateActivePortsWarning() {
-    const warning = document.getElementById('active_ports_warning');
-    const text = missingActivePortZoneNotice();
-    warning.classList.toggle('field-hidden', !text);
-    warning.textContent = text ? `Внимание: ${text}` : '';
-}
-
 function updateDirtyIndicators() {
     const zonesIndicator = document.getElementById('zones_dirty_indicator');
     const statusIndicator = document.getElementById('status_dirty_indicator');
@@ -2302,18 +2234,13 @@ function updateDirtyIndicators() {
     }
 }
 
-function zonePixelCountInMap(map, zoneId) {
-    const target = String(zoneId);
-    return Object.values(map || {}).filter(value => String(value) === target).length;
-}
-
 function activeFreeZoneIsMapped() {
     return isFreeZone(activeFreeZone) && zoneHasPixels(activeFreeZone);
 }
 
-function getMappedFreeZoneIds() {
+function getConfigurableFreeZoneIds() {
     return zoneMeta
-        .filter(z => z.type === 'free' && z.enabled && !z.reserved && zoneHasPixels(z.id))
+        .filter(z => z.type === 'free' && z.enabled && !z.reserved)
         .map(z => String(z.id));
 }
 
@@ -2468,7 +2395,7 @@ function buildSelects() {
     const freeZoneSelect = document.getElementById('free_zone_select');
     zoneSelect.innerHTML = '';
     freeZoneSelect.innerHTML = '';
-    let firstMappedFreeZone = null;
+    let firstFreeZone = null;
     let activeFreeZoneStillSelectable = false;
 
     zoneMeta.forEach(z => {
@@ -2482,21 +2409,20 @@ function buildSelects() {
 
         if (z.type === 'free') {
             const mapped = zoneHasPixels(z.id);
-            if (mapped && firstMappedFreeZone === null) firstMappedFreeZone = String(z.id);
-            if (mapped && String(z.id) === String(activeFreeZone)) activeFreeZoneStillSelectable = true;
+            if (firstFreeZone === null) firstFreeZone = String(z.id);
+            if (String(z.id) === String(activeFreeZone)) activeFreeZoneStillSelectable = true;
             const fo = document.createElement('option');
             fo.value = z.id;
             fo.textContent = mapped ? zoneDisplayName(z) : `${zoneDisplayName(z)} · не размечена`;
-            fo.disabled = !mapped;
             freeZoneSelect.appendChild(fo);
         }
     });
 
     zoneSelect.value = activeZoneId;
     buildStatusScopeOptions();
-    if (!activeFreeZoneStillSelectable && firstMappedFreeZone !== null &&
+    if (!activeFreeZoneStillSelectable && firstFreeZone !== null &&
         !freeZoneDraftHasUnsavedChanges(activeFreeZone)) {
-        activeFreeZone = firstMappedFreeZone;
+        activeFreeZone = firstFreeZone;
         loadFreeZoneDraftFromApplied(activeFreeZone);
     }
     freeZoneSelect.value = activeFreeZone;
@@ -2527,7 +2453,7 @@ function buildLegend() {
         const zoneId = String(z.id);
         const mobileLabel = z.type === 'port'
             ? `П${z.linked_port ?? z.linkedPort ?? z.id}`
-            : ({ '5': 'Лого', '6': 'QR', '7': 'Сервис' })[zoneId];
+            : ({ '5': 'СЗ1', '6': 'СЗ2', '7': 'СЗ3', '8': 'СЗ4' })[zoneId];
         if (!mobileLabel) return;
 
         const mobileItem = document.createElement('div');
@@ -2680,7 +2606,6 @@ function redrawMatrix() {
     updateFreeViewControls();
     updateFreeModeControls();
     updateDirtyIndicators();
-    updateActivePortsWarning();
     updateEditState();
 }
 
@@ -3324,11 +3249,6 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return;
     }
-    const validationError = validateActivePortZones();
-    if (validationError) {
-        alert(validationError);
-        return;
-    }
     if (uncertainZoneMapSubmission &&
         !zoneMapsEqual(hardwareZonesMap, uncertainZoneMapSubmission)) {
         alert('Результат предыдущего сохранения зон неизвестен. Перезагрузите страницу для сверки с контроллером перед сохранением другой разметки.');
@@ -3361,11 +3281,9 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         const resultUncertain = res.status >= 500;
         alert(text === 'OK'
             ? 'Зоны сохранены в памяти контроллера.'
-            : text === 'ACTIVE_PORT_ZONE_EMPTY'
-                ? (validateActivePortZones() || 'Каждый активный порт должен иметь хотя бы один пиксель для отображения статуса.')
-                : resultUncertain
-                    ? 'Результат сохранения зон неизвестен. Не изменяйте разметку: повторите сохранение этой же карты или перезагрузите страницу для сверки.'
-                    : 'Не удалось сохранить зоны.');
+            : resultUncertain
+                ? 'Результат сохранения зон неизвестен. Не изменяйте разметку: повторите сохранение этой же карты или перезагрузите страницу для сверки.'
+                : 'Не удалось сохранить зоны.');
         if (res.ok && text === 'OK') {
             clearLocalStatusPixelsForChangedZones(savedHardwareZonesMap, submittedZoneMap);
             hardwareZonesMap = { ...submittedZoneMap };
@@ -3404,9 +3322,7 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
     if (freeZoneEditorBlocked()) return;
     if (zonePixelCount(activeZoneId) === 0) return;
     if (isPortZone(activeZoneId)) {
-        const message = isRequiredActivePortZone(activeZoneId)
-            ? `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт останется без индикации, и сохранить зоны не получится, пока вы не назначите ему хотя бы один пиксель.`
-            : `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт сейчас в резерве, но его разметка будет удалена.`;
+        const message = `Очистить ${zoneDisplayName(activeZoneId)}? Этот порт останется без индикации, пока зона не будет размечена снова.`;
         if (!confirm(message)) return;
     }
     Object.keys(hardwareZonesMap).forEach(key => {
@@ -3420,7 +3336,7 @@ document.getElementById('clear_zone_btn').addEventListener('click', () => {
 
 document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
     if (freeZoneEditorBlocked()) return;
-    if (!confirm('Очистить всю разметку матрицы? Все пиксели останутся без зоны только в браузере. Сохранить такую разметку нельзя, пока активные порты не будут размечены.')) return;
+    if (!confirm('Очистить всю разметку матрицы? Все пиксели останутся без зоны только в браузере до сохранения.')) return;
     hardwareZonesMap = {};
     zoneMapDirty = true;
     redrawMatrix();
@@ -3433,11 +3349,6 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
     }
     if (!backendAvailable) {
         alert('Контроллер недоступен: слой статуса изменён только в браузере.');
-        return;
-    }
-    const zoneValidationError = validateActivePortZones();
-    if (zoneValidationError) {
-        alert(`${zoneValidationError} Сначала исправьте и сохраните разметку во вкладке «Зоны матрицы».`);
         return;
     }
     if (zoneMapDirty) {
@@ -3661,7 +3572,7 @@ function cancelFreeZoneBrightnessSave(zoneId) {
 async function persistFreeZoneBrightness(zoneId, brightness, revision, showError = true) {
     const id = String(zoneId);
     if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
-        zoneMapDirty || validateActivePortZones() || freeBrightnessSaveInProgress[id]) return false;
+        zoneMapDirty || freeBrightnessSaveInProgress[id]) return false;
 
     freeBrightnessSaveInProgress[id] = true;
     const saveController = new AbortController();
@@ -3721,7 +3632,7 @@ function scheduleFreeZoneBrightnessSave(zoneId, brightness, immediate = false) {
 
 function flushPendingFreeZoneBrightness() {
     Object.keys(freeBrightnessDirty).forEach(zoneId => {
-        if (freeBrightnessDirty[zoneId] && zoneHasPixels(zoneId)) {
+        if (freeBrightnessDirty[zoneId]) {
             scheduleFreeZoneBrightnessSave(zoneId, freeBrightness[zoneId], true);
         }
     });
@@ -3735,11 +3646,6 @@ function ensureFreeZoneSaveAllowed() {
     if (mockMode) return true;
     if (!backendAvailable) {
         alert('Контроллер недоступен: настройки свободной зоны изменены только в браузере.');
-        return false;
-    }
-    const zoneValidationError = validateActivePortZones();
-    if (zoneValidationError) {
-        alert(`${zoneValidationError} Сначала исправьте разметку во вкладке «Зоны матрицы».`);
         return false;
     }
     if (zoneMapDirty) {
@@ -3824,15 +3730,15 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return;
     }
-    const mappedZones = getMappedFreeZoneIds();
-    if (!mappedZones.length) {
-        alert('Нет размеченных свободных зон.');
+    const configurableZones = getConfigurableFreeZoneIds();
+    if (!configurableZones.length) {
+        alert('Нет доступных свободных зон.');
         return;
     }
 
     const value = clampBrightnessValue(document.getElementById('free_brightness').value);
     if (mockMode) {
-        mappedZones.forEach(zoneId => {
+        configurableZones.forEach(zoneId => {
             freeBrightness[zoneId] = value;
             appliedFreeZoneState(zoneId).brightness = value;
             freeBrightnessDirty[zoneId] = false;
@@ -3853,31 +3759,26 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         alert('Контроллер недоступен: яркость выбранной зоны оставлена в черновике.');
         return;
     }
-    const zoneValidationError = validateActivePortZones();
-    if (zoneValidationError) {
-        alert(`${zoneValidationError} Сначала исправьте разметку во вкладке «Зоны матрицы».`);
-        return;
-    }
     if (zoneMapDirty) {
         alert('Сначала сохраните разметку зон. Настройки свободной зоны применяются к сохранённой карте матрицы.');
         return;
     }
-    if (mappedZones.some(zoneId => freeBrightnessSaveInProgress[zoneId])) {
+    if (configurableZones.some(zoneId => freeBrightnessSaveInProgress[zoneId])) {
         alert('Дождитесь завершения текущего сохранения яркости свободной зоны.');
         return;
     }
-    if (mappedZones.some(zoneId => uncertainFreeZoneState[zoneId])) {
+    if (configurableZones.some(zoneId => uncertainFreeZoneState[zoneId])) {
         alert('Состояние одной из свободных зон не подтверждено. Перечитайте конфигурацию контроллера перед общей настройкой яркости.');
         return;
     }
-    mappedZones.forEach(cancelFreeZoneBrightnessSave);
+    configurableZones.forEach(cancelFreeZoneBrightnessSave);
 
     const failedZones = [];
     const uncertainZones = [];
     freeBrightnessBatchInProgress = true;
     updateMatrixSaveControls();
     try {
-        for (const zoneId of mappedZones) {
+        for (const zoneId of configurableZones) {
             cancelFreeZoneBrightnessSave(zoneId);
             freeBrightness[zoneId] = value;
             freeBrightnessRevisions[zoneId] += 1;
@@ -3905,7 +3806,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
     } else if (failedZones.length) {
         alert(`Не удалось сохранить яркость зон: ${failedZones.join(', ')}.`);
     } else {
-        alert(`Яркость ${value} сохранена для свободных зон: ${mappedZones.map(zoneDisplayName).join(', ')}.`);
+        alert(`Яркость ${value} сохранена для свободных зон: ${configurableZones.map(zoneDisplayName).join(', ')}.`);
     }
 });
 

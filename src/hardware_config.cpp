@@ -12,9 +12,6 @@ static_assert(DEFAULT_ACTIVE_PORT_COUNT <= MAX_PORT_COUNT,
 static_assert(static_cast<size_t>(FACTORY_ROWS) * FACTORY_COLS <=
                   MAX_LED_COUNT,
               "The factory matrix exceeds MAX_LED_COUNT");
-static_assert(static_cast<size_t>(FACTORY_ROWS) * FACTORY_COLS >=
-                  DEFAULT_ACTIVE_PORT_COUNT,
-              "The factory matrix has fewer pixels than active ports");
 static_assert(static_cast<uint8_t>(LedProtocol::WS2811_800K) == 1,
               "The persisted WS2811 protocol ID must remain stable");
 static_assert(static_cast<uint8_t>(LedColorOrder::RGB) == 0 &&
@@ -50,8 +47,7 @@ bool hardware_config_calculate_led_count(const HardwareConfig &config,
   }
 
   const size_t calculatedLedCount = rows * cols;
-  if (calculatedLedCount > MAX_LED_COUNT ||
-      calculatedLedCount < config.activePortCount) {
+  if (calculatedLedCount > MAX_LED_COUNT) {
     return false;
   }
 

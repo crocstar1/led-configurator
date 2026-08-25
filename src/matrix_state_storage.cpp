@@ -204,13 +204,8 @@ void setFreeZoneDefaults(MatrixStateV2 &state) {
   }
 }
 
-void setPortZoneMap(MatrixStateV2 &state, size_t activeLedCount) {
+void clearZoneMap(MatrixStateV2 &state) {
   memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
-  for (size_t pixel = 0; pixel < activeLedCount; ++pixel) {
-    const uint8_t portOffset = static_cast<uint8_t>(
-        (pixel * state.activePortCount) / activeLedCount);
-    state.zoneMap[pixel] = ZONE_ID_PORT1 + portOffset;
-  }
 }
 
 }  // namespace
@@ -252,15 +247,7 @@ void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
 
   setFreeZoneDefaults(state);
 
-  size_t activeLedCount = 0;
-  if (!calculateActiveLedCount(state, activeLedCount)) {
-    return;
-  }
-
-  // Row-major 12x8 defaults split at logical row 4: Port 1 occupies y=0..3,
-  // Port 2 occupies y=4..7. The same formula remains deterministic for other
-  // dimensions and guarantees pixels for every active port.
-  setPortZoneMap(state, activeLedCount);
+  clearZoneMap(state);
 }
 
 bool matrix_state_storage_reset_spatial_data(
@@ -280,9 +267,7 @@ bool matrix_state_storage_reset_spatial_data(
       static_cast<LedProtocol>(state.ledProtocol),
       static_cast<LedColorOrder>(state.colorOrder),
   };
-  size_t activeLedCount = 0;
-  if (!hardware_config_validate(hardware) ||
-      !hardware_config_calculate_led_count(hardware, activeLedCount)) {
+  if (!hardware_config_validate(hardware)) {
     return false;
   }
 
@@ -291,7 +276,7 @@ bool matrix_state_storage_reset_spatial_data(
   storageBuffer.cols = cols;
   storageBuffer.activePortCount = activePortCount;
   memset(storageBuffer.layers, 0, sizeof(storageBuffer.layers));
-  setPortZoneMap(storageBuffer, activeLedCount);
+  clearZoneMap(storageBuffer);
 
   if (matrix_state_storage_validate(storageBuffer) !=
       MatrixStateValidationResult::VALID) {
@@ -331,7 +316,6 @@ MatrixStateValidationResult matrix_state_storage_validate(
     }
   }
 
-  bool activePortSeen[MAX_PORT_COUNT] = {};
   for (size_t pixel = 0; pixel < activeLedCount; ++pixel) {
     const uint8_t zoneId = state.zoneMap[pixel];
     if (!zone_is_port(zoneId)) {
@@ -340,12 +324,6 @@ MatrixStateValidationResult matrix_state_storage_validate(
 
     const uint8_t portIndex = zoneId - ZONE_ID_PORT1;
     if (portIndex >= state.activePortCount) {
-      return MatrixStateValidationResult::INVALID;
-    }
-    activePortSeen[portIndex] = true;
-  }
-  for (size_t port = 0; port < state.activePortCount; ++port) {
-    if (!activePortSeen[port]) {
       return MatrixStateValidationResult::INVALID;
     }
   }
