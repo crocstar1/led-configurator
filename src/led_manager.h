@@ -12,6 +12,7 @@ struct LedRuntimeState {
   bool loopFallback;
   uint8_t enabledOutputCount;
   uint16_t totalLedCount;
+  uint16_t outputLedCount[LED_OUTPUT_COUNT];
   uint64_t lastRefreshAgeMs;
 };
 

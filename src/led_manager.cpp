@@ -551,6 +551,10 @@ void led_get_runtime_state(LedRuntimeState &state) {
   state.loopFallback = ledLoopFallback;
   state.enabledOutputCount = activeEnabledOutputCount;
   state.totalLedCount = static_cast<uint16_t>(activeTotalLedCount);
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       outputIndex++) {
+    state.outputLedCount[outputIndex] = activeLayout[outputIndex].length;
+  }
 
   uint64_t lastRefreshMs;
   portENTER_CRITICAL(&ledRuntimeMux);

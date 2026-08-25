@@ -27,14 +27,10 @@ static constexpr uint8_t BOARD_INPUT_PINS[BOARD_INPUT_COUNT] = {
 };
 
 static constexpr uint8_t LED_OUTPUT_PINS[LED_OUTPUT_COUNT] = {
-    22, // LED1, primary matrix output
-    23, // LED2, reserved
-    32, // LED3, reserved
-    33  // LED4, reserved
+    22, // LED1
+    23, // LED2
+    32, // LED3
+    33  // LED4
 };
-
-static constexpr uint8_t PRIMARY_LED_OUTPUT_INDEX = 0;
-static constexpr uint8_t PRIMARY_LED_PIN =
-    LED_OUTPUT_PINS[PRIMARY_LED_OUTPUT_INDEX];
 
 #endif

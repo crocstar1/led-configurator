@@ -419,23 +419,28 @@ void clearStoredLayerPixel(MatrixStateV3StoredLayer &layer, size_t index) {
     layer.rgb[rgbOffset + 2U] = 0;
 }
 
-void appendStoredLayerJson(String &json, const MatrixStateV3 &state, size_t layerIndex) {
+void appendStoredLayerJson(
+    String &json,
+    const MatrixStateV3 &state,
+    size_t layerIndex,
+    size_t outputIndex,
+    const MatrixStateV3OutputLayout &outputLayout) {
     json += "{";
     bool first = true;
-    const MatrixStateV3Output &output = state.outputs[0];
-    const size_t ledCount = (size_t)output.rows * output.cols;
+    const MatrixStateV3Output &output = state.outputs[outputIndex];
     const MatrixStateV3StoredLayer &layer = state.layers[layerIndex];
 
-    for (size_t logicalIndex = 0; logicalIndex < ledCount; logicalIndex++) {
-        if (!storedLayerHasPixel(layer, logicalIndex)) continue;
+    for (size_t localIndex = 0; localIndex < outputLayout.length; localIndex++) {
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        if (!storedLayerHasPixel(layer, globalIndex)) continue;
         if (!first) json += ",";
         first = false;
 
-        const size_t rgbOffset = logicalIndex * 3U;
+        const size_t rgbOffset = globalIndex * 3U;
         json += "\"";
-        json += String((int)(logicalIndex % output.cols));
+        json += String((int)(localIndex % output.cols));
         json += "-";
-        json += String((int)(logicalIndex / output.cols));
+        json += String((int)(localIndex / output.cols));
         json += "\":\"";
         json += rgbToHex(&layer.rgb[rgbOffset]);
         json += "\"";
@@ -443,28 +448,30 @@ void appendStoredLayerJson(String &json, const MatrixStateV3 &state, size_t laye
     json += "}";
 }
 
-void appendHardwareMapJson(String &json, const MatrixStateV3 &state) {
+void appendHardwareMapJson(
+    String &json,
+    const MatrixStateV3 &state,
+    size_t outputIndex,
+    const MatrixStateV3OutputLayout &outputLayout) {
     json += ",\"hardware_map\":{";
     bool first = true;
 
-    const MatrixStateV3Output &output = state.outputs[0];
-    for (uint16_t y = 0; y < output.rows; y++) {
-        for (uint16_t x = 0; x < output.cols; x++) {
-            const size_t logicalIndex = (size_t)y * output.cols + x;
-            const uint8_t zoneId = state.zoneMap[logicalIndex];
-            if (zoneId == 0) continue;
+    const MatrixStateV3Output &output = state.outputs[outputIndex];
+    for (size_t localIndex = 0; localIndex < outputLayout.length; localIndex++) {
+        const size_t globalIndex = outputLayout.offset + localIndex;
+        const uint8_t zoneId = state.zoneMap[globalIndex];
+        if (zoneId == 0) continue;
 
-            if (!first) json += ",";
-            first = false;
+        if (!first) json += ",";
+        first = false;
 
-            json += "\"";
-            json += String(x);
-            json += "-";
-            json += String(y);
-            json += "\":\"";
-            json += String((int)zoneId);
-            json += "\"";
-        }
+        json += "\"";
+        json += String((int)(localIndex % output.cols));
+        json += "-";
+        json += String((int)(localIndex / output.cols));
+        json += "\":\"";
+        json += String((int)zoneId);
+        json += "\"";
     }
 
     json += "}";
@@ -475,18 +482,27 @@ void sendAndClearConfigChunk(String &json) {
     json.remove(0);
 }
 
-FreeZoneMode currentFreeZoneMode(const MatrixStateV3 &state, uint8_t zoneId) {
+FreeZoneMode currentFreeZoneMode(
+    const MatrixStateV3 &state,
+    size_t outputIndex,
+    uint8_t zoneId) {
     const int index = free_zone_index(zoneId);
     if (index >= 0) {
-        return (FreeZoneMode)state.freeZones[0][index].mode;
+        return (FreeZoneMode)state.freeZones[outputIndex][index].mode;
     }
 
     const ZoneMetadata *metadata = zone_metadata_for(zoneId);
     return metadata ? metadata->defaultMode : FREE_ZONE_STATIC;
 }
 
-void appendFreeZoneConfigJson(String &json, const MatrixStateV3 &state, size_t index) {
-    const MatrixStateStoredFreeZone &freeZone = state.freeZones[0][index];
+void appendFreeZoneConfigJson(
+    String &json,
+    const MatrixStateV3 &state,
+    size_t outputIndex,
+    const MatrixStateV3OutputLayout &outputLayout,
+    size_t index) {
+    const MatrixStateStoredFreeZone &freeZone =
+        state.freeZones[outputIndex][index];
     json += "{\"zoneId\":";
     json += String((int)freeZone.zoneId);
     json += ",\"enabled\":";
@@ -498,11 +514,19 @@ void appendFreeZoneConfigJson(String &json, const MatrixStateV3 &state, size_t i
     json += "\",\"brightness\":";
     json += String((int)freeZone.brightness);
     json += ",\"customLayer\":";
-    appendStoredLayerJson(json, state, MATRIX_STATE_LAYER_LOGO + index);
+    appendStoredLayerJson(
+        json,
+        state,
+        MATRIX_STATE_LAYER_LOGO + index,
+        outputIndex,
+        outputLayout);
     json += "}";
 }
 
-void appendZoneMetadataJson(String &json, const MatrixStateV3 &state) {
+void appendZoneMetadataJson(
+    String &json,
+    const MatrixStateV3 &state,
+    size_t outputIndex) {
     const uint8_t activePortCount = state.activePortCount;
 
     json += ",\"zones\":[";
@@ -540,7 +564,8 @@ void appendZoneMetadataJson(String &json, const MatrixStateV3 &state) {
 
         if (zone.type == ZONE_TYPE_FREE) {
             json += ",\"mode\":\"";
-            json += free_zone_mode_to_string(currentFreeZoneMode(state, zone.id));
+            json += free_zone_mode_to_string(
+                currentFreeZoneMode(state, outputIndex, zone.id));
             json += "\"";
         } else {
             json += ",\"mode\":null";
@@ -563,8 +588,8 @@ bool activeLedCountForState(const MatrixStateV3 &state, size_t &ledCount) {
 }
 
 bool currentUiSupportsMatrixState(const MatrixStateV3 &state) {
-    size_t primaryLedCount = 0;
-    if (!activeLedCountForState(state, primaryLedCount)) return false;
+    size_t led1Count = 0;
+    if (!activeLedCountForState(state, led1Count)) return false;
 
     for (size_t outputIndex = 1; outputIndex < LED_OUTPUT_COUNT;
          outputIndex++) {
@@ -1125,18 +1150,39 @@ void handleGetMatrixSize() {
 
 void handleGetConfig() {
     if (!requireHttpAuth()) return;
-    if (matrixUiRequiresMultiOutput) {
+
+    bool outputSpecified = false;
+    int selectedOutputIndex = 0;
+    for (int argIndex = 0; argIndex < server.args(); argIndex++) {
+        if (server.argName(argIndex) != "output") continue;
+        if (outputSpecified ||
+            !parseStrictInt(server.arg(argIndex), selectedOutputIndex) ||
+            selectedOutputIndex < 0 ||
+            selectedOutputIndex >= static_cast<int>(LED_OUTPUT_COUNT)) {
+            server.send(400, "text/plain", "BAD_OUTPUT_INDEX");
+            return;
+        }
+        outputSpecified = true;
+    }
+
+    if (!outputSpecified && matrixUiRequiresMultiOutput) {
         server.send(409, "text/plain", "MULTI_OUTPUT_UI_REQUIRED");
         return;
     }
     if (!snapshotMatrixState()) return;
 
-    size_t ledCount = 0;
-    if (!activeLedCountForState(matrixStateCandidate, ledCount)) {
+    MatrixStateV3OutputLayout outputLayout[LED_OUTPUT_COUNT] = {};
+    size_t totalLedCount = 0;
+    if (!matrix_state_v3_calculate_output_layout(
+            matrixStateCandidate, outputLayout, totalLedCount)) {
         server.send(500, "text/plain", "STATE_INVALID");
         return;
     }
-    const MatrixStateV3Output &output = matrixStateCandidate.outputs[0];
+    const size_t outputIndex = static_cast<size_t>(selectedOutputIndex);
+    const MatrixStateV3Output &output =
+        matrixStateCandidate.outputs[outputIndex];
+    const MatrixStateV3OutputLayout &selectedLayout =
+        outputLayout[outputIndex];
 
     String json;
     if (!json.reserve(GET_CONFIG_CHUNK_RESERVE)) {
@@ -1156,12 +1202,46 @@ void handleGetConfig() {
     json += rgbToHex(matrixStateCandidate.errorColor);
     json += "\",\"activePortCount\":";
     json += String((int)matrixStateCandidate.activePortCount);
+    json += ",\"selectedOutputIndex\":";
+    json += String(selectedOutputIndex);
+    json += ",\"outputs\":[";
+    for (size_t i = 0; i < LED_OUTPUT_COUNT; i++) {
+        if (i > 0) json += ",";
+        const MatrixStateV3Output &listedOutput =
+            matrixStateCandidate.outputs[i];
+        json += "{\"index\":";
+        json += String((int)i);
+        json += ",\"name\":\"LED";
+        json += String((int)i + 1);
+        json += "\",\"enabled\":";
+        json += listedOutput.enabled ? "true" : "false";
+        json += ",\"rows\":";
+        json += String((int)listedOutput.rows);
+        json += ",\"cols\":";
+        json += String((int)listedOutput.cols);
+        json += ",\"total\":";
+        json += String((int)outputLayout[i].length);
+        json += ",\"topology\":";
+        json += String((int)listedOutput.topology);
+        json += ",\"ledProtocol\":\"";
+        json += ledProtocolApiName(
+            static_cast<LedProtocol>(listedOutput.ledProtocol));
+        json += "\",\"colorOrder\":\"";
+        json += ledColorOrderApiName(
+            static_cast<LedColorOrder>(listedOutput.colorOrder));
+        json += "\"}";
+    }
+    json += "]";
+    json += ",\"totalLedCount\":";
+    json += String((unsigned int)totalLedCount);
+    json += ",\"maxTotalLedCount\":";
+    json += String((unsigned int)MAX_TOTAL_LED_COUNT);
     json += ",\"matrix\":{\"cols\":";
     json += String((int)output.cols);
     json += ",\"rows\":";
     json += String((int)output.rows);
     json += ",\"total\":";
-    json += String((int)ledCount);
+    json += String((int)selectedLayout.length);
     json += ",\"topology\":";
     json += String((int)output.topology);
     json += "}";
@@ -1186,28 +1266,45 @@ void handleGetConfig() {
     json.remove(0);
 
     json += ",\"layers\":{\"wait\":";
-    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_WAITING);
+    appendStoredLayerJson(
+        json,
+        matrixStateCandidate,
+        MATRIX_STATE_LAYER_WAITING,
+        outputIndex,
+        selectedLayout);
     sendAndClearConfigChunk(json);
 
     json += ",\"charge\":";
-    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_CHARGING);
+    appendStoredLayerJson(
+        json,
+        matrixStateCandidate,
+        MATRIX_STATE_LAYER_CHARGING,
+        outputIndex,
+        selectedLayout);
     sendAndClearConfigChunk(json);
 
     json += ",\"err\":";
-    appendStoredLayerJson(json, matrixStateCandidate, MATRIX_STATE_LAYER_ERROR);
+    appendStoredLayerJson(
+        json,
+        matrixStateCandidate,
+        MATRIX_STATE_LAYER_ERROR,
+        outputIndex,
+        selectedLayout);
     json += "}";
     sendAndClearConfigChunk(json);
 
-    appendHardwareMapJson(json, matrixStateCandidate);
+    appendHardwareMapJson(
+        json, matrixStateCandidate, outputIndex, selectedLayout);
     sendAndClearConfigChunk(json);
 
-    appendZoneMetadataJson(json, matrixStateCandidate);
+    appendZoneMetadataJson(json, matrixStateCandidate, outputIndex);
     sendAndClearConfigChunk(json);
 
     for (size_t i = 0; i < FREE_ZONE_COUNT; i++) {
         if (i == 0) json += ",\"free_zones\":[";
         else json += ",";
-        appendFreeZoneConfigJson(json, matrixStateCandidate, i);
+        appendFreeZoneConfigJson(
+            json, matrixStateCandidate, outputIndex, selectedLayout, i);
         sendAndClearConfigChunk(json);
     }
 
@@ -1229,29 +1326,29 @@ void handleSaveHardwareConfig() {
     }
     if (!snapshotMatrixState()) return;
 
-    MatrixStateV3Output &primaryOutput = matrixStateCandidate.outputs[0];
+    MatrixStateV3Output &led1Output = matrixStateCandidate.outputs[0];
     const bool spatialChange =
-        primaryOutput.rows != requestedHardware.rows ||
-        primaryOutput.cols != requestedHardware.cols ||
+        led1Output.rows != requestedHardware.rows ||
+        led1Output.cols != requestedHardware.cols ||
         matrixStateCandidate.activePortCount != requestedHardware.activePortCount;
     const bool outputChange =
-        primaryOutput.ledProtocol !=
+        led1Output.ledProtocol !=
             static_cast<uint8_t>(requestedHardware.ledProtocol) ||
-        primaryOutput.colorOrder !=
+        led1Output.colorOrder !=
             static_cast<uint8_t>(requestedHardware.colorOrder);
     if (!spatialChange && !outputChange) {
         server.send(200, "text/plain", "NO_CHANGE");
         return;
     }
 
-    primaryOutput.enabled = 1;
-    primaryOutput.ledProtocol =
+    led1Output.enabled = 1;
+    led1Output.ledProtocol =
         static_cast<uint8_t>(requestedHardware.ledProtocol);
-    primaryOutput.colorOrder =
+    led1Output.colorOrder =
         static_cast<uint8_t>(requestedHardware.colorOrder);
     if (spatialChange) {
-        primaryOutput.rows = requestedHardware.rows;
-        primaryOutput.cols = requestedHardware.cols;
+        led1Output.rows = requestedHardware.rows;
+        led1Output.cols = requestedHardware.cols;
         matrixStateCandidate.activePortCount = requestedHardware.activePortCount;
         matrix_state_storage_clear_v3_spatial_data(matrixStateCandidate);
     }
@@ -1825,11 +1922,7 @@ void handleDiagnostics() {
     json += ",\"lastRefreshAgeMs\":";
     json += uint64ToString(ledRuntime.lastRefreshAgeMs);
     json += "}";
-    json += ",\"primaryLedOutput\":{\"name\":\"LED1\",\"gpio\":";
-    json += String((int)PRIMARY_LED_PIN);
-    json += ",\"index\":";
-    json += String((int)PRIMARY_LED_OUTPUT_INDEX + 1);
-    json += "},\"ledOutputs\":[";
+    json += ",\"ledOutputs\":[";
 
     for (uint8_t i = 0; i < LED_OUTPUT_COUNT; i++) {
         if (i > 0) json += ",";
@@ -1837,9 +1930,11 @@ void handleDiagnostics() {
         json += String((int)i + 1);
         json += "\",\"gpio\":";
         json += String((int)LED_OUTPUT_PINS[i]);
-        json += ",\"state\":\"";
-        json += ((i == PRIMARY_LED_OUTPUT_INDEX) ? "primary" : "reserved");
-        json += "\"}";
+        json += ",\"enabled\":";
+        json += ledRuntime.outputLedCount[i] > 0 ? "true" : "false";
+        json += ",\"total\":";
+        json += String((unsigned int)ledRuntime.outputLedCount[i]);
+        json += "}";
     }
 
     json += "],\"inputs\":[";

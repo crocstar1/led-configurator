@@ -852,7 +852,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <div class="matrix" id="matrix_grid"></div>
             </div>
             <div id="matrix_mobile_legend" class="matrix-mobile-legend field-hidden" role="list" aria-label="Краткая легенда зон" tabindex="0"></div>
-            <div class="status-line field-hidden" id="edit_state_line"></div>
+            <div class="status-line field-hidden" id="edit_state_line" role="status" aria-live="polite"></div>
         </section>
 
         <aside class="side-stack">
@@ -1355,6 +1355,7 @@ let networkStatus = null;
 let rainbowTick = 0;
 let backendAvailable = false;
 let mockMode = false;
+let matrixEditorUnavailable = false;
 let serviceOpen = false;
 let diagnosticsRequestInFlight = false;
 let configLoadInProgress = false;
@@ -1530,6 +1531,8 @@ function buildMockDiagnostics() {
             mutexReady: false,
             taskStarted: false,
             loopFallback: false,
+            enabledOutputCount: 1,
+            totalLedCount: 96,
             lastRefreshAgeMs: null,
         },
         networkRuntime: {
@@ -1537,12 +1540,11 @@ function buildMockDiagnostics() {
         },
         activePortCount: 2,
         runtimeMode: mockMode ? 'локальный предпросмотр' : 'runtime',
-        primaryLedOutput: { name: 'LED1', gpio: 22, index: 1 },
         ledOutputs: [
-            { name: 'LED1', gpio: 22, state: 'primary' },
-            { name: 'LED2', gpio: 23, state: 'reserved' },
-            { name: 'LED3', gpio: 32, state: 'reserved' },
-            { name: 'LED4', gpio: 33, state: 'reserved' },
+            { name: 'LED1', gpio: 22, enabled: true, total: 96 },
+            { name: 'LED2', gpio: 23, enabled: false, total: 0 },
+            { name: 'LED3', gpio: 32, enabled: false, total: 0 },
+            { name: 'LED4', gpio: 33, enabled: false, total: 0 },
         ],
         inputs,
         ports: [
@@ -1833,6 +1835,11 @@ function updateZoneViewControls() {
     const savesBlocked = freeZoneEditorBlocked();
     document.getElementById('zone_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('zone_overview_mode_btn').classList.toggle('active', isOverview);
+    document.getElementById('zone_edit_mode_btn').disabled = savesBlocked;
+    document.getElementById('zone_overview_mode_btn').disabled = savesBlocked;
+    document.getElementById('zone_select').disabled = savesBlocked;
+    document.getElementById('zone_brush_btn').disabled = savesBlocked;
+    document.getElementById('zone_erase_btn').disabled = savesBlocked;
     document.getElementById('zone_tools_row').classList.toggle('field-hidden', isOverview);
     document.getElementById('clear_zone_btn').disabled = isOverview || savesBlocked;
     const baseText = isOverview
@@ -1850,7 +1857,8 @@ function updateFreeViewControls() {
     const isOverview = freeViewMode === 'overview';
     document.getElementById('free_edit_mode_btn').classList.toggle('active', !isOverview);
     document.getElementById('free_overview_mode_btn').classList.toggle('active', isOverview);
-    document.getElementById('free_edit_mode_btn').disabled = !mapped;
+    document.getElementById('free_edit_mode_btn').disabled = !mapped || savesBlocked;
+    document.getElementById('free_overview_mode_btn').disabled = savesBlocked;
     document.getElementById('free_erase_btn').disabled = isOverview || !mapped || savesBlocked;
 }
 
@@ -2010,7 +2018,8 @@ function matrixSaveOperationInProgress() {
 }
 
 function matrixSavesBlockedByHardwareTransition() {
-    return matrixSaveOperationInProgress() || uncertainTopologySubmission !== null;
+    return matrixEditorUnavailable || matrixSaveOperationInProgress() ||
+        uncertainTopologySubmission !== null;
 }
 
 function freeZoneEditorBlocked() {
@@ -2079,6 +2088,11 @@ function updateMatrixSaveControls() {
         'hardware_protocol',
         'hardware_color_order',
         'save_hardware_config_btn',
+        'zone_edit_mode_btn',
+        'zone_overview_mode_btn',
+        'zone_select',
+        'zone_brush_btn',
+        'zone_erase_btn',
         'topology_select',
         'save_topology_btn',
         'save_zones_btn',
@@ -2091,6 +2105,10 @@ function updateMatrixSaveControls() {
         'clear_all_zones_btn',
         'clear_status_btn',
         'free_zone_select',
+        'free_mode_select',
+        'free_color',
+        'free_edit_mode_btn',
+        'free_overview_mode_btn',
         'free_erase_btn',
         'ports_brightness',
         'ports_brightness_input',
@@ -2102,7 +2120,8 @@ function updateMatrixSaveControls() {
         const element = document.getElementById(id);
         if (element) element.disabled = blocked;
     });
-    if (uncertainTopologySubmission !== null && !matrixSaveOperationInProgress()) {
+    if (!matrixEditorUnavailable && uncertainTopologySubmission !== null &&
+        !matrixSaveOperationInProgress()) {
         document.getElementById('topology_select').disabled = false;
         document.getElementById('save_topology_btn').disabled = false;
     }
@@ -2551,6 +2570,21 @@ function shouldLockPixel(zoneId) {
 }
 
 function redrawMatrix() {
+    if (matrixEditorUnavailable) {
+        drawing = false;
+        grid.replaceChildren();
+        grid.style.gridTemplateColumns = '';
+        document.getElementById('matrix_hint').textContent = 'нет данных';
+        document.getElementById('matrix_mobile_legend').replaceChildren();
+        document.getElementById('matrix_mobile_legend').classList.add('field-hidden');
+        document.getElementById('zone_legend').replaceChildren();
+        document.getElementById('free_legend').replaceChildren();
+        updateMatrixSaveControls();
+        updateDirtyIndicators();
+        updateEditState();
+        return;
+    }
+
     buildSelects();
 
     document.getElementById('matrix_title').textContent =
@@ -2612,6 +2646,12 @@ function redrawMatrix() {
 function updateEditState() {
     const line = document.getElementById('edit_state_line');
     line.classList.remove('warning');
+    if (matrixEditorUnavailable) {
+        line.classList.remove('field-hidden');
+        line.classList.add('warning');
+        line.textContent = 'Настройка нескольких LED-выходов недоступна в текущем редакторе.';
+        return;
+    }
     line.classList.toggle('field-hidden', !mockMode);
     line.textContent = mockMode
         ? `Контроллер недоступен: изменения остаются только в браузере. Локальный предпросмотр ${COLS}×${ROWS}.`
@@ -3817,7 +3857,18 @@ async function loadConfigInternal() {
 
     try {
         const res = await fetch('/get_config');
-        if (!res.ok) throw new Error(`get_config ${res.status}`);
+        if (!res.ok) {
+            const responseText = (await res.text()).trim();
+            if (res.status === 409 && responseText === 'MULTI_OUTPUT_UI_REQUIRED') {
+                backendAvailable = true;
+                mockMode = false;
+                matrixEditorUnavailable = true;
+                redrawMatrix();
+                await loadDiagnostics();
+                return;
+            }
+            throw new Error(`get_config ${res.status}`);
+        }
         cfg = await res.json();
 
         if (!cfg.matrix) {
@@ -3835,10 +3886,12 @@ async function loadConfigInternal() {
 
         backendAvailable = true;
         mockMode = false;
+        matrixEditorUnavailable = false;
     } catch (err) {
         cfg = buildMockConfig();
         backendAvailable = false;
         mockMode = true;
+        matrixEditorUnavailable = false;
     }
 
     applyConfig(cfg);
@@ -4754,7 +4807,8 @@ function renderDiagnostics() {
 
     renderDiagCards('diag_summary', [
         ['Активных портов', diagnostics.activePortCount ?? 1],
-        ['Основной выход матрицы', `${diagnostics.primaryLedOutput?.name || 'LED1'} / GPIO${diagnostics.primaryLedOutput?.gpio || 22}`],
+        ['Включено LED-выходов', ledRuntime.enabledOutputCount ?? 'нет данных'],
+        ['Всего светодиодов', ledRuntime.totalLedCount ?? 'нет данных'],
     ]);
 
     renderDiagCards('diag_inputs', (diagnostics.inputs || []).map(input => [
@@ -4769,7 +4823,7 @@ function renderDiagnostics() {
 
     renderDiagCards('diag_leds', (diagnostics.ledOutputs || []).map(led => [
         led.name,
-        `GPIO${led.gpio} · ${led.state === 'primary' ? 'основной' : 'резерв'}`,
+        `GPIO${led.gpio} · ${led.enabled ? 'включён' : 'отключён'} · ${Number(led.total) || 0} светодиодов`,
     ]));
 }
 
