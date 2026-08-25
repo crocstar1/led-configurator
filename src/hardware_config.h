@@ -7,6 +7,8 @@
 #include "board_config.h"
 
 static constexpr size_t MAX_LED_COUNT = 500;
+static constexpr size_t MAX_LED_COUNT_PER_OUTPUT = 500;
+static constexpr size_t MAX_TOTAL_LED_COUNT = 1000;
 
 enum class LedProtocol : uint8_t {
   WS2811_800K = 1,

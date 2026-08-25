@@ -28,6 +28,33 @@ static_assert(MATRIX_STATE_LAYER_WAITING == 0 &&
                   MATRIX_STATE_LAYER_ERROR == 2,
               "Factory status colors depend on the status-layer order");
 
+constexpr bool v3EnabledOutputDimensionsAreValid(uint16_t rows,
+                                                 uint16_t cols) {
+  return rows != 0 && cols != 0 &&
+         static_cast<size_t>(rows) <=
+             MAX_LED_COUNT_PER_OUTPUT / static_cast<size_t>(cols);
+}
+
+constexpr bool v3CanAppendOutputLength(size_t currentTotal, size_t length) {
+  return currentTotal <= MAX_TOTAL_LED_COUNT &&
+         length <= MAX_LED_COUNT_PER_OUTPUT &&
+         length <= MAX_TOTAL_LED_COUNT - currentTotal;
+}
+
+static_assert(v3EnabledOutputDimensionsAreValid(1, 500),
+              "A 1x500 V3 output must be valid");
+static_assert(v3EnabledOutputDimensionsAreValid(500, 1),
+              "A 500x1 V3 output must be valid");
+static_assert(!v3EnabledOutputDimensionsAreValid(501, 1),
+              "A 501x1 V3 output must be rejected");
+static_assert(!v3EnabledOutputDimensionsAreValid(UINT16_MAX, UINT16_MAX),
+              "Oversized V3 dimensions must be rejected before multiplication");
+static_assert(v3CanAppendOutputLength(0, 500) &&
+                  v3CanAppendOutputLength(500, 500),
+              "Two 500-pixel V3 outputs must fit the total limit");
+static_assert(!v3CanAppendOutputLength(1000, 1),
+              "A V3 total above 1000 pixels must be rejected");
+
 // One reusable buffer keeps the 11.5 KiB image off task stacks. The module is
 // deliberately synchronous and non-reentrant.
 MatrixStateV2 storageBuffer;
@@ -206,6 +233,60 @@ void setFreeZoneDefaults(MatrixStateV2 &state) {
 
 void clearZoneMap(MatrixStateV2 &state) {
   memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
+}
+
+void setV3FreeZoneDefaults(
+    MatrixStateStoredFreeZone (&zones)[FREE_ZONE_COUNT]) {
+  static constexpr uint8_t DEFAULT_COLORS[FREE_ZONE_COUNT][3] = {
+      {255, 255, 255},
+      {52, 199, 89},
+      {255, 149, 0},
+      {175, 82, 222},
+  };
+
+  for (size_t i = 0; i < FREE_ZONE_COUNT; ++i) {
+    MatrixStateStoredFreeZone &zone = zones[i];
+    zone.zoneId = FREE_ZONE_IDS[i];
+    zone.enabled = 1;
+    const ZoneMetadata *metadata = zone_metadata_for(zone.zoneId);
+    zone.mode = static_cast<uint8_t>(
+        metadata == nullptr ? FREE_ZONE_STATIC : metadata->defaultMode);
+    zone.brightness = DEFAULT_FREE_ZONE_BRIGHTNESS;
+    memcpy(zone.staticColor, DEFAULT_COLORS[i], sizeof(zone.staticColor));
+  }
+}
+
+bool v3LayerHasPixel(const MatrixStateV3StoredLayer &layer, size_t pixel) {
+  return (layer.present[pixel / 8U] & (1U << (pixel % 8U))) != 0;
+}
+
+bool v3LayerIsValid(const MatrixStateV3StoredLayer &layer,
+                    size_t totalLedCount) {
+  for (size_t pixel = 0; pixel < MAX_TOTAL_LED_COUNT; ++pixel) {
+    const bool present = v3LayerHasPixel(layer, pixel);
+    const size_t rgbOffset = pixel * 3U;
+    const bool rgbIsZero = layer.rgb[rgbOffset] == 0 &&
+                           layer.rgb[rgbOffset + 1U] == 0 &&
+                           layer.rgb[rgbOffset + 2U] == 0;
+
+    if (pixel >= totalLedCount) {
+      if (present || !rgbIsZero) {
+        return false;
+      }
+    } else if (!present && !rgbIsZero) {
+      return false;
+    }
+  }
+
+  for (size_t bit = MAX_TOTAL_LED_COUNT;
+       bit < MATRIX_STATE_V3_LAYER_MASK_BYTES * 8U;
+       ++bit) {
+    if ((layer.present[bit / 8U] & (1U << (bit % 8U))) != 0) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 }  // namespace
@@ -462,4 +543,147 @@ bool matrix_state_storage_clear_saved_state() {
     return false;
   }
   return true;
+}
+
+bool matrix_state_v3_calculate_output_layout(
+    const MatrixStateV3 &state,
+    MatrixStateV3OutputLayout (&layout)[LED_OUTPUT_COUNT],
+    size_t &totalLedCount) {
+  MatrixStateV3OutputLayout calculatedLayout[LED_OUTPUT_COUNT] = {};
+  size_t calculatedTotal = 0;
+
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    const MatrixStateV3Output &output = state.outputs[outputIndex];
+    if (output.enabled > 1 || output.topology > TOPOLOGY_MAX ||
+        !hardware_config_led_output_supported(
+            static_cast<LedProtocol>(output.ledProtocol),
+            static_cast<LedColorOrder>(output.colorOrder))) {
+      return false;
+    }
+
+    size_t length = 0;
+    if (output.enabled == 0) {
+      if (output.rows != 0 || output.cols != 0) {
+        return false;
+      }
+    } else {
+      // The division proves the product fits the per-output limit before the
+      // multiplication is performed.
+      if (!v3EnabledOutputDimensionsAreValid(output.rows, output.cols)) {
+        return false;
+      }
+
+      const size_t rows = output.rows;
+      const size_t cols = output.cols;
+      length = rows * cols;
+      if (!v3CanAppendOutputLength(calculatedTotal, length)) {
+        return false;
+      }
+    }
+
+    calculatedLayout[outputIndex].offset =
+        static_cast<uint16_t>(calculatedTotal);
+    calculatedLayout[outputIndex].length = static_cast<uint16_t>(length);
+    calculatedTotal += length;
+  }
+
+  memcpy(layout, calculatedLayout, sizeof(calculatedLayout));
+  totalLedCount = calculatedTotal;
+  return true;
+}
+
+void matrix_state_storage_clear_v3_spatial_data(MatrixStateV3 &state) {
+  memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
+  memset(state.layers, 0, sizeof(state.layers));
+}
+
+void matrix_state_storage_set_v3_factory_defaults(MatrixStateV3 &state) {
+  memset(&state, 0, sizeof(state));
+
+  const HardwareConfig hardware = hardware_config_factory_defaults();
+  state.magic = MATRIX_STATE_V3_MAGIC;
+  state.formatVersion = MATRIX_STATE_V3_FORMAT_VERSION;
+  state.structureSize = static_cast<uint16_t>(sizeof(state));
+  state.activePortCount = hardware.activePortCount;
+  state.portBrightness = DEFAULT_PORT_BRIGHTNESS;
+  memcpy(state.waitingColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_WAITING],
+         sizeof(state.waitingColor));
+  memcpy(state.chargingColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_CHARGING],
+         sizeof(state.chargingColor));
+  memcpy(state.errorColor,
+         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_ERROR],
+         sizeof(state.errorColor));
+
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    MatrixStateV3Output &output = state.outputs[outputIndex];
+    output.topology = 0;
+    output.ledProtocol = static_cast<uint8_t>(hardware.ledProtocol);
+    output.colorOrder = static_cast<uint8_t>(hardware.colorOrder);
+    setV3FreeZoneDefaults(state.freeZones[outputIndex]);
+  }
+
+  state.outputs[0].rows = hardware.rows;
+  state.outputs[0].cols = hardware.cols;
+  state.outputs[0].enabled = 1;
+  matrix_state_storage_clear_v3_spatial_data(state);
+}
+
+MatrixStateValidationResult matrix_state_storage_validate_v3(
+    const MatrixStateV3 &state) {
+  if (state.magic != MATRIX_STATE_V3_MAGIC ||
+      state.formatVersion != MATRIX_STATE_V3_FORMAT_VERSION ||
+      state.structureSize != sizeof(MatrixStateV3)) {
+    return MatrixStateValidationResult::INCOMPATIBLE;
+  }
+
+  if (state.activePortCount < 1 ||
+      state.activePortCount > MAX_PORT_COUNT ||
+      !bytesAreZero(state.reservedHeader, sizeof(state.reservedHeader)) ||
+      !bytesAreZero(state.reservedTail, sizeof(state.reservedTail))) {
+    return MatrixStateValidationResult::INVALID;
+  }
+
+  MatrixStateV3OutputLayout layout[LED_OUTPUT_COUNT] = {};
+  size_t totalLedCount = 0;
+  if (!matrix_state_v3_calculate_output_layout(
+          state, layout, totalLedCount)) {
+    return MatrixStateValidationResult::INVALID;
+  }
+
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    for (size_t freeZoneIndex = 0; freeZoneIndex < FREE_ZONE_COUNT;
+         ++freeZoneIndex) {
+      if (!freeZoneIsValid(
+              state.freeZones[outputIndex][freeZoneIndex], freeZoneIndex)) {
+        return MatrixStateValidationResult::INVALID;
+      }
+    }
+  }
+
+  for (size_t pixel = 0; pixel < MAX_TOTAL_LED_COUNT; ++pixel) {
+    const uint8_t zoneId = state.zoneMap[pixel];
+    if (!zone_id_is_valid(zoneId) ||
+        (pixel >= totalLedCount && zoneId != ZONE_ID_OFF)) {
+      return MatrixStateValidationResult::INVALID;
+    }
+
+    if (pixel < totalLedCount && zone_is_port(zoneId) &&
+        zoneId - ZONE_ID_PORT1 >= state.activePortCount) {
+      return MatrixStateValidationResult::INVALID;
+    }
+  }
+
+  for (size_t layerIndex = 0; layerIndex < MATRIX_STATE_V3_LAYER_COUNT;
+       ++layerIndex) {
+    if (!v3LayerIsValid(state.layers[layerIndex], totalLedCount)) {
+      return MatrixStateValidationResult::INVALID;
+    }
+  }
+
+  return MatrixStateValidationResult::VALID;
 }
