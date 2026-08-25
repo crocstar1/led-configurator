@@ -8,10 +8,6 @@
 
 #define LED_PIN PRIMARY_LED_PIN
 
-// LED matrix power budget used by FastLED brightness scaling.
-#define MAX_LED_VOLTS 12
-#define MAX_LED_MILLIAMPS 3000
-
 struct LedRuntimeState {
   bool mutexReady;
   bool taskStarted;

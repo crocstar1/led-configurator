@@ -411,9 +411,6 @@ void led_setup(const MatrixStateV2 &initialState) {
     Serial.println("LED mutex creation failed; LED task will not start");
   }
 
-  FastLED.setMaxPowerInVoltsAndMilliamps(MAX_LED_VOLTS,
-                                         MAX_LED_MILLIAMPS);
-
   fill_solid(leds, activeLedCount, CRGB::Black);
   FastLED.show();
   runStartupAnimation();
