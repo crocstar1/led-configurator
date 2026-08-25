@@ -10,7 +10,7 @@ namespace {
 
 static constexpr char MATRIX_NVS_PARTITION[] = "matrix_nvs";
 static constexpr char MATRIX_NVS_NAMESPACE[] = "matrix";
-static constexpr char MATRIX_NVS_KEY[] = "state_v2";
+static constexpr char MATRIX_NVS_LEGACY_V2_KEY[] = "state_v2";
 static constexpr char MATRIX_NVS_V3_KEY[] = "state_v3";
 
 static constexpr uint8_t TOPOLOGY_MAX = 3;
@@ -56,12 +56,9 @@ static_assert(v3CanAppendOutputLength(0, 500) &&
 static_assert(!v3CanAppendOutputLength(1000, 1),
               "A V3 total above 1000 pixels must be rejected");
 
-// One reusable buffer keeps the 11.5 KiB image off task stacks. The module is
+// One reusable buffer keeps the 23 KiB snapshot off task stacks. The module is
 // deliberately synchronous and non-reentrant.
-MatrixStateV2 storageBuffer;
-// Temporary V3 scratch storage follows the same synchronous, non-reentrant
-// model and keeps the 23 KiB snapshot off task stacks.
-MatrixStateV3 v3StorageBuffer;
+MatrixStateV3 storageBuffer;
 bool matrixPartitionInitialized = false;
 
 enum class ReadBlobResult : uint8_t {
@@ -122,19 +119,6 @@ bool bytesAreZero(const uint8_t *bytes, size_t length) {
   return true;
 }
 
-bool calculateActiveLedCount(const MatrixStateV2 &state,
-                             size_t &activeLedCount) {
-  const HardwareConfig hardware = {
-      state.rows,
-      state.cols,
-      state.activePortCount,
-      static_cast<LedProtocol>(state.ledProtocol),
-      static_cast<LedColorOrder>(state.colorOrder),
-  };
-  return hardware_config_validate(hardware) &&
-         hardware_config_calculate_led_count(hardware, activeLedCount);
-}
-
 bool freeZoneIsValid(const MatrixStateStoredFreeZone &zone,
                      size_t index) {
   if (index >= FREE_ZONE_COUNT || zone.zoneId != FREE_ZONE_IDS[index] ||
@@ -144,75 +128,6 @@ bool freeZoneIsValid(const MatrixStateStoredFreeZone &zone,
 
   return zone.mode == FREE_ZONE_STATIC || zone.mode == FREE_ZONE_CUSTOM ||
          zone.mode == FREE_ZONE_RAINBOW;
-}
-
-bool layerHasPixel(const MatrixStateStoredLayer &layer, size_t pixel) {
-  return (layer.present[pixel / 8U] & (1U << (pixel % 8U))) != 0;
-}
-
-bool layerIsValid(const MatrixStateStoredLayer &layer,
-                  size_t activeLedCount) {
-  for (size_t pixel = 0; pixel < MAX_LED_COUNT; ++pixel) {
-    const bool present = layerHasPixel(layer, pixel);
-    const size_t rgbOffset = pixel * 3U;
-    const bool rgbIsZero = layer.rgb[rgbOffset] == 0 &&
-                           layer.rgb[rgbOffset + 1U] == 0 &&
-                           layer.rgb[rgbOffset + 2U] == 0;
-
-    if (pixel >= activeLedCount) {
-      if (present || !rgbIsZero) {
-        return false;
-      }
-    } else if (!present && !rgbIsZero) {
-      return false;
-    }
-  }
-
-  for (size_t bit = MAX_LED_COUNT;
-       bit < MATRIX_STATE_LAYER_MASK_BYTES * 8U;
-       ++bit) {
-    if ((layer.present[bit / 8U] & (1U << (bit % 8U))) != 0) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-ReadBlobResult readBlob(nvs_handle_t handle, MatrixStateV2 &state) {
-  size_t storedSize = 0;
-  esp_err_t error = nvs_get_blob(handle, MATRIX_NVS_KEY, nullptr, &storedSize);
-  if (error == ESP_ERR_NVS_NOT_FOUND) {
-    return ReadBlobResult::NOT_FOUND;
-  }
-  if (error == ESP_ERR_NVS_TYPE_MISMATCH) {
-    return ReadBlobResult::INCOMPATIBLE;
-  }
-  if (error != ESP_OK) {
-    logNvsError("read length", error);
-    return ReadBlobResult::ERROR;
-  }
-  if (storedSize != sizeof(MatrixStateV2)) {
-    return ReadBlobResult::INCOMPATIBLE;
-  }
-
-  memset(&state, 0, sizeof(state));
-  size_t readSize = sizeof(state);
-  error = nvs_get_blob(handle, MATRIX_NVS_KEY, &state, &readSize);
-  if (error == ESP_ERR_NVS_NOT_FOUND) {
-    return ReadBlobResult::CORRUPT;
-  }
-  if (error == ESP_ERR_NVS_TYPE_MISMATCH ||
-      error == ESP_ERR_NVS_INVALID_LENGTH) {
-    return ReadBlobResult::CORRUPT;
-  }
-  if (error != ESP_OK) {
-    logNvsError("read", error);
-    return ReadBlobResult::ERROR;
-  }
-
-  return readSize == sizeof(state) ? ReadBlobResult::OK
-                                   : ReadBlobResult::INCOMPATIBLE;
 }
 
 ReadBlobResult readV3Blob(nvs_handle_t handle, MatrixStateV3 &state) {
@@ -250,30 +165,6 @@ ReadBlobResult readV3Blob(nvs_handle_t handle, MatrixStateV3 &state) {
 
   return readSize == sizeof(state) ? ReadBlobResult::OK
                                    : ReadBlobResult::INCOMPATIBLE;
-}
-
-void setFreeZoneDefaults(MatrixStateV2 &state) {
-  static constexpr uint8_t DEFAULT_COLORS[FREE_ZONE_COUNT][3] = {
-      {255, 255, 255},
-      {52, 199, 89},
-      {255, 149, 0},
-      {175, 82, 222},
-  };
-
-  for (size_t i = 0; i < FREE_ZONE_COUNT; ++i) {
-    MatrixStateStoredFreeZone &zone = state.freeZones[i];
-    zone.zoneId = FREE_ZONE_IDS[i];
-    zone.enabled = 1;
-    const ZoneMetadata *metadata = zone_metadata_for(zone.zoneId);
-    zone.mode = static_cast<uint8_t>(
-        metadata == nullptr ? FREE_ZONE_STATIC : metadata->defaultMode);
-    zone.brightness = DEFAULT_FREE_ZONE_BRIGHTNESS;
-    memcpy(zone.staticColor, DEFAULT_COLORS[i], sizeof(zone.staticColor));
-  }
-}
-
-void clearZoneMap(MatrixStateV2 &state) {
-  memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
 }
 
 void setV3FreeZoneDefaults(
@@ -342,217 +233,6 @@ bool matrix_state_storage_get_factory_status_color(
   return true;
 }
 
-void matrix_state_storage_set_factory_defaults(MatrixStateV2 &state) {
-  memset(&state, 0, sizeof(state));
-
-  const HardwareConfig hardware = hardware_config_factory_defaults();
-  state.magic = MATRIX_STATE_MAGIC;
-  state.formatVersion = MATRIX_STATE_FORMAT_VERSION;
-  state.structureSize = static_cast<uint16_t>(sizeof(state));
-  state.rows = hardware.rows;
-  state.cols = hardware.cols;
-  state.topology = 0;
-  state.portBrightness = DEFAULT_PORT_BRIGHTNESS;
-  state.activePortCount = hardware.activePortCount;
-  state.ledProtocol = static_cast<uint8_t>(hardware.ledProtocol);
-  state.colorOrder = static_cast<uint8_t>(hardware.colorOrder);
-
-  memcpy(state.waitingColor,
-         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_WAITING],
-         sizeof(state.waitingColor));
-  memcpy(state.chargingColor,
-         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_CHARGING],
-         sizeof(state.chargingColor));
-  memcpy(state.errorColor,
-         FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_ERROR],
-         sizeof(state.errorColor));
-
-  setFreeZoneDefaults(state);
-
-  clearZoneMap(state);
-}
-
-bool matrix_state_storage_reset_spatial_data(
-    MatrixStateV2 &state,
-    uint16_t rows,
-    uint16_t cols,
-    uint8_t activePortCount) {
-  if (matrix_state_storage_validate(state) !=
-      MatrixStateValidationResult::VALID) {
-    return false;
-  }
-
-  const HardwareConfig hardware = {
-      rows,
-      cols,
-      activePortCount,
-      static_cast<LedProtocol>(state.ledProtocol),
-      static_cast<LedColorOrder>(state.colorOrder),
-  };
-  if (!hardware_config_validate(hardware)) {
-    return false;
-  }
-
-  memcpy(&storageBuffer, &state, sizeof(storageBuffer));
-  storageBuffer.rows = rows;
-  storageBuffer.cols = cols;
-  storageBuffer.activePortCount = activePortCount;
-  memset(storageBuffer.layers, 0, sizeof(storageBuffer.layers));
-  clearZoneMap(storageBuffer);
-
-  if (matrix_state_storage_validate(storageBuffer) !=
-      MatrixStateValidationResult::VALID) {
-    return false;
-  }
-
-  memcpy(&state, &storageBuffer, sizeof(state));
-  return true;
-}
-
-MatrixStateValidationResult matrix_state_storage_validate(
-    const MatrixStateV2 &state) {
-  if (state.magic != MATRIX_STATE_MAGIC ||
-      state.formatVersion != MATRIX_STATE_FORMAT_VERSION ||
-      state.structureSize != sizeof(MatrixStateV2)) {
-    return MatrixStateValidationResult::INCOMPATIBLE;
-  }
-
-  size_t activeLedCount = 0;
-  if (!calculateActiveLedCount(state, activeLedCount) ||
-      state.topology > TOPOLOGY_MAX ||
-      !bytesAreZero(state.reservedHeader, sizeof(state.reservedHeader)) ||
-      !bytesAreZero(state.reservedTail, sizeof(state.reservedTail))) {
-    return MatrixStateValidationResult::INVALID;
-  }
-
-  for (size_t i = 0; i < FREE_ZONE_COUNT; ++i) {
-    if (!freeZoneIsValid(state.freeZones[i], i)) {
-      return MatrixStateValidationResult::INVALID;
-    }
-  }
-
-  for (size_t pixel = 0; pixel < MAX_LED_COUNT; ++pixel) {
-    if (!zone_id_is_valid(state.zoneMap[pixel]) ||
-        (pixel >= activeLedCount && state.zoneMap[pixel] != ZONE_ID_OFF)) {
-      return MatrixStateValidationResult::INVALID;
-    }
-  }
-
-  for (size_t pixel = 0; pixel < activeLedCount; ++pixel) {
-    const uint8_t zoneId = state.zoneMap[pixel];
-    if (!zone_is_port(zoneId)) {
-      continue;
-    }
-
-    const uint8_t portIndex = zoneId - ZONE_ID_PORT1;
-    if (portIndex >= state.activePortCount) {
-      return MatrixStateValidationResult::INVALID;
-    }
-  }
-
-  for (size_t i = 0; i < MATRIX_STATE_LAYER_COUNT; ++i) {
-    if (!layerIsValid(state.layers[i], activeLedCount)) {
-      return MatrixStateValidationResult::INVALID;
-    }
-  }
-
-  return MatrixStateValidationResult::VALID;
-}
-
-MatrixStateLoadResult matrix_state_storage_load(MatrixStateV2 &state) {
-  if (!initializeMatrixPartition()) {
-    return MatrixStateLoadResult::STORAGE_ERROR;
-  }
-
-  nvs_handle_t handle = 0;
-  const esp_err_t openError = nvs_open_from_partition(
-      MATRIX_NVS_PARTITION, MATRIX_NVS_NAMESPACE, NVS_READONLY, &handle);
-  if (openError == ESP_ERR_NVS_NOT_FOUND) {
-    return MatrixStateLoadResult::NOT_FOUND;
-  }
-  if (openError != ESP_OK) {
-    logNvsError("open for read", openError);
-    return MatrixStateLoadResult::STORAGE_ERROR;
-  }
-
-  const ReadBlobResult readResult = readBlob(handle, storageBuffer);
-  nvs_close(handle);
-
-  if (readResult == ReadBlobResult::NOT_FOUND) {
-    return MatrixStateLoadResult::NOT_FOUND;
-  }
-  if (readResult == ReadBlobResult::INCOMPATIBLE) {
-    return MatrixStateLoadResult::INCOMPATIBLE;
-  }
-  if (readResult == ReadBlobResult::CORRUPT) {
-    return MatrixStateLoadResult::CORRUPT;
-  }
-  if (readResult != ReadBlobResult::OK) {
-    return MatrixStateLoadResult::STORAGE_ERROR;
-  }
-
-  const MatrixStateValidationResult validation =
-      matrix_state_storage_validate(storageBuffer);
-  if (validation == MatrixStateValidationResult::INCOMPATIBLE) {
-    return MatrixStateLoadResult::INCOMPATIBLE;
-  }
-  if (validation != MatrixStateValidationResult::VALID) {
-    return MatrixStateLoadResult::CORRUPT;
-  }
-
-  memcpy(&state, &storageBuffer, sizeof(state));
-  return MatrixStateLoadResult::LOADED;
-}
-
-MatrixStateSaveResult matrix_state_storage_save(const MatrixStateV2 &state) {
-  memcpy(&storageBuffer, &state, sizeof(storageBuffer));
-  if (matrix_state_storage_validate(storageBuffer) !=
-      MatrixStateValidationResult::VALID) {
-    return MatrixStateSaveResult::INVALID_STATE;
-  }
-
-  if (!initializeMatrixPartition()) {
-    return MatrixStateSaveResult::STORAGE_ERROR;
-  }
-
-  nvs_handle_t handle = 0;
-  const esp_err_t openError = nvs_open_from_partition(
-      MATRIX_NVS_PARTITION, MATRIX_NVS_NAMESPACE, NVS_READWRITE, &handle);
-  if (openError != ESP_OK) {
-    logNvsError("open for write", openError);
-    return MatrixStateSaveResult::STORAGE_ERROR;
-  }
-
-  const esp_err_t writeError =
-      nvs_set_blob(handle, MATRIX_NVS_KEY, &storageBuffer, sizeof(storageBuffer));
-  const esp_err_t commitError =
-      writeError == ESP_OK ? nvs_commit(handle) : ESP_OK;
-
-  const ReadBlobResult readResult = readBlob(handle, storageBuffer);
-  const bool verified =
-      readResult == ReadBlobResult::OK &&
-      matrix_state_storage_validate(storageBuffer) ==
-          MatrixStateValidationResult::VALID &&
-      memcmp(&storageBuffer, &state, sizeof(state)) == 0;
-  nvs_close(handle);
-
-  if (writeError != ESP_OK) {
-    logNvsError("write", writeError);
-    return MatrixStateSaveResult::STORAGE_ERROR;
-  }
-  if (commitError != ESP_OK) {
-    logNvsError("commit", commitError);
-    return MatrixStateSaveResult::STORAGE_ERROR;
-  }
-
-  if (verified) {
-    return MatrixStateSaveResult::SAVED;
-  }
-
-  Serial.println("matrix_nvs readback verification failed; partition not erased");
-  return MatrixStateSaveResult::VERIFY_FAILED;
-}
-
 bool matrix_state_storage_clear_saved_state() {
   if (!initializeMatrixPartition()) {
     return false;
@@ -569,7 +249,8 @@ bool matrix_state_storage_clear_saved_state() {
   bool success = true;
   bool commitRequired = false;
 
-  const esp_err_t eraseV2Error = nvs_erase_key(handle, MATRIX_NVS_KEY);
+  const esp_err_t eraseV2Error =
+      nvs_erase_key(handle, MATRIX_NVS_LEGACY_V2_KEY);
   if (eraseV2Error == ESP_OK) {
     commitRequired = true;
   } else if (eraseV2Error != ESP_ERR_NVS_NOT_FOUND) {
@@ -753,7 +434,7 @@ MatrixStateLoadResult matrix_state_storage_load_v3(MatrixStateV3 &state) {
     return MatrixStateLoadResult::STORAGE_ERROR;
   }
 
-  const ReadBlobResult readResult = readV3Blob(handle, v3StorageBuffer);
+  const ReadBlobResult readResult = readV3Blob(handle, storageBuffer);
   nvs_close(handle);
 
   if (readResult == ReadBlobResult::NOT_FOUND) {
@@ -770,19 +451,19 @@ MatrixStateLoadResult matrix_state_storage_load_v3(MatrixStateV3 &state) {
   }
 
   const MatrixStateValidationResult validation =
-      matrix_state_storage_validate_v3(v3StorageBuffer);
+      matrix_state_storage_validate_v3(storageBuffer);
   if (validation != MatrixStateValidationResult::VALID) {
     return MatrixStateLoadResult::CORRUPT;
   }
 
-  memcpy(&state, &v3StorageBuffer, sizeof(state));
+  memcpy(&state, &storageBuffer, sizeof(state));
   return MatrixStateLoadResult::LOADED;
 }
 
 MatrixStateSaveResult matrix_state_storage_save_v3(
     const MatrixStateV3 &state) {
-  memcpy(&v3StorageBuffer, &state, sizeof(v3StorageBuffer));
-  if (matrix_state_storage_validate_v3(v3StorageBuffer) !=
+  memcpy(&storageBuffer, &state, sizeof(storageBuffer));
+  if (matrix_state_storage_validate_v3(storageBuffer) !=
       MatrixStateValidationResult::VALID) {
     return MatrixStateSaveResult::INVALID_STATE;
   }
@@ -799,8 +480,17 @@ MatrixStateSaveResult matrix_state_storage_save_v3(
     return MatrixStateSaveResult::STORAGE_ERROR;
   }
 
+  const esp_err_t eraseLegacyError =
+      nvs_erase_key(handle, MATRIX_NVS_LEGACY_V2_KEY);
+  if (eraseLegacyError != ESP_OK &&
+      eraseLegacyError != ESP_ERR_NVS_NOT_FOUND) {
+    logNvsError("erase legacy state_v2", eraseLegacyError);
+    nvs_close(handle);
+    return MatrixStateSaveResult::STORAGE_ERROR;
+  }
+
   const esp_err_t writeError = nvs_set_blob(
-      handle, MATRIX_NVS_V3_KEY, &v3StorageBuffer, sizeof(v3StorageBuffer));
+      handle, MATRIX_NVS_V3_KEY, &storageBuffer, sizeof(storageBuffer));
   if (writeError != ESP_OK) {
     logNvsError("write V3", writeError);
     nvs_close(handle);
@@ -814,7 +504,7 @@ MatrixStateSaveResult matrix_state_storage_save_v3(
     return MatrixStateSaveResult::STORAGE_ERROR;
   }
 
-  const ReadBlobResult readResult = readV3Blob(handle, v3StorageBuffer);
+  const ReadBlobResult readResult = readV3Blob(handle, storageBuffer);
   if (readResult == ReadBlobResult::ERROR) {
     nvs_close(handle);
     return MatrixStateSaveResult::STORAGE_ERROR;
@@ -822,9 +512,9 @@ MatrixStateSaveResult matrix_state_storage_save_v3(
 
   const bool verified =
       readResult == ReadBlobResult::OK &&
-      matrix_state_storage_validate_v3(v3StorageBuffer) ==
+      matrix_state_storage_validate_v3(storageBuffer) ==
           MatrixStateValidationResult::VALID &&
-      memcmp(&v3StorageBuffer, &state, sizeof(state)) == 0;
+      memcmp(&storageBuffer, &state, sizeof(state)) == 0;
   nvs_close(handle);
 
   if (verified) {

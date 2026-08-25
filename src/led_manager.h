@@ -15,14 +15,14 @@ struct LedRuntimeState {
   uint64_t lastRefreshAgeMs;
 };
 
-void led_setup(const MatrixStateV2 &initialState);
+void led_setup(const MatrixStateV3 &initialState);
 void led_loop();
 void led_get_runtime_state(LedRuntimeState &state);
 
 // Snapshot/apply are the only access paths to the internal activeState.
 // Both copy the complete state while holding ledMutex when it exists.
-bool led_get_matrix_state_snapshot(MatrixStateV2 &snapshot);
-bool led_apply_matrix_state_safe(const MatrixStateV2 &state);
+bool led_get_matrix_state_snapshot(MatrixStateV3 &snapshot);
+bool led_apply_matrix_state_safe(const MatrixStateV3 &state);
 bool led_prepare_for_restart();
 
 #endif

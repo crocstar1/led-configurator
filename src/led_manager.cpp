@@ -10,8 +10,8 @@
 
 namespace {
 
-static CRGB leds[MAX_LED_COUNT];
-static MatrixStateV2 activeState;
+static CRGB leds[MAX_LED_COUNT_PER_OUTPUT];
+static MatrixStateV3 activeState;
 static size_t activeLedCount = 0;
 static bool activeStateReady = false;
 static bool ledControllerRegistered = false;
@@ -32,26 +32,42 @@ static constexpr uint16_t STARTUP_COLOR_MS = 180;
 static constexpr uint16_t STARTUP_ERROR_POLL_MS = 20;
 static constexpr uint32_t LED_STATE_MUTEX_TIMEOUT_MS = 50;
 
-bool calculateActiveLedCount(const MatrixStateV2 &state, size_t &ledCount) {
-  if (matrix_state_storage_validate(state) !=
+bool hasEnabledSecondaryOutput(const MatrixStateV3 &state) {
+  for (size_t outputIndex = 1; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    if (state.outputs[outputIndex].enabled != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool calculateActiveLedCount(const MatrixStateV3 &state, size_t &ledCount) {
+  if (matrix_state_storage_validate_v3(state) !=
       MatrixStateValidationResult::VALID) {
     return false;
   }
 
-  const size_t rows = state.rows;
-  const size_t cols = state.cols;
-  if (cols == 0 || rows > MAX_LED_COUNT / cols) {
+  MatrixStateV3OutputLayout layout[LED_OUTPUT_COUNT] = {};
+  size_t totalLedCount = 0;
+  if (!matrix_state_v3_calculate_output_layout(
+          state, layout, totalLedCount) ||
+      state.outputs[0].enabled != 1 || hasEnabledSecondaryOutput(state) ||
+      layout[0].offset != 0 || layout[0].length == 0 ||
+      layout[0].length > MAX_LED_COUNT_PER_OUTPUT ||
+      totalLedCount != layout[0].length) {
     return false;
   }
 
-  ledCount = rows * cols;
-  return ledCount > 0 && ledCount <= MAX_LED_COUNT;
+  ledCount = layout[0].length;
+  return true;
 }
 
-bool registerLedController(const MatrixStateV2 &state) {
-  const LedProtocol protocol = static_cast<LedProtocol>(state.ledProtocol);
+bool registerLedController(const MatrixStateV3 &state) {
+  const MatrixStateV3Output &output = state.outputs[0];
+  const LedProtocol protocol = static_cast<LedProtocol>(output.ledProtocol);
   const LedColorOrder colorOrder =
-      static_cast<LedColorOrder>(state.colorOrder);
+      static_cast<LedColorOrder>(output.colorOrder);
   if (!hardware_config_led_output_supported(protocol, colorOrder)) {
     return false;
   }
@@ -119,7 +135,7 @@ bool stopLedOutputForRestart() {
     return true;
   }
   if (!activeStateReady || activeLedCount == 0 ||
-      activeLedCount > MAX_LED_COUNT) {
+      activeLedCount > MAX_LED_COUNT_PER_OUTPUT) {
     return false;
   }
 
@@ -156,8 +172,8 @@ void runStartupAnimation() {
 // Preserve the four existing topology meanings for arbitrary rows/cols.
 int logicalToPhysicalIndex(uint16_t x,
                            uint16_t y,
-                           const MatrixStateV2 &state) {
-  if (x >= state.cols || y >= state.rows) {
+                           const MatrixStateV3Output &output) {
+  if (x >= output.cols || y >= output.rows) {
     return -1;
   }
 
@@ -165,26 +181,26 @@ int logicalToPhysicalIndex(uint16_t x,
   uint16_t ty = y;
   size_t physicalIndex = 0;
 
-  switch (state.topology) {
+  switch (output.topology) {
     case 0:  // Right-bottom start, vertical snake.
-      tx = state.cols - 1U - x;
-      physicalIndex = static_cast<size_t>(tx) * state.rows +
-                      ((tx % 2U) == 0 ? ty : state.rows - 1U - ty);
+      tx = output.cols - 1U - x;
+      physicalIndex = static_cast<size_t>(tx) * output.rows +
+                      ((tx % 2U) == 0 ? ty : output.rows - 1U - ty);
       break;
     case 1:  // Left-bottom start, vertical snake.
-      physicalIndex = static_cast<size_t>(tx) * state.rows +
-                      ((tx % 2U) == 0 ? ty : state.rows - 1U - ty);
+      physicalIndex = static_cast<size_t>(tx) * output.rows +
+                      ((tx % 2U) == 0 ? ty : output.rows - 1U - ty);
       break;
     case 2:  // Left-top start, horizontal snake.
-      ty = state.rows - 1U - y;
-      physicalIndex = static_cast<size_t>(ty) * state.cols +
-                      ((ty % 2U) == 0 ? tx : state.cols - 1U - tx);
+      ty = output.rows - 1U - y;
+      physicalIndex = static_cast<size_t>(ty) * output.cols +
+                      ((ty % 2U) == 0 ? tx : output.cols - 1U - tx);
       break;
     case 3:  // Right-top start, horizontal snake.
-      tx = state.cols - 1U - x;
-      ty = state.rows - 1U - y;
-      physicalIndex = static_cast<size_t>(ty) * state.cols +
-                      ((ty % 2U) == 0 ? tx : state.cols - 1U - tx);
+      tx = output.cols - 1U - x;
+      ty = output.rows - 1U - y;
+      physicalIndex = static_cast<size_t>(ty) * output.cols +
+                      ((ty % 2U) == 0 ? tx : output.cols - 1U - tx);
       break;
     default:
       return -1;
@@ -193,7 +209,7 @@ int logicalToPhysicalIndex(uint16_t x,
   return physicalIndex < activeLedCount ? static_cast<int>(physicalIndex) : -1;
 }
 
-bool storedLayerColor(const MatrixStateStoredLayer &layer,
+bool storedLayerColor(const MatrixStateV3StoredLayer &layer,
                       size_t logicalIndex,
                       CRGB &color) {
   if (logicalIndex >= activeLedCount ||
@@ -209,7 +225,7 @@ bool storedLayerColor(const MatrixStateStoredLayer &layer,
   return true;
 }
 
-const MatrixStateStoredLayer *statusLayer(PortStatus status) {
+const MatrixStateV3StoredLayer *statusLayer(PortStatus status) {
   if (status == PORT_STATUS_WAITING) {
     return &activeState.layers[MATRIX_STATE_LAYER_WAITING];
   }
@@ -230,7 +246,7 @@ const MatrixStateStoredFreeZone *freeZoneConfig(uint8_t zoneId,
   }
 
   zoneIndex = static_cast<size_t>(index);
-  return &activeState.freeZones[zoneIndex];
+  return &activeState.freeZones[0][zoneIndex];
 }
 
 CRGB visibleErrorColor(CRGB preferred) {
@@ -256,7 +272,7 @@ CRGB renderPortPixel(size_t logicalIndex,
   }
 
   CRGB color;
-  const MatrixStateStoredLayer *layer = statusLayer(status);
+  const MatrixStateV3StoredLayer *layer = statusLayer(status);
   if (layer != nullptr && storedLayerColor(*layer, logicalIndex, color)) {
     color.nscale8_video(activeState.portBrightness);
   } else if (status == PORT_STATUS_WAITING) {
@@ -303,7 +319,7 @@ CRGB renderFreeZonePixel(size_t logicalIndex,
 
   CRGB color;
   if (config->mode == FREE_ZONE_CUSTOM) {
-    const MatrixStateStoredLayer &layer =
+    const MatrixStateV3StoredLayer &layer =
         activeState.layers[MATRIX_STATE_LAYER_LOGO + zoneIndex];
     if (!storedLayerColor(layer, logicalIndex, color)) {
       return CRGB::Black;
@@ -331,10 +347,12 @@ void refreshInternal() {
   status_mapper_get_snapshot(ports);
   fill_solid(leds, activeLedCount, CRGB::Black);
 
+  const MatrixStateV3Output &output = activeState.outputs[0];
+
   for (size_t logicalIndex = 0; logicalIndex < activeLedCount;
        ++logicalIndex) {
-    const uint16_t x = logicalIndex % activeState.cols;
-    const uint16_t y = logicalIndex / activeState.cols;
+    const uint16_t x = logicalIndex % output.cols;
+    const uint16_t y = logicalIndex / output.cols;
     const uint8_t zoneId = activeState.zoneMap[logicalIndex];
 
     CRGB color = CRGB::Black;
@@ -345,7 +363,7 @@ void refreshInternal() {
       color = renderFreeZonePixel(logicalIndex, zoneId, rainbowHue);
     }
 
-    const int physicalIndex = logicalToPhysicalIndex(x, y, activeState);
+    const int physicalIndex = logicalToPhysicalIndex(x, y, output);
     if (physicalIndex >= 0) {
       leds[physicalIndex] = color;
     }
@@ -390,9 +408,17 @@ void ledTaskWorker(void *) {
 
 }  // namespace
 
-void led_setup(const MatrixStateV2 &initialState) {
+void led_setup(const MatrixStateV3 &initialState) {
+  if (hasEnabledSecondaryOutput(initialState)) {
+    Serial.println(
+        "MatrixStateV3 enables LED2, LED3 or LED4; this firmware stage "
+        "supports only LED1, so LED runtime was not started");
+    return;
+  }
   if (!calculateActiveLedCount(initialState, activeLedCount)) {
-    Serial.println("Initial matrix state is invalid; LED runtime not started");
+    Serial.println(
+        "Initial MatrixStateV3 is invalid or not compatible with the "
+        "LED1-only runtime; LED runtime not started");
     return;
   }
   memcpy(&activeState, &initialState, sizeof(activeState));
@@ -401,7 +427,8 @@ void led_setup(const MatrixStateV2 &initialState) {
   ledControllerRegistered = registerLedController(activeState);
   if (!ledControllerRegistered) {
     Serial.printf("Unsupported LED protocol/order: %u/%u; LED output disabled\n",
-                  activeState.ledProtocol, activeState.colorOrder);
+                  activeState.outputs[0].ledProtocol,
+                  activeState.outputs[0].colorOrder);
     return;
   }
 
@@ -474,7 +501,7 @@ void led_get_runtime_state(LedRuntimeState &state) {
                                : 0;
 }
 
-bool led_get_matrix_state_snapshot(MatrixStateV2 &snapshot) {
+bool led_get_matrix_state_snapshot(MatrixStateV3 &snapshot) {
   if (!activeStateReady) {
     return false;
   }
@@ -493,16 +520,29 @@ bool led_get_matrix_state_snapshot(MatrixStateV2 &snapshot) {
   return true;
 }
 
-bool led_apply_matrix_state_safe(const MatrixStateV2 &state) {
+bool led_apply_matrix_state_safe(const MatrixStateV3 &state) {
   size_t nextLedCount = 0;
   if (ledOutputStoppedForRestart || !activeStateReady ||
       !calculateActiveLedCount(state, nextLedCount) ||
-      nextLedCount != activeLedCount || state.rows != activeState.rows ||
-      state.cols != activeState.cols ||
-      state.activePortCount != activeState.activePortCount ||
-      state.ledProtocol != activeState.ledProtocol ||
-      state.colorOrder != activeState.colorOrder) {
+      nextLedCount != activeLedCount ||
+      state.activePortCount != activeState.activePortCount) {
     return false;
+  }
+
+  // Controller registration and geometry are fixed until restart. Topology is
+  // deliberately excluded: it changes only logical-to-physical mapping and is
+  // safe to apply immediately.
+  for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+       ++outputIndex) {
+    const MatrixStateV3Output &next = state.outputs[outputIndex];
+    const MatrixStateV3Output &current = activeState.outputs[outputIndex];
+    if (next.enabled != current.enabled || next.rows != current.rows ||
+        next.cols != current.cols ||
+        next.ledProtocol != current.ledProtocol ||
+        next.colorOrder != current.colorOrder ||
+        (outputIndex != 0 && next.topology != current.topology)) {
+      return false;
+    }
   }
 
   if (!ledMutexReady) {

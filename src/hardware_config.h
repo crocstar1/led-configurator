@@ -6,7 +6,6 @@
 
 #include "board_config.h"
 
-static constexpr size_t MAX_LED_COUNT = 500;
 static constexpr size_t MAX_LED_COUNT_PER_OUTPUT = 500;
 static constexpr size_t MAX_TOTAL_LED_COUNT = 1000;
 
