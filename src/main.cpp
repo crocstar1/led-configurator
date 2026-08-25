@@ -38,6 +38,13 @@ static constexpr uint32_t SERVICE_BUTTON_AP_HOLD_MS = 3000;
 static constexpr uint32_t SERVICE_BUTTON_RESET_HOLD_MS = 10000;
 // Worst current 500-pixel chunk is 9007 bytes (a full free-zone layer at 1x500/500x1).
 static constexpr size_t GET_CONFIG_CHUNK_RESERVE = 12U * 1024U;
+static constexpr size_t HARDWARE_CONFIG_BODY_LIMIT = 1024U;
+
+struct MultiOutputHardwareConfig {
+    uint8_t activePortCount;
+    MatrixStateV3Output outputs[LED_OUTPUT_COUNT];
+};
+
 static bool inputTaskStarted = false;
 static uint64_t lastInputUpdateMs = 0;
 static portMUX_TYPE inputRuntimeMux = portMUX_INITIALIZER_UNLOCKED;
@@ -812,6 +819,292 @@ bool parseHardwareConfigPayload(const String &body, HardwareConfig &hardware) {
     return hardware_config_validate(hardware);
 }
 
+bool consumeHardwareJsonCharacter(
+    const String &body,
+    int &position,
+    char expected) {
+    skipHardwareJsonWhitespace(body, position);
+    if (position >= body.length() || body[position] != expected) return false;
+    position++;
+    return true;
+}
+
+bool parseHardwareJsonString(
+    const String &body,
+    int &position,
+    String &value) {
+    skipHardwareJsonWhitespace(body, position);
+    if (position >= body.length() || body[position] != '"') return false;
+    const int valueStart = ++position;
+    while (position < body.length() && body[position] != '"') {
+        const unsigned char character =
+            static_cast<unsigned char>(body[position]);
+        if (character < 0x20 || body[position] == '\\') return false;
+        position++;
+    }
+    if (position >= body.length()) return false;
+    value = body.substring(valueStart, position);
+    position++;
+    return true;
+}
+
+bool parseHardwareJsonInteger(
+    const String &body,
+    int &position,
+    int &value) {
+    skipHardwareJsonWhitespace(body, position);
+    const int valueStart = position;
+    if (position < body.length() && body[position] == '-') position++;
+    const int digitStart = position;
+    while (position < body.length() &&
+           isdigit(static_cast<unsigned char>(body[position]))) {
+        position++;
+    }
+    if (position == digitStart) return false;
+    if (body[digitStart] == '0' && position > digitStart + 1) return false;
+    return parseStrictInt(body.substring(valueStart, position), value);
+}
+
+bool parseHardwareJsonBoolean(
+    const String &body,
+    int &position,
+    bool &value) {
+    skipHardwareJsonWhitespace(body, position);
+    if (body.substring(position, position + 4) == "true") {
+        position += 4;
+        value = true;
+        return true;
+    }
+    if (body.substring(position, position + 5) == "false") {
+        position += 5;
+        value = false;
+        return true;
+    }
+    return false;
+}
+
+bool parseHardwareOutputDescriptor(
+    const String &body,
+    int &position,
+    size_t expectedIndex,
+    MatrixStateV3Output &parsedOutput) {
+    if (!consumeHardwareJsonCharacter(body, position, '{')) return false;
+
+    bool indexSeen = false;
+    bool enabledSeen = false;
+    bool rowsSeen = false;
+    bool colsSeen = false;
+    bool topologySeen = false;
+    bool protocolSeen = false;
+    bool orderSeen = false;
+    int index = -1;
+    int rows = -1;
+    int cols = -1;
+    int topology = -1;
+    bool enabled = false;
+    LedProtocol protocol = LedProtocol::WS2811_800K;
+    LedColorOrder colorOrder = LedColorOrder::BRG;
+
+    skipHardwareJsonWhitespace(body, position);
+    while (position < body.length() && body[position] != '}') {
+        String key;
+        if (!parseHardwareJsonString(body, position, key) ||
+            !consumeHardwareJsonCharacter(body, position, ':')) {
+            return false;
+        }
+
+        if (key == "index") {
+            if (indexSeen ||
+                !parseHardwareJsonInteger(body, position, index)) {
+                return false;
+            }
+            indexSeen = true;
+        } else if (key == "enabled") {
+            if (enabledSeen ||
+                !parseHardwareJsonBoolean(body, position, enabled)) {
+                return false;
+            }
+            enabledSeen = true;
+        } else if (key == "rows") {
+            if (rowsSeen ||
+                !parseHardwareJsonInteger(body, position, rows)) {
+                return false;
+            }
+            rowsSeen = true;
+        } else if (key == "cols") {
+            if (colsSeen ||
+                !parseHardwareJsonInteger(body, position, cols)) {
+                return false;
+            }
+            colsSeen = true;
+        } else if (key == "topology") {
+            if (topologySeen ||
+                !parseHardwareJsonInteger(body, position, topology)) {
+                return false;
+            }
+            topologySeen = true;
+        } else if (key == "ledProtocol" || key == "colorOrder") {
+            String value;
+            if (!parseHardwareJsonString(body, position, value)) return false;
+            if (key == "ledProtocol") {
+                if (protocolSeen ||
+                    !parseLedProtocolApiName(value, protocol)) {
+                    return false;
+                }
+                protocolSeen = true;
+            } else {
+                if (orderSeen ||
+                    !parseLedColorOrderApiName(value, colorOrder)) {
+                    return false;
+                }
+                orderSeen = true;
+            }
+        } else {
+            return false;
+        }
+
+        skipHardwareJsonWhitespace(body, position);
+        if (position < body.length() && body[position] == '}') break;
+        if (!consumeHardwareJsonCharacter(body, position, ',')) return false;
+        skipHardwareJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] == '}') return false;
+    }
+
+    if (!consumeHardwareJsonCharacter(body, position, '}') ||
+        !indexSeen || !enabledSeen || !rowsSeen || !colsSeen ||
+        !topologySeen || !protocolSeen || !orderSeen ||
+        index != static_cast<int>(expectedIndex) ||
+        rows < 0 || rows > static_cast<int>(MAX_LED_COUNT_PER_OUTPUT) ||
+        cols < 0 || cols > static_cast<int>(MAX_LED_COUNT_PER_OUTPUT) ||
+        topology < 0 || topology > 3) {
+        return false;
+    }
+    if ((enabled && (rows == 0 || cols == 0)) ||
+        (!enabled && (rows != 0 || cols != 0))) {
+        return false;
+    }
+
+    parsedOutput = MatrixStateV3Output{
+        static_cast<uint16_t>(rows),
+        static_cast<uint16_t>(cols),
+        static_cast<uint8_t>(enabled ? 1 : 0),
+        static_cast<uint8_t>(topology),
+        static_cast<uint8_t>(protocol),
+        static_cast<uint8_t>(colorOrder),
+    };
+    return true;
+}
+
+bool validateMultiOutputHardwareConfig(
+    const MultiOutputHardwareConfig &hardware) {
+    if (hardware.activePortCount < 1 ||
+        hardware.activePortCount > MAX_PORT_COUNT) {
+        return false;
+    }
+
+    size_t totalLedCount = 0;
+    for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+         outputIndex++) {
+        const MatrixStateV3Output &output = hardware.outputs[outputIndex];
+        if (output.enabled > 1 || output.topology > 3 ||
+            !hardware_config_led_output_supported(
+                static_cast<LedProtocol>(output.ledProtocol),
+                static_cast<LedColorOrder>(output.colorOrder))) {
+            return false;
+        }
+        if (output.enabled == 0) {
+            if (output.rows != 0 || output.cols != 0) return false;
+            continue;
+        }
+        if (output.rows == 0 || output.cols == 0 ||
+            output.rows > MAX_LED_COUNT_PER_OUTPUT / output.cols) {
+            return false;
+        }
+        const size_t length =
+            static_cast<size_t>(output.rows) * output.cols;
+        if (length > MAX_TOTAL_LED_COUNT - totalLedCount) return false;
+        totalLedCount += length;
+    }
+    return true;
+}
+
+bool parseMultiOutputHardwareConfigPayload(
+    const String &body,
+    MultiOutputHardwareConfig &hardware) {
+    if (body.length() < 2 || body.length() > HARDWARE_CONFIG_BODY_LIMIT) {
+        return false;
+    }
+
+    MultiOutputHardwareConfig parsed = {};
+    bool portsSeen = false;
+    bool outputsSeen = false;
+    int activePortCount = 0;
+    int position = 0;
+    if (!consumeHardwareJsonCharacter(body, position, '{')) return false;
+
+    skipHardwareJsonWhitespace(body, position);
+    while (position < body.length() && body[position] != '}') {
+        String key;
+        if (!parseHardwareJsonString(body, position, key) ||
+            !consumeHardwareJsonCharacter(body, position, ':')) {
+            return false;
+        }
+
+        if (key == "activePortCount") {
+            if (portsSeen ||
+                !parseHardwareJsonInteger(
+                    body, position, activePortCount)) {
+                return false;
+            }
+            portsSeen = true;
+        } else if (key == "outputs") {
+            if (outputsSeen ||
+                !consumeHardwareJsonCharacter(body, position, '[')) {
+                return false;
+            }
+            for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+                 outputIndex++) {
+                if (outputIndex > 0 &&
+                    !consumeHardwareJsonCharacter(body, position, ',')) {
+                    return false;
+                }
+                if (!parseHardwareOutputDescriptor(
+                        body,
+                        position,
+                        outputIndex,
+                        parsed.outputs[outputIndex])) {
+                    return false;
+                }
+            }
+            if (!consumeHardwareJsonCharacter(body, position, ']')) {
+                return false;
+            }
+            outputsSeen = true;
+        } else {
+            return false;
+        }
+
+        skipHardwareJsonWhitespace(body, position);
+        if (position < body.length() && body[position] == '}') break;
+        if (!consumeHardwareJsonCharacter(body, position, ',')) return false;
+        skipHardwareJsonWhitespace(body, position);
+        if (position >= body.length() || body[position] == '}') return false;
+    }
+
+    if (!consumeHardwareJsonCharacter(body, position, '}')) return false;
+    skipHardwareJsonWhitespace(body, position);
+    if (position != body.length() || !portsSeen || !outputsSeen ||
+        activePortCount < 1 ||
+        activePortCount > static_cast<int>(MAX_PORT_COUNT)) {
+        return false;
+    }
+
+    parsed.activePortCount = static_cast<uint8_t>(activePortCount);
+    if (!validateMultiOutputHardwareConfig(parsed)) return false;
+    hardware = parsed;
+    return true;
+}
+
 bool parseMatrixCoordinate(
     const String &coordinate,
     const MatrixStateV3Output &output,
@@ -1127,15 +1420,6 @@ bool rejectMatrixSaveForRestart() {
     return false;
 }
 
-bool rejectUnavailableMatrixSave() {
-    if (rejectMatrixSaveForRestart()) return true;
-    if (matrixUiRequiresMultiOutput) {
-        server.send(409, "text/plain", "UNSUPPORTED_MULTI_OUTPUT_STATE");
-        return true;
-    }
-    return false;
-}
-
 bool prepareSelectedOutputSave(
     bool requireEnabled,
     size_t &outputIndex,
@@ -1386,41 +1670,81 @@ void handleGetConfig() {
 
 void handleSaveHardwareConfig() {
     if (!requireHttpAuth()) return;
-    if (rejectUnavailableMatrixSave()) return;
+    if (rejectMatrixSaveForRestart()) return;
 
     String body = server.arg("plain");
+    if (body.length() > HARDWARE_CONFIG_BODY_LIMIT) {
+        server.send(400, "text/plain", "BAD_CONFIG");
+        return;
+    }
     trimHardwareJsonWhitespace(body);
+    MultiOutputHardwareConfig requestedOutputs = {};
     HardwareConfig requestedHardware = {};
-    if (!parseHardwareConfigPayload(body, requestedHardware)) {
+    const bool multiOutputPayload =
+        parseMultiOutputHardwareConfigPayload(body, requestedOutputs);
+    const bool legacyPayload = !multiOutputPayload &&
+        parseHardwareConfigPayload(body, requestedHardware);
+    if (!multiOutputPayload && !legacyPayload) {
         server.send(400, "text/plain", "BAD_CONFIG");
         return;
     }
     if (!snapshotMatrixState()) return;
 
-    MatrixStateV3Output &led1Output = matrixStateCandidate.outputs[0];
-    const bool spatialChange =
-        led1Output.rows != requestedHardware.rows ||
-        led1Output.cols != requestedHardware.cols ||
-        matrixStateCandidate.activePortCount != requestedHardware.activePortCount;
-    const bool outputChange =
-        led1Output.ledProtocol !=
-            static_cast<uint8_t>(requestedHardware.ledProtocol) ||
-        led1Output.colorOrder !=
-            static_cast<uint8_t>(requestedHardware.colorOrder);
-    if (!spatialChange && !outputChange) {
-        server.send(200, "text/plain", "NO_CHANGE");
+    if (legacyPayload &&
+        !currentUiSupportsMatrixState(matrixStateCandidate)) {
+        server.send(
+            409, "text/plain", "MULTI_OUTPUT_CONFIG_REQUIRED");
         return;
     }
 
-    led1Output.enabled = 1;
-    led1Output.ledProtocol =
-        static_cast<uint8_t>(requestedHardware.ledProtocol);
-    led1Output.colorOrder =
-        static_cast<uint8_t>(requestedHardware.colorOrder);
-    if (spatialChange) {
+    bool spatialChange = false;
+    bool protocolOrOrderChange = false;
+    bool topologyChange = false;
+    const uint8_t requestedActivePortCount = multiOutputPayload
+        ? requestedOutputs.activePortCount
+        : requestedHardware.activePortCount;
+    spatialChange =
+        matrixStateCandidate.activePortCount != requestedActivePortCount;
+
+    if (multiOutputPayload) {
+        for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
+             outputIndex++) {
+            const MatrixStateV3Output &currentOutput =
+                matrixStateCandidate.outputs[outputIndex];
+            const MatrixStateV3Output &requestedOutput =
+                requestedOutputs.outputs[outputIndex];
+            spatialChange = spatialChange ||
+                currentOutput.enabled != requestedOutput.enabled ||
+                currentOutput.rows != requestedOutput.rows ||
+                currentOutput.cols != requestedOutput.cols;
+            protocolOrOrderChange = protocolOrOrderChange ||
+                currentOutput.ledProtocol != requestedOutput.ledProtocol ||
+                currentOutput.colorOrder != requestedOutput.colorOrder;
+            topologyChange = topologyChange ||
+                currentOutput.topology != requestedOutput.topology;
+            matrixStateCandidate.outputs[outputIndex] = requestedOutput;
+        }
+    } else {
+        MatrixStateV3Output &led1Output = matrixStateCandidate.outputs[0];
+        spatialChange = spatialChange ||
+            led1Output.rows != requestedHardware.rows ||
+            led1Output.cols != requestedHardware.cols;
+        protocolOrOrderChange =
+            led1Output.ledProtocol !=
+                static_cast<uint8_t>(requestedHardware.ledProtocol) ||
+            led1Output.colorOrder !=
+                static_cast<uint8_t>(requestedHardware.colorOrder);
+        led1Output.enabled = 1;
         led1Output.rows = requestedHardware.rows;
         led1Output.cols = requestedHardware.cols;
-        matrixStateCandidate.activePortCount = requestedHardware.activePortCount;
+        led1Output.ledProtocol =
+            static_cast<uint8_t>(requestedHardware.ledProtocol);
+        led1Output.colorOrder =
+            static_cast<uint8_t>(requestedHardware.colorOrder);
+    }
+
+    matrixStateCandidate.activePortCount = requestedActivePortCount;
+    if (spatialChange) {
         matrix_state_storage_clear_v3_spatial_data(matrixStateCandidate);
     }
 
@@ -1431,12 +1755,32 @@ void handleSaveHardwareConfig() {
         return;
     }
 
+    const bool restartRequired =
+        spatialChange || protocolOrOrderChange;
+    if (!restartRequired && !topologyChange) {
+        server.send(200, "text/plain", "NO_CHANGE");
+        return;
+    }
+
     const MatrixStateSaveResult saveResult =
         matrix_state_storage_save_v3(matrixStateCandidate);
     if (saveResult != MatrixStateSaveResult::SAVED) {
         Serial.printf("Hardware configuration save failed: %s\n",
                       matrixSaveResultName(saveResult));
         server.send(500, "text/plain", "SAVE_FAILED");
+        return;
+    }
+
+    if (!restartRequired) {
+        if (!led_apply_matrix_state_safe(matrixStateCandidate)) {
+            Serial.println(
+                "Hardware configuration saved, but runtime apply failed; "
+                "saved state will load after reboot");
+            server.send(
+                500, "text/plain", "APPLY_FAILED_REBOOT_REQUIRED");
+            return;
+        }
+        server.send(200, "text/plain", "OK");
         return;
     }
 
