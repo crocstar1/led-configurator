@@ -180,6 +180,84 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             letter-spacing: 0;
         }
 
+        .led-output-tabs {
+            display: flex;
+            gap: 6px;
+            width: max-content;
+            max-width: 100%;
+            min-width: 0;
+            margin: -2px 0 10px;
+            padding: 1px 1px 4px;
+            overflow-x: auto;
+            overscroll-behavior-inline: contain;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .led-output-tab {
+            flex: 0 0 62px;
+            min-height: 44px;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: 9px;
+            background: #ffffff;
+            color: var(--text);
+            font: inherit;
+            font-size: 12px;
+            font-weight: 750;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .led-output-tab::after {
+            content: '';
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin-left: 6px;
+            border-radius: 50%;
+            background: #2eaf5d;
+            vertical-align: middle;
+        }
+
+        .led-output-tab.output-disabled::after {
+            background: #a1a1aa;
+        }
+
+        .led-output-tab.output-disabled:not([aria-selected="true"]) {
+            border-style: dashed;
+            background: var(--soft);
+            color: var(--muted);
+        }
+
+        .led-output-tab.output-draft-changed:not([aria-selected="true"]) {
+            box-shadow: inset 0 -3px 0 #f0a12b;
+        }
+
+        .led-output-tab.output-draft-changed[aria-selected="true"] {
+            box-shadow: inset 0 -3px 0 #ffd66b;
+        }
+
+        .led-output-tab[aria-selected="true"] {
+            border-color: var(--blue);
+            background: var(--blue);
+            color: #ffffff;
+        }
+
+        .led-output-tab.output-disabled[aria-selected="true"] {
+            border-color: #657080;
+            background: #657080;
+        }
+
+        .led-output-tab:focus-visible {
+            outline: 2px solid var(--blue);
+            outline-offset: 2px;
+        }
+
+        .led-output-tab:disabled {
+            cursor: wait;
+            opacity: 0.62;
+        }
+
         .hint {
             color: var(--muted);
             font-size: 12px;
@@ -196,6 +274,22 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
             background: #fbfcff;
             max-height: 68vh;
             -webkit-overflow-scrolling: touch;
+        }
+
+        .matrix-output-empty {
+            min-height: 220px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .matrix-output-empty strong {
+            color: var(--text);
+            font-size: 14px;
         }
 
         .matrix {
@@ -350,6 +444,19 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
         .hardware-config-group {
             display: grid;
             gap: 10px;
+        }
+
+        .output-enabled-control {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 8px;
+            margin: 0;
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: normal;
+            text-transform: none;
         }
 
         #matrix_settings_block .notice,
@@ -848,8 +955,18 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                 <h2 id="matrix_title">Матрица</h2>
                 <span class="hint" id="matrix_hint">12×8</span>
             </div>
-            <div class="matrix-shell">
+            <div class="led-output-tabs" id="led_output_tabs" role="tablist" aria-label="LED-выход">
+                <button class="led-output-tab" id="led_output_tab_0" type="button" role="tab" aria-selected="true" aria-controls="matrix_output_panel" data-output-index="0">LED1</button>
+                <button class="led-output-tab output-disabled" id="led_output_tab_1" type="button" role="tab" aria-selected="false" aria-controls="matrix_output_panel" data-output-index="1" tabindex="-1">LED2</button>
+                <button class="led-output-tab output-disabled" id="led_output_tab_2" type="button" role="tab" aria-selected="false" aria-controls="matrix_output_panel" data-output-index="2" tabindex="-1">LED3</button>
+                <button class="led-output-tab output-disabled" id="led_output_tab_3" type="button" role="tab" aria-selected="false" aria-controls="matrix_output_panel" data-output-index="3" tabindex="-1">LED4</button>
+            </div>
+            <div class="matrix-shell" id="matrix_output_panel" role="tabpanel" aria-labelledby="led_output_tab_0">
                 <div class="matrix" id="matrix_grid"></div>
+                <div class="matrix-output-empty field-hidden" id="matrix_output_empty" role="status">
+                    <strong>Выход отключён</strong>
+                    <span>Включите выход в аппаратных настройках, чтобы настроить матрицу.</span>
+                </div>
             </div>
             <div id="matrix_mobile_legend" class="matrix-mobile-legend field-hidden" role="list" aria-label="Краткая легенда зон" tabindex="0"></div>
             <div class="status-line field-hidden" id="edit_state_line" role="status" aria-live="polite"></div>
@@ -881,6 +998,10 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <div class="advanced-body">
                             <div class="hardware-config-group" aria-labelledby="hardware_config_title">
                                 <strong id="hardware_config_title">Аппаратная конфигурация</strong>
+                                <label class="output-enabled-control" for="hardware_output_enabled">
+                                    <input id="hardware_output_enabled" type="checkbox" role="switch">
+                                    <span>Выход включён</span>
+                                </label>
                                 <div class="grid-2">
                                     <div>
                                         <label for="hardware_rows">Строки матрицы</label>
@@ -894,12 +1015,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                 <div class="grid-2">
                                     <div>
                                         <label for="hardware_active_ports">Активные порты</label>
-                                        <select id="hardware_active_ports">
+                                        <select id="hardware_active_ports" aria-describedby="hardware_active_ports_hint">
                                             <option value="1">1</option>
                                             <option value="2">2</option>
                                             <option value="3">3</option>
                                             <option value="4">4</option>
                                         </select>
+                                        <div class="hint" id="hardware_active_ports_hint">Общая настройка для LED1…LED4.</div>
                                     </div>
                                     <div>
                                         <label for="hardware_protocol">Тип светодиодов</label>
@@ -920,7 +1042,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                     </select>
                                 </div>
                                 <div class="notice">Указывайте фактический размер подключённой матрицы. Это не обрезка изображения. Чтобы отключить часть матрицы, оставьте физический размер неизменным и назначьте ненужным пикселям «Без зоны».</div>
-                                <div class="hint">Изменение строк, столбцов или числа активных портов сбрасывает разметку зон и семь пространственных слоёв. Тип светодиодов и порядок цветов применяются после перезагрузки без очистки этих данных.</div>
+                                <div class="hint">Изменение включения, размеров любого выхода или числа активных портов очищает разметку и семь пространственных слоёв на всех LED-выходах. Тип светодиодов и порядок цветов применяются после перезагрузки без очистки этих данных.</div>
                                 <div class="btn-row">
                                     <button class="btn primary" id="save_hardware_config_btn" type="button">Сохранить аппаратные настройки</button>
                                 </div>
@@ -1359,18 +1481,23 @@ let matrixEditorUnavailable = false;
 let serviceOpen = false;
 let diagnosticsRequestInFlight = false;
 let configLoadInProgress = false;
+let selectedOutputLoadInProgress = false;
+let outputLoadGeneration = 0;
+let selectedOutputIndex = 0;
 let matrixConfig = { cols: 12, rows: 8, total: 96, topology: 0 };
 let pendingTopology = 0;
 let activePortCount = 2;
-let hardwareConfigApplied = {
-    rows: 8,
-    cols: 12,
-    activePortCount: 2,
-    ledProtocol: 'ws2811_800k',
-    colorOrder: 'BRG',
-    maxLedCount: 500,
-};
-let hardwareConfigPending = { ...hardwareConfigApplied };
+let appliedOutputs = [
+    { index: 0, enabled: true, rows: 8, cols: 12, topology: 0, ledProtocol: 'ws2811_800k', colorOrder: 'BRG' },
+    { index: 1, enabled: false, rows: 0, cols: 0, topology: 0, ledProtocol: 'ws2811_800k', colorOrder: 'BRG' },
+    { index: 2, enabled: false, rows: 0, cols: 0, topology: 0, ledProtocol: 'ws2811_800k', colorOrder: 'BRG' },
+    { index: 3, enabled: false, rows: 0, cols: 0, topology: 0, ledProtocol: 'ws2811_800k', colorOrder: 'BRG' },
+];
+let draftOutputs = appliedOutputs.map(output => ({ ...output }));
+let appliedActivePortCount = 2;
+let draftActivePortCount = 2;
+let hardwareMaxLedCount = 500;
+let hardwareMaxTotalLedCount = 1000;
 let hardwareConfigInitialized = false;
 let hardwareConfigSaveInProgress = false;
 let hardwareRestartInProgress = false;
@@ -1410,9 +1537,12 @@ let firmwareUploadInProgress = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
+const LED_OUTPUT_COUNT = 4;
 const HARDWARE_MAX_LED_COUNT_FALLBACK = 500;
+const HARDWARE_MAX_TOTAL_LED_COUNT_FALLBACK = 1000;
 const HARDWARE_SAVE_REQUEST_TIMEOUT_MS = 10000;
 const MATRIX_SAVE_REQUEST_TIMEOUT_MS = 10000;
+const OUTPUT_CONFIG_REQUEST_TIMEOUT_MS = 10000;
 const HARDWARE_RESTART_POLL_MS = 1000;
 const HARDWARE_RESTART_TIMEOUT_MS = 60000;
 const HARDWARE_RESTART_REQUEST_TIMEOUT_MS = 4000;
@@ -1473,21 +1603,37 @@ function zonesForActivePortCount(zones, count) {
     });
 }
 
-function buildMockConfig() {
+function buildMockConfig(outputIndex = 0) {
     const mockActivePortCount = 2;
+    const mockOutputs = [
+        { index: 0, name: 'LED1', enabled: true, rows: 8, cols: 12, total: 96, topology: 0, ledProtocol: HARDWARE_SUPPORTED_PROTOCOL, colorOrder: 'BRG' },
+        { index: 1, name: 'LED2', enabled: false, rows: 0, cols: 0, total: 0, topology: 0, ledProtocol: HARDWARE_SUPPORTED_PROTOCOL, colorOrder: 'BRG' },
+        { index: 2, name: 'LED3', enabled: false, rows: 0, cols: 0, total: 0, topology: 0, ledProtocol: HARDWARE_SUPPORTED_PROTOCOL, colorOrder: 'BRG' },
+        { index: 3, name: 'LED4', enabled: false, rows: 0, cols: 0, total: 0, topology: 0, ledProtocol: HARDWARE_SUPPORTED_PROTOCOL, colorOrder: 'BRG' },
+    ];
+    const selected = mockOutputs[Math.max(0, Math.min(3, Number(outputIndex) || 0))];
     return {
         b_ports: 120,
         c_wait: FACTORY_STATUS_COLORS.waiting,
         c_charge: FACTORY_STATUS_COLORS.charging,
         c_error: FACTORY_STATUS_COLORS.error,
         activePortCount: mockActivePortCount,
-        matrix: { cols: 12, rows: 8, total: 96, topology: 0 },
+        selectedOutputIndex: selected.index,
+        outputs: mockOutputs,
+        totalLedCount: 96,
+        maxTotalLedCount: HARDWARE_MAX_TOTAL_LED_COUNT_FALLBACK,
+        matrix: {
+            cols: selected.cols,
+            rows: selected.rows,
+            total: selected.total,
+            topology: selected.topology,
+        },
         hardware: {
-            rows: 8,
-            cols: 12,
+            rows: selected.rows,
+            cols: selected.cols,
             activePortCount: mockActivePortCount,
-            ledProtocol: HARDWARE_SUPPORTED_PROTOCOL,
-            colorOrder: 'BRG',
+            ledProtocol: selected.ledProtocol,
+            colorOrder: selected.colorOrder,
             maxLedCount: HARDWARE_MAX_LED_COUNT_FALLBACK,
         },
         hardware_map: {},
@@ -1862,59 +2008,108 @@ function updateFreeViewControls() {
     document.getElementById('free_erase_btn').disabled = isOverview || !mapped || savesBlocked;
 }
 
-function positiveHardwareInteger(value, fallback) {
-    const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function cloneOutputDescriptors(outputs = []) {
+    return outputs.map(output => ({ ...output }));
 }
 
-function hardwareConfigFromResponse(cfg) {
-    const matrix = cfg?.matrix || {};
-    const hardware = cfg?.hardware || {};
-    const fallbackRows = positiveHardwareInteger(matrix.rows, 8);
-    const fallbackCols = positiveHardwareInteger(matrix.cols, 12);
-    const fallbackPorts = clampActivePortCount(cfg?.activePortCount ?? cfg?.active_port_count ?? 2);
-    const protocol = hardware.ledProtocol === undefined
-        ? HARDWARE_SUPPORTED_PROTOCOL
-        : String(hardware.ledProtocol);
-    const order = hardware.colorOrder === undefined ? 'BRG' : String(hardware.colorOrder);
+function normalizeOutputDescriptor(raw, index) {
+    const source = raw || {};
+    if (Number(source.index) !== index) return null;
+    const enabled = source.enabled === true || Number(source.enabled) === 1;
+    const rows = Number(source.rows);
+    const cols = Number(source.cols);
+    const topology = Number(source.topology);
+    const ledProtocol = String(source.ledProtocol ?? '');
+    const colorOrder = String(source.colorOrder ?? '');
+    if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 0 || cols < 0 ||
+        !Number.isInteger(topology) || topology < 0 || topology > 3 ||
+        ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL ||
+        !HARDWARE_COLOR_ORDERS.includes(colorOrder)) {
+        return null;
+    }
+    if ((enabled && (rows < 1 || cols < 1)) || (!enabled && (rows !== 0 || cols !== 0))) {
+        return null;
+    }
+    return { index, enabled, rows, cols, topology, ledProtocol, colorOrder };
+}
 
+function hardwareStateFromResponse(cfg) {
+    if (!Array.isArray(cfg?.outputs) || cfg.outputs.length !== LED_OUTPUT_COUNT) return null;
+    const outputs = cfg.outputs.map((output, index) => normalizeOutputDescriptor(output, index));
+    if (outputs.some(output => output === null)) return null;
+    const activePortCountValue = Number(cfg.activePortCount ?? cfg.hardware?.activePortCount);
+    if (!Number.isInteger(activePortCountValue) || activePortCountValue < 1 || activePortCountValue > 4) {
+        return null;
+    }
+    const maxLedCountValue = Number(cfg.hardware?.maxLedCount);
+    const maxTotalValue = Number(cfg.maxTotalLedCount);
     return {
-        rows: positiveHardwareInteger(hardware.rows, fallbackRows),
-        cols: positiveHardwareInteger(hardware.cols, fallbackCols),
-        activePortCount: clampActivePortCount(hardware.activePortCount ?? fallbackPorts),
-        ledProtocol: protocol,
-        colorOrder: order,
-        maxLedCount: positiveHardwareInteger(hardware.maxLedCount, HARDWARE_MAX_LED_COUNT_FALLBACK),
+        activePortCount: activePortCountValue,
+        outputs,
+        maxLedCount: Number.isInteger(maxLedCountValue) && maxLedCountValue > 0
+            ? maxLedCountValue
+            : HARDWARE_MAX_LED_COUNT_FALLBACK,
+        maxTotalLedCount: Number.isInteger(maxTotalValue) && maxTotalValue > 0
+            ? maxTotalValue
+            : HARDWARE_MAX_TOTAL_LED_COUNT_FALLBACK,
     };
 }
 
-function hardwareConfigsEqual(left, right) {
-    return Number(left?.rows) === Number(right?.rows) &&
-        Number(left?.cols) === Number(right?.cols) &&
-        Number(left?.activePortCount) === Number(right?.activePortCount) &&
-        String(left?.ledProtocol) === String(right?.ledProtocol) &&
-        String(left?.colorOrder) === String(right?.colorOrder);
+function outputDescriptorsEqual(left, right) {
+    return Boolean(left && right) &&
+        Number(left.index) === Number(right.index) &&
+        Boolean(left.enabled) === Boolean(right.enabled) &&
+        Number(left.rows) === Number(right.rows) &&
+        Number(left.cols) === Number(right.cols) &&
+        Number(left.topology) === Number(right.topology) &&
+        String(left.ledProtocol) === String(right.ledProtocol) &&
+        String(left.colorOrder) === String(right.colorOrder);
+}
+
+function hardwareStatesEqual(left, right) {
+    return Boolean(left && right) &&
+        Number(left.activePortCount) === Number(right.activePortCount) &&
+        Array.isArray(left.outputs) && Array.isArray(right.outputs) &&
+        left.outputs.length === LED_OUTPUT_COUNT &&
+        right.outputs.length === LED_OUTPUT_COUNT &&
+        left.outputs.every((output, index) => outputDescriptorsEqual(output, right.outputs[index]));
+}
+
+function currentAppliedHardwareState() {
+    return {
+        activePortCount: appliedActivePortCount,
+        outputs: cloneOutputDescriptors(appliedOutputs),
+    };
 }
 
 function captureHardwareConfigPending() {
-    hardwareConfigPending = {
-        rows: document.getElementById('hardware_rows').value,
-        cols: document.getElementById('hardware_cols').value,
-        activePortCount: document.getElementById('hardware_active_ports').value,
+    const current = draftOutputs[selectedOutputIndex] || appliedOutputs[selectedOutputIndex];
+    const enabled = document.getElementById('hardware_output_enabled').checked;
+    draftOutputs[selectedOutputIndex] = {
+        index: selectedOutputIndex,
+        enabled,
+        rows: enabled ? document.getElementById('hardware_rows').value : 0,
+        cols: enabled ? document.getElementById('hardware_cols').value : 0,
+        topology: Number(current?.topology ?? appliedOutputs[selectedOutputIndex]?.topology ?? 0),
         ledProtocol: document.getElementById('hardware_protocol').value,
         colorOrder: document.getElementById('hardware_color_order').value,
-        maxLedCount: hardwareConfigApplied.maxLedCount,
     };
-    return hardwareConfigPending;
+    draftActivePortCount = document.getElementById('hardware_active_ports').value;
+    renderOutputTabs();
+    return draftOutputs[selectedOutputIndex];
 }
 
 function syncHardwareConfigForm() {
-    hardwareConfigPending = { ...hardwareConfigApplied };
-    document.getElementById('hardware_rows').value = String(hardwareConfigApplied.rows);
-    document.getElementById('hardware_cols').value = String(hardwareConfigApplied.cols);
-    document.getElementById('hardware_active_ports').value = String(hardwareConfigApplied.activePortCount);
-    document.getElementById('hardware_protocol').value = hardwareConfigApplied.ledProtocol;
-    document.getElementById('hardware_color_order').value = hardwareConfigApplied.colorOrder;
+    const draft = draftOutputs[selectedOutputIndex] || appliedOutputs[selectedOutputIndex];
+    if (!draft) return;
+    document.getElementById('hardware_config_title').textContent =
+        `Аппаратная конфигурация LED${selectedOutputIndex + 1}`;
+    document.getElementById('hardware_output_enabled').checked = Boolean(draft.enabled);
+    document.getElementById('hardware_rows').value = String(draft.enabled ? draft.rows : 0);
+    document.getElementById('hardware_cols').value = String(draft.enabled ? draft.cols : 0);
+    document.getElementById('hardware_active_ports').value = String(draftActivePortCount);
+    document.getElementById('hardware_protocol').value = draft.ledProtocol;
+    document.getElementById('hardware_color_order').value = draft.colorOrder;
 }
 
 function parseHardwareFormInteger(value) {
@@ -1924,56 +2119,103 @@ function parseHardwareFormInteger(value) {
     return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
-function validateHardwareConfigForm(pending = hardwareConfigPending) {
-    const rows = parseHardwareFormInteger(pending.rows);
-    const cols = parseHardwareFormInteger(pending.cols);
-    const ports = parseHardwareFormInteger(pending.activePortCount);
-    const maxLedCount = positiveHardwareInteger(
-        hardwareConfigApplied.maxLedCount,
-        HARDWARE_MAX_LED_COUNT_FALLBACK
-    );
-
-    if (rows === null || cols === null || rows < 1 || cols < 1) {
-        return { error: 'Строки и столбцы должны быть целыми числами больше нуля.' };
-    }
-    if (rows > HARDWARE_MAX_LED_COUNT_FALLBACK || cols > HARDWARE_MAX_LED_COUNT_FALLBACK) {
-        return { error: `Строки и столбцы не должны превышать ${HARDWARE_MAX_LED_COUNT_FALLBACK}.` };
-    }
-    const total = rows * cols;
-    if (total > maxLedCount) {
-        return { error: `Матрица содержит ${total} пикселей; допустимый предел — ${maxLedCount}.` };
-    }
+function validateHardwareConfigForm() {
+    const ports = parseHardwareFormInteger(draftActivePortCount);
     if (ports === null || ports < 1 || ports > 4) {
         return { error: 'Количество активных портов должно быть от 1 до 4.' };
     }
-    if (pending.ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL) {
-        return { error: 'Выбран неподдерживаемый тип светодиодов.' };
-    }
-    if (!HARDWARE_COLOR_ORDERS.includes(String(pending.colorOrder))) {
-        return { error: 'Выбран неподдерживаемый порядок цветов.' };
-    }
 
-    return {
-        config: {
+    let totalLedCount = 0;
+    const outputs = [];
+    for (let index = 0; index < LED_OUTPUT_COUNT; index++) {
+        const draft = draftOutputs[index] || appliedOutputs[index];
+        if (!draft) return { error: `Нет аппаратного черновика LED${index + 1}.` };
+        const enabled = Boolean(draft.enabled);
+        const rows = enabled ? parseHardwareFormInteger(draft.rows) : 0;
+        const cols = enabled ? parseHardwareFormInteger(draft.cols) : 0;
+        if (enabled && (rows === null || cols === null || rows < 1 || cols < 1)) {
+            return { error: `Для включённого LED${index + 1} укажите целые строки и столбцы больше нуля.` };
+        }
+        if (enabled && (rows > hardwareMaxLedCount || cols > hardwareMaxLedCount || rows * cols > hardwareMaxLedCount)) {
+            return { error: `LED${index + 1} превышает предел ${hardwareMaxLedCount} пикселей.` };
+        }
+        if (draft.ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL) {
+            return { error: `Для LED${index + 1} выбран неподдерживаемый тип светодиодов.` };
+        }
+        if (!HARDWARE_COLOR_ORDERS.includes(String(draft.colorOrder))) {
+            return { error: `Для LED${index + 1} выбран неподдерживаемый порядок цветов.` };
+        }
+        totalLedCount += rows * cols;
+        outputs.push({
+            index,
+            enabled,
             rows,
             cols,
-            activePortCount: ports,
+            topology: Number(appliedOutputs[index]?.topology ?? 0),
             ledProtocol: HARDWARE_SUPPORTED_PROTOCOL,
-            colorOrder: String(pending.colorOrder),
-            maxLedCount,
-        },
-    };
+            colorOrder: String(draft.colorOrder),
+        });
+    }
+    if (totalLedCount > hardwareMaxTotalLedCount) {
+        return { error: `Суммарно настроено ${totalLedCount} пикселей; допустимый предел — ${hardwareMaxTotalLedCount}.` };
+    }
+    return { config: { activePortCount: ports, outputs } };
 }
 
 function hardwareConfigFormHasChanges() {
-    const result = validateHardwareConfigForm(hardwareConfigPending);
-    return !result.config || !hardwareConfigsEqual(result.config, hardwareConfigApplied);
+    const result = validateHardwareConfigForm();
+    return !result.config || !hardwareStatesEqual(result.config, currentAppliedHardwareState());
 }
 
 function setHardwareConfigMessage(text, isError = false) {
     const line = document.getElementById('hardware_config_message');
     line.textContent = text || '';
     line.classList.toggle('warning', Boolean(text) && isError);
+}
+
+function selectedAppliedOutput() {
+    return appliedOutputs[selectedOutputIndex] || null;
+}
+
+function selectedDraftOutput() {
+    return draftOutputs[selectedOutputIndex] || selectedAppliedOutput();
+}
+
+function selectedOutputIsEnabled() {
+    return Boolean(selectedAppliedOutput()?.enabled);
+}
+
+function selectedTopologyHasDraft() {
+    return Number(pendingTopology) !== Number(selectedAppliedOutput()?.topology ?? 0) ||
+        uncertainTopologySubmission !== null;
+}
+
+function renderOutputTabs() {
+    const switchBlocked = outputSwitchBlocked();
+    document.querySelectorAll('[data-output-index]').forEach(button => {
+        const index = Number(button.dataset.outputIndex);
+        const applied = appliedOutputs[index];
+        const draft = draftOutputs[index];
+        const stateKnown = hardwareConfigInitialized || mockMode;
+        const selected = index === selectedOutputIndex;
+        const changed = Boolean(applied && draft && !outputDescriptorsEqual(
+            { ...draft, topology: applied.topology },
+            applied
+        ));
+        button.setAttribute('aria-selected', selected ? 'true' : 'false');
+        button.setAttribute(
+            'aria-label',
+            stateKnown
+                ? `LED${index + 1}, выход ${applied?.enabled ? 'включён' : 'отключён'}${changed ? ', есть аппаратный черновик' : ''}`
+                : `LED${index + 1}, состояние неизвестно`
+        );
+        button.tabIndex = selected ? 0 : -1;
+        button.disabled = switchBlocked;
+        button.classList.toggle('output-disabled', !stateKnown || !applied?.enabled);
+        button.classList.toggle('output-draft-changed', changed);
+    });
+    const panel = document.getElementById('matrix_output_panel');
+    panel?.setAttribute('aria-labelledby', `led_output_tab_${selectedOutputIndex}`);
 }
 
 function updateStatusEditorControls() {
@@ -2011,7 +2253,8 @@ function updateStatusEditorControls() {
 }
 
 function matrixSaveOperationInProgress() {
-    return hardwareConfigSaveInProgress || hardwareRestartInProgress ||
+    return configLoadInProgress || hardwareConfigSaveInProgress || hardwareRestartInProgress ||
+        selectedOutputLoadInProgress ||
         topologySaveInProgress || zoneMapSaveInProgress ||
         statusSaveInProgress || freeZoneSaveInProgress ||
         authSaveInProgress || authReloadRequired;
@@ -2022,8 +2265,20 @@ function matrixSavesBlockedByHardwareTransition() {
         uncertainTopologySubmission !== null;
 }
 
+function selectedSpatialEditorBlocked() {
+    return matrixSavesBlockedByHardwareTransition() || !selectedOutputIsEnabled();
+}
+
 function freeZoneEditorBlocked() {
-    return matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress;
+    return selectedSpatialEditorBlocked() || freeBrightnessBatchInProgress;
+}
+
+function outputSwitchBlocked() {
+    return configLoadInProgress || matrixSaveOperationInProgress() ||
+        brightnessSavePendingOrInProgress() ||
+        uncertainTopologySubmission !== null ||
+        uncertainZoneMapSubmission !== null ||
+        Object.values(uncertainFreeZoneState).some(Boolean);
 }
 
 function layerMapsEqual(left = {}, right = {}) {
@@ -2080,21 +2335,33 @@ function hasPendingMatrixChanges(includeTopology = true) {
 }
 
 function updateMatrixSaveControls() {
-    const blocked = freeZoneEditorBlocked();
+    const transitionBlocked = matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress;
+    const spatialBlocked = transitionBlocked || !selectedOutputIsEnabled();
+    const selectedDraftEnabled = Boolean(selectedDraftOutput()?.enabled);
     [
-        'hardware_rows',
-        'hardware_cols',
+        'hardware_output_enabled',
         'hardware_active_ports',
         'hardware_protocol',
         'hardware_color_order',
         'save_hardware_config_btn',
+        'topology_select',
+        'save_topology_btn',
+        'ports_brightness',
+        'ports_brightness_input',
+    ].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = transitionBlocked;
+    });
+    ['hardware_rows', 'hardware_cols'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = transitionBlocked || !selectedDraftEnabled;
+    });
+    [
         'zone_edit_mode_btn',
         'zone_overview_mode_btn',
         'zone_select',
         'zone_brush_btn',
         'zone_erase_btn',
-        'topology_select',
-        'save_topology_btn',
         'save_zones_btn',
         'save_status_btn',
         'status_scope_select',
@@ -2110,15 +2377,13 @@ function updateMatrixSaveControls() {
         'free_edit_mode_btn',
         'free_overview_mode_btn',
         'free_erase_btn',
-        'ports_brightness',
-        'ports_brightness_input',
         'free_brightness',
         'free_brightness_input',
         'apply_free_btn',
         'apply_free_brightness_all_btn',
     ].forEach(id => {
         const element = document.getElementById(id);
-        if (element) element.disabled = blocked;
+        if (element) element.disabled = spatialBlocked;
     });
     if (!matrixEditorUnavailable && uncertainTopologySubmission !== null &&
         !matrixSaveOperationInProgress()) {
@@ -2129,26 +2394,41 @@ function updateMatrixSaveControls() {
     updateZoneViewControls();
     updateFreeViewControls();
     updateStatusEditorControls();
+    renderOutputTabs();
 }
 
-function applyConfig(cfg) {
-    const matrix = cfg.matrix || {};
-    const preserveHardwarePending = hardwareConfigInitialized && hardwareConfigFormHasChanges();
-    hardwareConfigApplied = hardwareConfigFromResponse(cfg);
-    COLS = Number(matrix.cols) || COLS || 12;
-    ROWS = Number(matrix.rows) || ROWS || 8;
+function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
+    const hardwareState = hardwareStateFromResponse(cfg);
+    if (!hardwareState) throw new Error('invalid output descriptors');
+    const responseOutputIndex = Number(cfg.selectedOutputIndex);
+    if (!Number.isInteger(responseOutputIndex) || responseOutputIndex !== selectedOutputIndex) {
+        throw new Error('unexpected selected output');
+    }
+
+    const preservePortBrightnessDraft = hardwareConfigInitialized && portsBrightnessDirty;
+    appliedOutputs = cloneOutputDescriptors(hardwareState.outputs);
+    appliedActivePortCount = hardwareState.activePortCount;
+    hardwareMaxLedCount = hardwareState.maxLedCount;
+    hardwareMaxTotalLedCount = hardwareState.maxTotalLedCount;
+    if (resetHardwareDrafts || !hardwareConfigInitialized) {
+        draftOutputs = cloneOutputDescriptors(appliedOutputs);
+        draftActivePortCount = appliedActivePortCount;
+    }
+
+    const selected = appliedOutputs[selectedOutputIndex];
+    COLS = selected.enabled ? selected.cols : 0;
+    ROWS = selected.enabled ? selected.rows : 0;
     matrixConfig = {
         cols: COLS,
         rows: ROWS,
-        total: Number(matrix.total) || COLS * ROWS,
-        topology: Number(matrix.topology ?? 0),
+        total: selected.enabled ? COLS * ROWS : 0,
+        topology: selected.topology,
     };
-    pendingTopology = Math.max(0, Math.min(3, Number(matrixConfig.topology) || 0));
+    pendingTopology = selected.topology;
     uncertainTopologySubmission = null;
-    activePortCount = hardwareConfigApplied.activePortCount;
-    if (!preserveHardwarePending) syncHardwareConfigForm();
+    activePortCount = appliedActivePortCount;
+    syncHardwareConfigForm();
     hardwareConfigInitialized = true;
-    updateMatrixSaveControls();
 
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     savedHardwareZonesMap = { ...hardwareZonesMap };
@@ -2163,7 +2443,7 @@ function applyConfig(cfg) {
     statusLayerDirty = { waiting: false, charging: false, error: false };
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
     uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
-    portsBrightnessDirty = false;
+    if (!preservePortBrightnessDraft) portsBrightnessDirty = false;
     freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
     statusColorLayers.waiting = sanitizeStatusLayerForPortZones(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeStatusLayerForPortZones(cfg.layers?.charge || {});
@@ -2179,11 +2459,13 @@ function applyConfig(cfg) {
         Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
         activePortCount
     );
-    portsBrightnessValue = setBrightnessPair(
-        'ports_brightness',
-        'ports_brightness_input',
-        cfg.b_ports ?? 120
-    );
+    if (!preservePortBrightnessDraft) {
+        portsBrightnessValue = setBrightnessPair(
+            'ports_brightness',
+            'ports_brightness_input',
+            cfg.b_ports ?? 120
+        );
+    }
     appliedFreeZones = {};
     FREE_ZONE_IDS.forEach(zoneId => setAppliedFreeZoneState(zoneId, defaultFreeZoneState(zoneId)));
     if (Array.isArray(cfg.free_zones)) {
@@ -2194,6 +2476,8 @@ function applyConfig(cfg) {
         });
     }
     FREE_ZONE_IDS.forEach(zoneId => loadFreeZoneDraftFromApplied(zoneId));
+    updateMatrixSaveControls();
+    renderOutputTabs();
 }
 
 function zoneById(id) {
@@ -2317,6 +2601,20 @@ function renderTopologyControls() {
     summary.textContent = topologyOption(normalized).hint;
 
     preview.innerHTML = '';
+    if (!selectedOutputIsEnabled() || COLS === 0 || ROWS === 0) {
+        preview.style.gridTemplateColumns = '1fr';
+        preview.classList.add('compact');
+        preview.classList.remove('dense');
+        const direction = document.createElement('div');
+        direction.className = 'topology-direction';
+        const title = document.createElement('strong');
+        title.textContent = `LED${selectedOutputIndex + 1} отключён`;
+        const text = document.createElement('span');
+        text.textContent = 'Выбранная топология сохранится и будет использована после включения выхода.';
+        direction.append(title, text);
+        preview.appendChild(direction);
+        return;
+    }
     const total = COLS * ROWS;
     const compact = total > TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS;
     preview.classList.toggle('compact', compact);
@@ -2366,6 +2664,15 @@ function renderTopologyControls() {
 
 function buildMatrix() {
     grid.innerHTML = '';
+    const empty = document.getElementById('matrix_output_empty');
+    const outputEnabled = selectedOutputIsEnabled() && COLS > 0 && ROWS > 0;
+    grid.classList.toggle('field-hidden', !outputEnabled);
+    empty?.classList.toggle('field-hidden', outputEnabled);
+    if (!outputEnabled) {
+        redrawMatrix();
+        renderTopologyControls();
+        return;
+    }
     const total = COLS * ROWS;
     grid.classList.toggle('dense', total > 96);
     grid.classList.toggle('very-dense', total > 256);
@@ -2570,11 +2877,22 @@ function shouldLockPixel(zoneId) {
 }
 
 function redrawMatrix() {
-    if (matrixEditorUnavailable) {
+    const outputName = `LED${selectedOutputIndex + 1}`;
+    const empty = document.getElementById('matrix_output_empty');
+    const emptyTitle = empty?.querySelector('strong');
+    const emptyText = empty?.querySelector('span');
+    if (matrixEditorUnavailable || selectedOutputLoadInProgress) {
         drawing = false;
         grid.replaceChildren();
+        grid.classList.add('field-hidden');
         grid.style.gridTemplateColumns = '';
-        document.getElementById('matrix_hint').textContent = 'нет данных';
+        empty?.classList.remove('field-hidden');
+        if (emptyTitle) emptyTitle.textContent = selectedOutputLoadInProgress ? `Загрузка ${outputName}` : 'Нет данных';
+        if (emptyText) emptyText.textContent = selectedOutputLoadInProgress
+            ? 'Получаем конфигурацию выбранного выхода.'
+            : 'Конфигурация матрицы недоступна.';
+        document.getElementById('matrix_title').textContent = `Матрица ${outputName}`;
+        document.getElementById('matrix_hint').textContent = selectedOutputLoadInProgress ? 'загрузка' : 'нет данных';
         document.getElementById('matrix_mobile_legend').replaceChildren();
         document.getElementById('matrix_mobile_legend').classList.add('field-hidden');
         document.getElementById('zone_legend').replaceChildren();
@@ -2587,22 +2905,43 @@ function redrawMatrix() {
 
     buildSelects();
 
-    document.getElementById('matrix_title').textContent =
-        activeTab === 'zones' ? 'Матрица' :
-        activeTab === 'status' ? 'Матрица' :
-        'Матрица';
+    if (!selectedOutputIsEnabled()) {
+        drawing = false;
+        grid.replaceChildren();
+        grid.classList.add('field-hidden');
+        grid.style.gridTemplateColumns = '';
+        empty?.classList.remove('field-hidden');
+        if (emptyTitle) emptyTitle.textContent = 'Выход отключён';
+        if (emptyText) emptyText.textContent = 'Включите выход в аппаратных настройках, чтобы настроить матрицу.';
+        document.getElementById('matrix_title').textContent = `Матрица ${outputName}`;
+        document.getElementById('matrix_hint').textContent = `${outputName} · выход отключён`;
+        document.getElementById('matrix_mobile_legend').replaceChildren();
+        document.getElementById('matrix_mobile_legend').classList.add('field-hidden');
+        document.getElementById('zone_legend').replaceChildren();
+        document.getElementById('free_legend').replaceChildren();
+        renderTopologyControls();
+        updateMatrixSaveControls();
+        updateDirtyIndicators();
+        updateEditState();
+        return;
+    }
+
+    grid.classList.remove('field-hidden');
+    empty?.classList.add('field-hidden');
+
+    document.getElementById('matrix_title').textContent = `Матрица ${outputName}`;
 
     const matrixSize = `${COLS}×${ROWS}`;
     document.getElementById('matrix_hint').textContent =
         activeTab === 'zones'
             ? (zoneViewMode === 'overview'
-                ? `${matrixSize} · Обзор зон`
-                : `${matrixSize} · ${zoneDisplayName(activeZoneId)} · ${zoneTool === 'erase' ? 'Ластик' : 'Кисть'}`)
+                ? `${outputName} · ${matrixSize} · Обзор зон`
+                : `${outputName} · ${matrixSize} · ${zoneDisplayName(activeZoneId)} · ${zoneTool === 'erase' ? 'Ластик' : 'Кисть'}`)
             : activeTab === 'status'
-                ? `${matrixSize} · ${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${statusEditModeLabel()}`
+                ? `${outputName} · ${matrixSize} · ${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${statusEditModeLabel()}`
                 : (freeViewMode === 'overview'
-                    ? `${matrixSize} · Обзор свободных зон`
-                    : `${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])} · ${
+                    ? `${outputName} · ${matrixSize} · Обзор свободных зон`
+                    : `${outputName} · ${matrixSize} · ${zoneDisplayName(activeFreeZone)} · ${modeLabel(freeModes[activeFreeZone])} · ${
                         uncertainFreeZoneState[activeFreeZone]
                             ? 'состояние не подтверждено'
                             : freeZoneDraftHasUnsavedChanges(activeFreeZone)
@@ -2646,10 +2985,22 @@ function redrawMatrix() {
 function updateEditState() {
     const line = document.getElementById('edit_state_line');
     line.classList.remove('warning');
+    if (selectedOutputLoadInProgress) {
+        line.classList.remove('field-hidden');
+        line.textContent = `Загружается конфигурация LED${selectedOutputIndex + 1}.`;
+        return;
+    }
     if (matrixEditorUnavailable) {
         line.classList.remove('field-hidden');
         line.classList.add('warning');
-        line.textContent = 'Настройка нескольких LED-выходов недоступна в текущем редакторе.';
+        line.textContent = 'Конфигурация выбранного LED-выхода недоступна.';
+        return;
+    }
+    if (!selectedOutputIsEnabled()) {
+        line.classList.remove('field-hidden');
+        line.textContent = mockMode
+            ? `LED${selectedOutputIndex + 1} отключён. Демонстрационные данные; запросы к ESP32 не выполняются.`
+            : `LED${selectedOutputIndex + 1} отключён. Аппаратные настройки и топология остаются доступными.`;
         return;
     }
     line.classList.toggle('field-hidden', !mockMode);
@@ -2714,6 +3065,35 @@ grid.addEventListener('pointermove', e => {
 
 ['pointerup', 'pointercancel', 'pointerleave'].forEach(type => {
     grid.addEventListener(type, () => { drawing = false; });
+});
+
+function selectedOutputHasDiscardableDrafts() {
+    return hasUnsavedSpatialDrafts() || hasUnsavedFreeZoneScalarDrafts() ||
+        zoneMapDirty || uncertainZoneMapSubmission !== null ||
+        Object.values(statusLayerDirty).some(Boolean) ||
+        Object.values(freeZoneDirty).some(Boolean) ||
+        Object.values(freeBrightnessDirty).some(Boolean) ||
+        Object.values(uncertainFreeZoneState).some(Boolean) ||
+        selectedTopologyHasDraft();
+}
+
+document.querySelectorAll('[data-output-index]').forEach(button => {
+    button.addEventListener('click', () => {
+        switchSelectedOutput(Number(button.dataset.outputIndex));
+    });
+    button.addEventListener('keydown', event => {
+        const current = Number(button.dataset.outputIndex);
+        let next = null;
+        if (event.key === 'ArrowRight') next = (current + 1) % LED_OUTPUT_COUNT;
+        if (event.key === 'ArrowLeft') next = (current + LED_OUTPUT_COUNT - 1) % LED_OUTPUT_COUNT;
+        if (event.key === 'Home') next = 0;
+        if (event.key === 'End') next = LED_OUTPUT_COUNT - 1;
+        if (next === null) return;
+        event.preventDefault();
+        const nextButton = document.getElementById(`led_output_tab_${next}`);
+        nextButton?.focus();
+        nextButton?.click();
+    });
 });
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -2942,6 +3322,22 @@ document.querySelectorAll('[data-status]').forEach(btn => {
     });
 });
 
+document.getElementById('hardware_output_enabled').addEventListener('change', event => {
+    const enabled = event.target.checked;
+    const rows = document.getElementById('hardware_rows');
+    const cols = document.getElementById('hardware_cols');
+    if (enabled) {
+        if ((parseHardwareFormInteger(rows.value) ?? 0) < 1) rows.value = '1';
+        if ((parseHardwareFormInteger(cols.value) ?? 0) < 1) cols.value = '1';
+    } else {
+        rows.value = '0';
+        cols.value = '0';
+    }
+    captureHardwareConfigPending();
+    updateMatrixSaveControls();
+    if (!hardwareRestartInProgress) setHardwareConfigMessage('');
+});
+
 [
     'hardware_rows',
     'hardware_cols',
@@ -2968,12 +3364,12 @@ async function fetchHardwareConfigForRestart(timeoutMs = HARDWARE_RESTART_REQUES
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
     try {
-        const response = await fetch('/get_config', {
+        const response = await fetch('/get_config?output=0', {
             cache: 'no-store',
             signal: controller.signal,
         });
         if (!response.ok) return null;
-        return hardwareConfigFromResponse(await response.json());
+        return hardwareStateFromResponse(await response.json());
     } finally {
         clearTimeout(timeout);
     }
@@ -2993,7 +3389,7 @@ async function pollForHardwareRestart(expectedHardware) {
         if (requestTimeoutMs <= 0) break;
         try {
             const applied = await fetchHardwareConfigForRestart(requestTimeoutMs);
-            if (applied && hardwareConfigsEqual(applied, expectedHardware)) {
+            if (applied && hardwareStatesEqual(applied, expectedHardware)) {
                 setHardwareConfigMessage('Контроллер перезапущен. Обновляем страницу.');
                 window.location.reload();
                 return;
@@ -3012,8 +3408,44 @@ async function pollForHardwareRestart(expectedHardware) {
 }
 
 function lockMatrixSavesForHardwareRestart() {
+    outputLoadGeneration += 1;
+    selectedOutputLoadInProgress = false;
     hardwareConfigSaveInProgress = false;
     hardwareRestartInProgress = true;
+    updateMatrixSaveControls();
+}
+
+function hardwareSpatialChange(requested, applied) {
+    return Number(requested.activePortCount) !== Number(applied.activePortCount) ||
+        requested.outputs.some((output, index) => {
+            const current = applied.outputs[index];
+            return Boolean(output.enabled) !== Boolean(current.enabled) ||
+                Number(output.rows) !== Number(current.rows) ||
+                Number(output.cols) !== Number(current.cols);
+        });
+}
+
+function hardwareControllerChange(requested, applied) {
+    return requested.outputs.some((output, index) => {
+        const current = applied.outputs[index];
+        return String(output.ledProtocol) !== String(current.ledProtocol) ||
+            String(output.colorOrder) !== String(current.colorOrder);
+    });
+}
+
+function acceptAppliedHardwareState(state) {
+    appliedOutputs = cloneOutputDescriptors(state.outputs);
+    draftOutputs = cloneOutputDescriptors(state.outputs);
+    appliedActivePortCount = Number(state.activePortCount);
+    draftActivePortCount = appliedActivePortCount;
+    activePortCount = appliedActivePortCount;
+    const selected = appliedOutputs[selectedOutputIndex];
+    if (selected) {
+        matrixConfig.topology = Number(selected.topology);
+        pendingTopology = matrixConfig.topology;
+    }
+    syncHardwareConfigForm();
+    renderOutputTabs();
     updateMatrixSaveControls();
 }
 
@@ -3035,20 +3467,24 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
         setHardwareConfigMessage('Дождитесь завершения загрузки текущей конфигурации.', true);
         return;
     }
-    if (hardwareConfigsEqual(requested, hardwareConfigApplied)) {
+    const applied = currentAppliedHardwareState();
+    if (hardwareStatesEqual(requested, applied)) {
         setHardwareConfigMessage('Настройки не изменены.');
         return;
     }
-    if (mockMode || !backendAvailable) {
+    if (mockMode) {
+        setHardwareConfigMessage('Демонстрационный режим: аппаратный черновик не отправлен на ESP32.', true);
+        return;
+    }
+    if (!backendAvailable) {
         setHardwareConfigMessage('Контроллер недоступен: настройки не сохранены.', true);
         return;
     }
 
-    const spatialChange = requested.rows !== hardwareConfigApplied.rows ||
-        requested.cols !== hardwareConfigApplied.cols ||
-        requested.activePortCount !== hardwareConfigApplied.activePortCount;
+    const spatialChange = hardwareSpatialChange(requested, applied);
+    const controllerChange = hardwareControllerChange(requested, applied);
 
-    if (Number(pendingTopology) !== Number(matrixConfig.topology)) {
+    if (selectedTopologyHasDraft()) {
         const appliedTopology = topologyOption(matrixConfig.topology).label;
         setHardwareConfigMessage(
             `Сначала сохраните выбранную схему физического соединения либо верните выбор к применённому варианту «${appliedTopology}».`,
@@ -3065,12 +3501,12 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
     }
     if (hasUnsavedPreservedSettings()) {
         setHardwareConfigMessage(
-            'Режимы, статичные цвета и яркость сохраняются при изменении геометрии. Сначала сохраните или отмените их несохранённые изменения.',
+            'Режимы, статичные цвета и яркость сохраняются после перезагрузки. Сначала сохраните или отмените их несохранённые изменения.',
             true
         );
         return;
     }
-    if (!spatialChange && (
+    if (!spatialChange && controllerChange && (
         hasPendingMatrixChanges(false) ||
         hasUnsavedSpatialDrafts() ||
         uncertainZoneMapSubmission !== null
@@ -3082,12 +3518,9 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
         return;
     }
 
-    const browserDraftWarning = hasUnsavedSpatialDrafts() || uncertainZoneMapSubmission !== null
-        ? ' Несохранённая разметка и несохранённые рисунки в браузере также будут отброшены.'
-        : '';
     const confirmation = spatialChange
-        ? `Изменение фактических строк, столбцов или числа активных портов очистит сохранённую разметку зон и все семь пространственных слоёв.${browserDraftWarning} Схема физического соединения, яркость, режимы и статичные цвета сохранятся. Продолжить?`
-        : 'Тип светодиодов или порядок цветов изменится после перезагрузки контроллера. Разметка зон и семь пространственных слоёв не очищаются. Продолжить?';
+        ? 'Изменение состава матриц, их размеров или количества активных портов удалит разметку зон и пиксельные рисунки на всех LED-выходах. Продолжить?'
+        : 'Тип светодиодов или порядок цветов изменится после перезагрузки контроллера. Пространственные данные сохранятся. Продолжить?';
     if (!confirm(confirmation)) return;
 
     hardwareConfigSaveInProgress = true;
@@ -3103,40 +3536,53 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             signal: saveController.signal,
-            body: JSON.stringify({
-                rows: requested.rows,
-                cols: requested.cols,
-                activePortCount: requested.activePortCount,
-                ledProtocol: requested.ledProtocol,
-                colorOrder: requested.colorOrder,
-            }),
+            body: JSON.stringify(requested),
         });
         responseText = (await response.text()).trim();
     } catch (err) {
-        hardwareConfigPending = { ...requested };
         lockMatrixSavesForHardwareRestart();
         setHardwareConfigMessage(
             'Связь прервана во время сохранения. Состояние записи неизвестно; проверяем, применились ли настройки.',
             true
         );
-        pollForHardwareRestart({ ...requested });
+        pollForHardwareRestart(requested);
         return;
     } finally {
         clearTimeout(saveTimeout);
     }
 
     if (response.status === 200 && responseText === 'NO_CHANGE') {
-        hardwareConfigSaveInProgress = false;
+        const outputIndex = selectedOutputIndex;
+        selectedOutputLoadInProgress = true;
         updateMatrixSaveControls();
-        setHardwareConfigMessage('Настройки не изменены.');
-        setTimeout(() => window.location.reload(), 250);
+        try {
+            const cfg = await fetchOutputConfig(outputIndex);
+            selectedOutputLoadInProgress = false;
+            renderSelectedOutputConfig(cfg, true);
+            setHardwareConfigMessage('Настройки уже соответствовали запросу; конфигурация перечитана.');
+        } catch (err) {
+            selectedOutputLoadInProgress = false;
+            setHardwareConfigMessage(
+                'Настройки уже соответствовали запросу, но перечитать конфигурацию не удалось. Обновите страницу.',
+                true
+            );
+        } finally {
+            hardwareConfigSaveInProgress = false;
+            updateMatrixSaveControls();
+        }
+        return;
+    }
+    if (response.status === 200 && responseText === 'OK') {
+        hardwareConfigSaveInProgress = false;
+        acceptAppliedHardwareState(requested);
+        updateMatrixSaveControls();
+        setHardwareConfigMessage('Аппаратные настройки сохранены и применены.');
         return;
     }
     if (response.status === 200 && responseText === 'REBOOT_REQUIRED') {
-        hardwareConfigPending = { ...requested };
         lockMatrixSavesForHardwareRestart();
         setHardwareConfigMessage('Настройки сохранены. Контроллер перезагружается.');
-        pollForHardwareRestart({ ...requested });
+        pollForHardwareRestart(requested);
         return;
     }
     if (response.status === 400 && responseText === 'BAD_CONFIG') {
@@ -3148,9 +3594,15 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
     if (response.status === 409 && responseText === 'RESTART_PENDING') {
         lockMatrixSavesForHardwareRestart();
         setHardwareConfigMessage(
-            'Настройки уже сохранены. Завершите перезагрузку контроллера вручную, затем обновите эту страницу.',
+            'Контроллер уже ожидает перезагрузки после другого сохранения. Дождитесь перезапуска или перезагрузите его вручную, затем обновите страницу.',
             true
         );
+        return;
+    }
+    if (response.status === 409 && responseText === 'MULTI_OUTPUT_CONFIG_REQUIRED') {
+        hardwareConfigSaveInProgress = false;
+        updateMatrixSaveControls();
+        setHardwareConfigMessage('Контроллер требует полный набор настроек LED1…LED4.', true);
         return;
     }
     if (response.status === 500 && responseText === 'SAVE_FAILED') {
@@ -3160,12 +3612,21 @@ document.getElementById('save_hardware_config_btn').addEventListener('click', as
         return;
     }
     if (response.status === 500 && responseText === 'SAVED_RESTART_REQUIRED') {
-        hardwareConfigPending = { ...requested };
         lockMatrixSavesForHardwareRestart();
         setHardwareConfigMessage(
             'Настройки сохранены, но автоматическая перезагрузка не запущена. Перезагрузите контроллер или питание вручную, затем обновите эту страницу.',
             true
         );
+        pollForHardwareRestart(requested);
+        return;
+    }
+    if (response.status === 500 && responseText === 'APPLY_FAILED_REBOOT_REQUIRED') {
+        lockMatrixSavesForHardwareRestart();
+        setHardwareConfigMessage(
+            'Настройки сохранены, но не применены в работающей прошивке. Перезагрузите контроллер вручную.',
+            true
+        );
+        pollForHardwareRestart(requested);
         return;
     }
 
@@ -3227,6 +3688,7 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
         return;
     }
 
+    const outputIndex = selectedOutputIndex;
     const submittedTopology = Number(pendingTopology);
     const body = new URLSearchParams();
     body.set('topology', String(submittedTopology));
@@ -3236,7 +3698,7 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
     const saveController = new AbortController();
     const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
-        const res = await fetch('/save_topology', {
+        const res = await fetch(`/save_topology?output=${outputIndex}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
@@ -3244,8 +3706,12 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
         });
         const responseText = (await res.text()).trim();
         if (res.status === 200 && responseText === 'OK') {
-            matrixConfig.topology = submittedTopology;
-            pendingTopology = submittedTopology;
+            appliedOutputs[outputIndex].topology = submittedTopology;
+            draftOutputs[outputIndex].topology = submittedTopology;
+            if (outputIndex === selectedOutputIndex) {
+                matrixConfig.topology = submittedTopology;
+                pendingTopology = submittedTopology;
+            }
             uncertainTopologySubmission = null;
             renderTopologyControls();
             setTopologyMessage('Схема физического соединения сохранена и применена.');
@@ -3285,7 +3751,7 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
 });
 
 document.getElementById('save_zones_btn').addEventListener('click', async () => {
-    if (matrixSavesBlockedByHardwareTransition()) {
+    if (selectedSpatialEditorBlocked()) {
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return;
     }
@@ -3304,6 +3770,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         return;
     }
     const submittedZoneMap = { ...hardwareZonesMap };
+    const outputIndex = selectedOutputIndex;
 
     zoneMapSaveInProgress = true;
     updateMatrixSaveControls();
@@ -3311,7 +3778,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
     const saveController = new AbortController();
     const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
-        const res = await fetch('/save_zones', {
+        const res = await fetch(`/save_zones?output=${outputIndex}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(submittedZoneMap),
@@ -3383,7 +3850,7 @@ document.getElementById('clear_all_zones_btn').addEventListener('click', () => {
 });
 
 document.getElementById('save_status_btn').addEventListener('click', async () => {
-    if (matrixSavesBlockedByHardwareTransition()) {
+    if (selectedSpatialEditorBlocked()) {
         alert('Сохранение матрицы заблокировано до перезагрузки контроллера.');
         return;
     }
@@ -3397,6 +3864,7 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
     }
 
     const submittedStatus = activeStatus;
+    const outputIndex = selectedOutputIndex;
     const submittedColors = sanitizeStatusLayerForPortZones(
         statusColorLayers[submittedStatus]
     );
@@ -3412,7 +3880,7 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
     statusSaveInProgress = true;
     updateMatrixSaveControls();
     try {
-        const res = await fetch('/save_status_colors', {
+        const res = await fetch(`/save_status_colors?output=${outputIndex}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: payload,
@@ -3586,9 +4054,11 @@ function buildFreeZoneBrightnessPayload(zoneId, brightness) {
     };
 }
 
-async function saveFreeZonePayload(payload, signal) {
-    if (matrixSavesBlockedByHardwareTransition()) return false;
-    const res = await fetch('/save_free_zone', {
+async function saveFreeZonePayload(payload, signal, outputIndex) {
+    if (selectedSpatialEditorBlocked() || outputIndex !== selectedOutputIndex) {
+        return { ok: false, uncertain: false };
+    }
+    const res = await fetch(`/save_free_zone?output=${outputIndex}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -3609,9 +4079,15 @@ function cancelFreeZoneBrightnessSave(zoneId) {
     }
 }
 
-async function persistFreeZoneBrightness(zoneId, brightness, revision, showError = true) {
+async function persistFreeZoneBrightness(
+    zoneId,
+    brightness,
+    revision,
+    showError = true,
+    outputIndex = selectedOutputIndex
+) {
     const id = String(zoneId);
-    if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
+    if (!backendAvailable || selectedSpatialEditorBlocked() || outputIndex !== selectedOutputIndex ||
         zoneMapDirty || freeBrightnessSaveInProgress[id]) return false;
 
     freeBrightnessSaveInProgress[id] = true;
@@ -3620,7 +4096,8 @@ async function persistFreeZoneBrightness(zoneId, brightness, revision, showError
     try {
         const result = await saveFreeZonePayload(
             buildFreeZoneBrightnessPayload(id, brightness),
-            saveController.signal
+            saveController.signal,
+            outputIndex
         );
         const ok = Boolean(result?.ok);
         if (result?.uncertain) {
@@ -3652,21 +4129,27 @@ async function persistFreeZoneBrightness(zoneId, brightness, revision, showError
         clearTimeout(saveTimeout);
         delete freeBrightnessSaveInProgress[id];
         if (newerDraftExists && freeBrightnessDirty[id]) {
-            scheduleFreeZoneBrightnessSave(id, freeBrightness[id]);
+            scheduleFreeZoneBrightnessSave(id, freeBrightness[id], false, outputIndex);
         }
     }
 }
 
-function scheduleFreeZoneBrightnessSave(zoneId, brightness, immediate = false) {
+function scheduleFreeZoneBrightnessSave(
+    zoneId,
+    brightness,
+    immediate = false,
+    outputIndex = selectedOutputIndex
+) {
     const id = String(zoneId);
     cancelFreeZoneBrightnessSave(id);
     if (!freeBrightnessDirty[id] || !backendAvailable ||
-        matrixSavesBlockedByHardwareTransition() || freeBrightnessBatchInProgress) return;
+        selectedSpatialEditorBlocked() || outputIndex !== selectedOutputIndex ||
+        freeBrightnessBatchInProgress) return;
 
     const revision = freeBrightnessRevisions[id];
     freeBrightnessSaveTimers[id] = setTimeout(() => {
         delete freeBrightnessSaveTimers[id];
-        persistFreeZoneBrightness(id, brightness, revision);
+        persistFreeZoneBrightness(id, brightness, revision, true, outputIndex);
     }, immediate ? 0 : BRIGHTNESS_SAVE_DEBOUNCE_MS);
 }
 
@@ -3706,16 +4189,15 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
     cancelFreeZoneBrightnessSave(zoneId);
     const submittedState = captureFreeZoneDraft(zoneId);
     const payload = buildFreeZonePayload(zoneId, submittedState);
+    const outputIndex = selectedOutputIndex;
 
     if (mockMode) {
-        setAppliedFreeZoneState(zoneId, submittedState);
-        loadFreeZoneDraftFromApplied(zoneId);
-        freeZoneDirty[zoneId] = false;
-        freeBrightnessDirty[zoneId] = false;
+        freeZoneDirty[zoneId] = true;
+        freeBrightnessDirty[zoneId] = true;
         uncertainFreeZoneState[zoneId] = false;
         updateDirtyIndicators();
         redrawMatrix();
-        alert('Демонстрационный режим: черновик применён только к локальному предпросмотру. Запрос к ESP32 не отправлялся.');
+        alert('Демонстрационный режим: черновик оставлен в браузере. Запрос к ESP32 не отправлялся.');
         return;
     }
 
@@ -3726,7 +4208,7 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
     freeZoneSaveInProgress = true;
     updateMatrixSaveControls();
     try {
-        const res = await fetch('/save_free_zone', {
+        const res = await fetch(`/save_free_zone?output=${outputIndex}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -3771,6 +4253,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
         return;
     }
     const configurableZones = getConfigurableFreeZoneIds();
+    const outputIndex = selectedOutputIndex;
     if (!configurableZones.length) {
         alert('Нет доступных свободных зон.');
         return;
@@ -3780,14 +4263,13 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
     if (mockMode) {
         configurableZones.forEach(zoneId => {
             freeBrightness[zoneId] = value;
-            appliedFreeZoneState(zoneId).brightness = value;
-            freeBrightnessDirty[zoneId] = false;
+            freeBrightnessDirty[zoneId] = true;
             cancelFreeZoneBrightnessSave(zoneId);
         });
         syncFreeColorInput();
         updateDirtyIndicators();
         redrawMatrix();
-        alert(`Демонстрационный режим: яркость ${value} применена только к локальному предпросмотру. Запрос к ESP32 не отправлялся.`);
+        alert(`Демонстрационный режим: яркость ${value} оставлена в черновике. Запрос к ESP32 не отправлялся.`);
         return;
     }
     if (!backendAvailable) {
@@ -3824,7 +4306,7 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
             freeBrightnessRevisions[zoneId] += 1;
             freeBrightnessDirty[zoneId] = true;
             const revision = freeBrightnessRevisions[zoneId];
-            const ok = await persistFreeZoneBrightness(zoneId, value, revision, false);
+            const ok = await persistFreeZoneBrightness(zoneId, value, revision, false, outputIndex);
             if (!ok) {
                 failedZones.push(zoneDisplayName(zoneId));
                 if (uncertainFreeZoneState[zoneId]) uncertainZones.push(zoneDisplayName(zoneId));
@@ -3852,63 +4334,159 @@ document.getElementById('apply_free_brightness_all_btn').addEventListener('click
 
 document.getElementById('refresh_diag_btn').addEventListener('click', loadDiagnostics);
 
-async function loadConfigInternal() {
-    let cfg = null;
-
+async function fetchOutputConfig(outputIndex) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), OUTPUT_CONFIG_REQUEST_TIMEOUT_MS);
     try {
-        const res = await fetch('/get_config');
-        if (!res.ok) {
-            const responseText = (await res.text()).trim();
-            if (res.status === 409 && responseText === 'MULTI_OUTPUT_UI_REQUIRED') {
-                backendAvailable = true;
-                mockMode = false;
-                matrixEditorUnavailable = true;
-                redrawMatrix();
-                await loadDiagnostics();
-                return;
-            }
-            throw new Error(`get_config ${res.status}`);
+        const response = await fetch(`/get_config?output=${outputIndex}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            const responseText = (await response.text()).trim();
+            const error = new Error(`get_config ${response.status} ${responseText}`);
+            error.controllerResponded = true;
+            throw error;
         }
-        cfg = await res.json();
-
-        if (!cfg.matrix) {
-            const sizeRes = await fetch('/get_size').catch(() => null);
-            if (sizeRes && sizeRes.ok) {
-                const parts = (await sizeRes.text()).split(':');
-                cfg.matrix = {
-                    cols: Number(parts[0]) || 12,
-                    rows: Number(parts[1]) || 8,
-                    total: (Number(parts[0]) || 12) * (Number(parts[1]) || 8),
-                    topology: 0,
-                };
+        try {
+            const cfg = await response.json();
+            if (!hardwareStateFromResponse(cfg) || Number(cfg.selectedOutputIndex) !== outputIndex) {
+                throw new Error('invalid selected output response');
             }
+            return cfg;
+        } catch (error) {
+            error.controllerResponded = true;
+            throw error;
         }
-
-        backendAvailable = true;
-        mockMode = false;
-        matrixEditorUnavailable = false;
-    } catch (err) {
-        cfg = buildMockConfig();
-        backendAvailable = false;
-        mockMode = true;
-        matrixEditorUnavailable = false;
+    } finally {
+        clearTimeout(timeout);
     }
+}
 
-    applyConfig(cfg);
+function renderSelectedOutputConfig(cfg, resetHardwareDrafts = false) {
+    applyConfig(cfg, { resetHardwareDrafts });
     buildSelects();
     syncFreeColorInput();
     buildMatrix();
     buildLegend();
+}
+
+async function switchSelectedOutput(outputIndex) {
+    const targetIndex = Number(outputIndex);
+    if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= LED_OUTPUT_COUNT ||
+        targetIndex === selectedOutputIndex) {
+        return;
+    }
+    if (outputSwitchBlocked()) {
+        alert('Дождитесь завершения загрузки или сохранения настроек.');
+        return;
+    }
+
+    captureHardwareConfigPending();
+    if (selectedOutputHasDiscardableDrafts() && !confirm(
+        `У LED${selectedOutputIndex + 1} есть несохранённые изменения разметки, рисунков, схемы физического соединения или настроек свободных зон. Отбросить их и перейти к LED${targetIndex + 1}?`
+    )) {
+        return;
+    }
+
+    const previousIndex = selectedOutputIndex;
+    const generation = ++outputLoadGeneration;
+    selectedOutputIndex = targetIndex;
+    selectedOutputLoadInProgress = true;
+    syncHardwareConfigForm();
+    renderOutputTabs();
+    redrawMatrix();
+
+    try {
+        const cfg = mockMode
+            ? buildMockConfig(targetIndex)
+            : await fetchOutputConfig(targetIndex);
+        if (generation !== outputLoadGeneration || selectedOutputIndex !== targetIndex) return;
+        selectedOutputLoadInProgress = false;
+        matrixEditorUnavailable = false;
+        renderSelectedOutputConfig(cfg, false);
+        setHardwareConfigMessage(mockMode
+            ? 'Демонстрационный режим: изменения существуют только в браузере.'
+            : '');
+    } catch (err) {
+        if (generation !== outputLoadGeneration) return;
+        selectedOutputIndex = previousIndex;
+        selectedOutputLoadInProgress = false;
+        matrixEditorUnavailable = false;
+        syncHardwareConfigForm();
+        buildSelects();
+        syncFreeColorInput();
+        buildMatrix();
+        buildLegend();
+        setHardwareConfigMessage(
+            `Не удалось загрузить LED${targetIndex + 1}. Текущий редактор и его черновики сохранены.`,
+            true
+        );
+    } finally {
+        if (generation === outputLoadGeneration) {
+            selectedOutputLoadInProgress = false;
+            renderOutputTabs();
+            redrawMatrix();
+        }
+    }
+}
+
+async function loadConfigInternal() {
+    let cfg = null;
+    let initialOutputZero = null;
+
+    try {
+        initialOutputZero = await fetchOutputConfig(0);
+        const hardwareState = hardwareStateFromResponse(initialOutputZero);
+        const firstEnabled = hardwareState.outputs.find(output => output.enabled)?.index ?? 0;
+        selectedOutputIndex = hardwareState.outputs[0].enabled ? 0 : firstEnabled;
+        cfg = selectedOutputIndex === 0
+            ? initialOutputZero
+            : await fetchOutputConfig(selectedOutputIndex);
+        backendAvailable = true;
+        mockMode = false;
+        matrixEditorUnavailable = false;
+    } catch (err) {
+        if (initialOutputZero) {
+            selectedOutputIndex = 0;
+            cfg = initialOutputZero;
+            backendAvailable = true;
+            mockMode = false;
+            matrixEditorUnavailable = false;
+            setHardwareConfigMessage('Не удалось загрузить первый включённый выход; показан LED1.', true);
+        } else if (err?.controllerResponded) {
+            selectedOutputIndex = 0;
+            backendAvailable = true;
+            mockMode = false;
+            matrixEditorUnavailable = true;
+            setHardwareConfigMessage('Контроллер ответил, но конфигурацию матриц загрузить не удалось.', true);
+        } else {
+            selectedOutputIndex = 0;
+            cfg = buildMockConfig(0);
+            backendAvailable = false;
+            mockMode = true;
+            matrixEditorUnavailable = false;
+        }
+    }
+
+    if (cfg) {
+        renderSelectedOutputConfig(cfg, true);
+    } else {
+        renderOutputTabs();
+        redrawMatrix();
+    }
     await loadDiagnostics();
 }
 
 async function loadConfig() {
     if (configLoadInProgress || authBackendRequestsBlocked()) return;
     configLoadInProgress = true;
+    updateMatrixSaveControls();
     try {
         await loadConfigInternal();
     } finally {
         configLoadInProgress = false;
+        updateMatrixSaveControls();
     }
 }
 
