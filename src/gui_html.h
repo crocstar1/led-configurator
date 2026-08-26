@@ -1101,7 +1101,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="status-line" id="status_editor_context"></div>
                     <div class="btn-row">
-                        <button class="btn danger" id="clear_status_btn" type="button">Сбросить ожидание всех портов</button>
+                        <button class="btn danger" id="clear_status_btn" type="button">Сбросить цвет ожидания к заводскому</button>
                     </div>
                     <div>
                         <label for="ports_brightness">Общая яркость портовых зон</label>
@@ -1397,9 +1397,9 @@ const STATUS_LABELS = {
 };
 
 const STATUS_RESET_LABELS = {
-    waiting: 'ожидание',
-    charging: 'зарядку',
-    error: 'ошибку',
+    waiting: 'ожидания',
+    charging: 'зарядки',
+    error: 'ошибки',
 };
 
 const STATUS_EDIT_MODE_LABELS = {
@@ -2231,12 +2231,9 @@ function updateStatusEditorControls() {
     modeSelect.disabled = blocked;
     colorInput.disabled = blocked;
     clearButton.disabled = blocked;
-    clearButton.classList.toggle('field-hidden', solidMode);
     document.getElementById('status_color_label').textContent =
         solidMode ? 'Цвет заливки' : 'Цвет кисти';
-    clearButton.textContent = `Сбросить ${STATUS_RESET_LABELS[activeStatus]} ${
-        activeStatusScope === 'all' ? 'всех активных портов' : `Порта ${activeStatusScope}`
-    }`;
+    clearButton.textContent = `Сбросить цвет ${STATUS_RESET_LABELS[activeStatus]} к заводскому`;
     notice.textContent = solidMode
         ? `Выбранный цвет сразу показан как черновик области «${statusScopeLabel()}». Запись выполняется кнопкой «Сохранить слой статуса».`
         : `Рисование разрешено только в области «${statusScopeLabel()}». Остальные пиксели портов заблокированы.`;
@@ -3249,24 +3246,27 @@ function applyStatusSolidColor() {
 }
 
 function resetSelectedStatusScope() {
-    if (freeZoneEditorBlocked() || statusEditMode !== 'pixels') return;
+    if (freeZoneEditorBlocked()) return;
     if (activeStatusScope === 'all' &&
-        !confirm(`Сбросить ${STATUS_RESET_LABELS[activeStatus]} всех активных портов к заводскому базовому цвету?`)) {
+        !confirm(`Сбросить цвет ${STATUS_RESET_LABELS[activeStatus]} всех активных портов к заводскому?`)) {
         return;
     }
 
-    if (activeStatusScope === 'all') {
-        statusColorLayers[activeStatus] = {};
-    } else {
-        Object.keys(statusColorLayers[activeStatus]).forEach(key => {
-            if (statusScopeMatchesZone(hardwareZonesMap[key] ?? '0')) {
-                delete statusColorLayers[activeStatus][key];
-            }
-        });
-    }
-    markStatusLayerDirty();
+    let changed = false;
+    Object.keys(statusColorLayers[activeStatus]).forEach(key => {
+        if (!statusScopeMatchesZone(hardwareZonesMap[key] ?? '0')) return;
+        delete statusColorLayers[activeStatus][key];
+        changed = true;
+    });
+
+    const factoryColor = FACTORY_STATUS_COLORS[activeStatus];
+    statusBrushColors[activeStatus] = factoryColor;
+    document.getElementById('status_color').value = factoryColor;
+    if (changed) markStatusLayerDirty();
     redrawMatrix();
-    alert('Выбранная область сброшена только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.');
+    alert(changed
+        ? 'Выбранная область сброшена только в браузере. Нажмите «Сохранить слой статуса», чтобы записать изменение в контроллер.'
+        : 'Выбранная область уже использует заводской цвет. Новых изменений нет.');
 }
 
 document.getElementById('status_color').addEventListener('input', e => {
