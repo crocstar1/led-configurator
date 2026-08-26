@@ -16,6 +16,7 @@ static constexpr size_t MATRIX_STATE_LAYER_QR = 4;
 static constexpr size_t MATRIX_STATE_LAYER_SERVICE = 5;
 static constexpr size_t MATRIX_STATE_LAYER_CUSTOM = 6;
 static constexpr size_t MATRIX_STATE_LAYER_COUNT = 7;
+static constexpr size_t MATRIX_STATE_STATUS_LIGHT_MODE_COUNT = 3;
 
 static constexpr uint32_t MATRIX_STATE_V3_MAGIC = 0x33534D54UL;  // "TMS3"
 static constexpr uint16_t MATRIX_STATE_V3_FORMAT_VERSION = 3;
@@ -67,6 +68,12 @@ struct MatrixStateV3Output {
   uint8_t colorOrder;
 };
 
+enum class StatusLightMode : uint8_t {
+  DEFAULT_MODE = 0,
+  STATIC_MODE = 1,
+  PULSE_MODE = 2,
+};
+
 // Derived runtime metadata. Offsets and lengths are never persisted.
 struct MatrixStateV3OutputLayout {
   uint16_t offset;
@@ -92,7 +99,8 @@ struct MatrixStateV3 {
   uint8_t waitingColor[3];
   uint8_t chargingColor[3];
   uint8_t errorColor[3];
-  uint8_t reservedHeader[13];
+  StatusLightMode statusLightModes[MATRIX_STATE_STATUS_LIGHT_MODE_COUNT];
+  uint8_t reservedHeader[10];
   MatrixStateV3Output outputs[LED_OUTPUT_COUNT];
   // Persisted as [outputIndex][freeZoneIndex] for LED1..LED4.
   MatrixStateStoredFreeZone freeZones[LED_OUTPUT_COUNT][FREE_ZONE_COUNT];
@@ -107,11 +115,23 @@ static_assert(FREE_ZONE_COUNT == 4,
               "The matrix-state layout is defined for four free zones");
 static_assert(MATRIX_STATE_LAYER_CUSTOM + 1U == MATRIX_STATE_LAYER_COUNT,
               "The matrix-state layout is defined for seven layers");
+static_assert(MATRIX_STATE_STATUS_LIGHT_MODE_COUNT == 3,
+              "The matrix-state layout is defined for three status modes");
+static_assert(MATRIX_STATE_LAYER_WAITING == 0 &&
+                  MATRIX_STATE_LAYER_CHARGING == 1 &&
+                  MATRIX_STATE_LAYER_ERROR == 2,
+              "Status-light modes must follow the three status-layer indexes");
+static_assert(static_cast<uint8_t>(StatusLightMode::DEFAULT_MODE) == 0 &&
+                  static_cast<uint8_t>(StatusLightMode::STATIC_MODE) == 1 &&
+                  static_cast<uint8_t>(StatusLightMode::PULSE_MODE) == 2,
+              "Unexpected persisted status-light-mode values");
 static_assert(sizeof(uint8_t) == 1 && sizeof(uint16_t) == 2 &&
                   sizeof(uint32_t) == 4,
               "Unexpected fixed-width integer sizes");
 static_assert(sizeof(LedProtocol) == 1 && sizeof(LedColorOrder) == 1,
               "Unexpected hardware enum sizes");
+static_assert(sizeof(StatusLightMode) == 1,
+              "Unexpected status-light-mode size");
 static_assert(sizeof(MatrixStateStoredFreeZone) == 8,
               "Unexpected free-zone storage layout");
 
@@ -193,6 +213,11 @@ static_assert(sizeof(decltype(MatrixStateV3::freeZones)) == 128,
 static_assert(std::extent<decltype(MatrixStateV3::layers), 0>::value ==
                   MATRIX_STATE_V3_LAYER_COUNT,
               "V3 must contain exactly seven layers");
+static_assert(std::extent<decltype(MatrixStateV3::statusLightModes), 0>::value ==
+                  MATRIX_STATE_STATUS_LIGHT_MODE_COUNT,
+              "V3 must contain exactly three status light modes");
+static_assert(sizeof(decltype(MatrixStateV3::statusLightModes)) == 3,
+              "Unexpected V3 combined status-light-mode size");
 
 static_assert(offsetof(MatrixStateV3, magic) == 0,
               "Unexpected V3 magic offset");
@@ -210,7 +235,9 @@ static_assert(offsetof(MatrixStateV3, chargingColor) == 13,
               "Unexpected V3 charging-color offset");
 static_assert(offsetof(MatrixStateV3, errorColor) == 16,
               "Unexpected V3 error-color offset");
-static_assert(offsetof(MatrixStateV3, reservedHeader) == 19,
+static_assert(offsetof(MatrixStateV3, statusLightModes) == 19,
+              "Unexpected V3 status-light-mode offset");
+static_assert(offsetof(MatrixStateV3, reservedHeader) == 22,
               "Unexpected V3 reserved-header offset");
 static_assert(offsetof(MatrixStateV3, outputs) == 32,
               "Unexpected V3 output-descriptor offset");
@@ -236,6 +263,12 @@ static_assert(std::is_trivially_copyable<MatrixStateV3>::value,
 bool matrix_state_storage_get_factory_status_color(
     size_t layerIndex,
     uint8_t color[3]);
+
+// Resolves the persisted DEFAULT mode to the established behavior for the
+// selected status layer. Invalid stored values are rejected by V3 validation.
+StatusLightMode matrix_state_resolve_status_light_mode(
+    size_t statusLayerIndex,
+    StatusLightMode storedMode);
 
 bool matrix_state_storage_clear_saved_state();
 

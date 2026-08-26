@@ -1094,11 +1094,19 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="grid-2">
                         <div>
+                            <label for="status_light_mode">Режим свечения</label>
+                            <select id="status_light_mode">
+                                <option value="static">Статично</option>
+                                <option value="pulse" selected>Пульсация</option>
+                            </select>
+                            <div class="hint">Режим общий для всех работающих матриц.</div>
+                        </div>
+                        <div>
                             <label for="status_color" id="status_color_label">Цвет кисти</label>
                             <input type="color" id="status_color" value="#00ff00">
                         </div>
-                        <div class="notice" id="status_mode_notice"></div>
                     </div>
+                    <div class="notice" id="status_mode_notice"></div>
                     <div class="status-line" id="status_editor_context"></div>
                     <div class="btn-row">
                         <button class="btn danger" id="clear_status_btn" type="button">Сбросить цвет ожидания к заводскому</button>
@@ -1385,6 +1393,15 @@ const FACTORY_STATUS_COLORS = {
     charging: '#0050ff',
     error: '#ff0000',
 };
+const FACTORY_STATUS_LIGHT_MODES = {
+    waiting: 'pulse',
+    charging: 'static',
+    error: 'static',
+};
+const STATUS_LIGHT_MODE_LABELS = {
+    static: 'Статично',
+    pulse: 'Пульсация',
+};
 let statusDefaults = { ...FACTORY_STATUS_COLORS };
 let statusBrushColors = { ...FACTORY_STATUS_COLORS };
 
@@ -1464,6 +1481,8 @@ let hardwareZonesMap = {};
 let savedHardwareZonesMap = {};
 let zoneMeta = [...DEFAULT_ZONES];
 let statusColorLayers = { waiting: {}, charging: {}, error: {} };
+let appliedStatusLightModes = { ...FACTORY_STATUS_LIGHT_MODES };
+let draftStatusLightModes = { ...FACTORY_STATUS_LIGHT_MODES };
 let freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
 let freeCustomLayers = { '5': {}, '6': {}, '7': {}, '8': {} };
 let freeStaticColors = { ...DEFAULT_FREE_STATIC_COLORS };
@@ -1616,6 +1635,7 @@ function buildMockConfig(outputIndex = 0) {
         c_wait: FACTORY_STATUS_COLORS.waiting,
         c_charge: FACTORY_STATUS_COLORS.charging,
         c_error: FACTORY_STATUS_COLORS.error,
+        statusLightModes: { ...FACTORY_STATUS_LIGHT_MODES },
         activePortCount: mockActivePortCount,
         selectedOutputIndex: selected.index,
         outputs: mockOutputs,
@@ -1811,6 +1831,21 @@ function zoneMapsEqual(left, right) {
 
 function statusEditModeLabel(mode = statusEditMode) {
     return STATUS_EDIT_MODE_LABELS[mode] || mode;
+}
+
+function statusLightModesFromResponse(value) {
+    if (!value || typeof value !== 'object') return null;
+    const modes = {};
+    for (const status of ['waiting', 'charging', 'error']) {
+        const mode = value[status];
+        if (mode !== 'static' && mode !== 'pulse') return null;
+        modes[status] = mode;
+    }
+    return modes;
+}
+
+function statusLightModeLabel(mode) {
+    return STATUS_LIGHT_MODE_LABELS[mode] || mode;
 }
 
 function sanitizeFreeLayerForZone(layer, zoneId) {
@@ -2222,13 +2257,18 @@ function updateStatusEditorControls() {
     const solidMode = statusEditMode === 'solid';
     const scopeSelect = document.getElementById('status_scope_select');
     const modeSelect = document.getElementById('status_mode_select');
+    const lightModeSelect = document.getElementById('status_light_mode');
     const colorInput = document.getElementById('status_color');
     const clearButton = document.getElementById('clear_status_btn');
     const context = document.getElementById('status_editor_context');
     const notice = document.getElementById('status_mode_notice');
+    const lightModeDraft = draftStatusLightModes[activeStatus];
+    const lightModeChanged = lightModeDraft !== appliedStatusLightModes[activeStatus];
 
     scopeSelect.disabled = blocked;
     modeSelect.disabled = blocked;
+    lightModeSelect.disabled = blocked;
+    lightModeSelect.value = lightModeDraft;
     colorInput.disabled = blocked;
     clearButton.disabled = blocked;
     document.getElementById('status_color_label').textContent =
@@ -2239,6 +2279,7 @@ function updateStatusEditorControls() {
         : `Рисование разрешено только в области «${statusScopeLabel()}». Остальные пиксели портов заблокированы.`;
     context.textContent = `${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${
         statusEditModeLabel()
+    } · свечение: ${statusLightModeLabel(lightModeDraft)}${lightModeChanged ? ' (черновик)' : ''
     } · ${statusLayerDirty[activeStatus] ? 'есть несохранённые изменения' : 'изменения сохранены'}`;
     document.querySelectorAll('[data-status]').forEach(button => {
         button.disabled = blocked;
@@ -2359,6 +2400,7 @@ function updateMatrixSaveControls() {
         'save_status_btn',
         'status_scope_select',
         'status_mode_select',
+        'status_light_mode',
         'status_color',
         'clear_zone_btn',
         'clear_all_zones_btn',
@@ -2392,6 +2434,8 @@ function updateMatrixSaveControls() {
 function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
     const hardwareState = hardwareStateFromResponse(cfg);
     if (!hardwareState) throw new Error('invalid output descriptors');
+    const loadedStatusLightModes = statusLightModesFromResponse(cfg.statusLightModes);
+    if (!loadedStatusLightModes) throw new Error('invalid status light modes');
     const responseOutputIndex = Number(cfg.selectedOutputIndex);
     if (!Number.isInteger(responseOutputIndex) || responseOutputIndex !== selectedOutputIndex) {
         throw new Error('unexpected selected output');
@@ -2433,6 +2477,8 @@ function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
     Object.keys(freeBrightnessRevisions).forEach(zoneId => { freeBrightnessRevisions[zoneId] += 1; });
     zoneMapDirty = false;
     statusLayerDirty = { waiting: false, charging: false, error: false };
+    appliedStatusLightModes = { ...loadedStatusLightModes };
+    draftStatusLightModes = { ...loadedStatusLightModes };
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
     uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
     if (!preservePortBrightnessDraft) portsBrightnessDirty = false;
@@ -3287,6 +3333,18 @@ document.getElementById('status_mode_select').addEventListener('change', e => {
     statusEditMode = e.target.value === 'solid' ? 'solid' : 'pixels';
     redrawMatrix();
 });
+document.getElementById('status_light_mode').addEventListener('change', e => {
+    if (matrixSavesBlockedByHardwareTransition()) return;
+    const lightMode = e.target.value;
+    if (lightMode !== 'static' && lightMode !== 'pulse') {
+        e.target.value = draftStatusLightModes[activeStatus];
+        return;
+    }
+    if (draftStatusLightModes[activeStatus] === lightMode) return;
+    draftStatusLightModes[activeStatus] = lightMode;
+    statusLayerDirty[activeStatus] = true;
+    redrawMatrix();
+});
 document.getElementById('zone_brush_btn').addEventListener('click', () => {
     zoneTool = 'brush';
     document.getElementById('zone_brush_btn').classList.add('active');
@@ -3862,12 +3920,14 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
 
     const submittedStatus = activeStatus;
     const outputIndex = selectedOutputIndex;
+    const submittedLightMode = draftStatusLightModes[submittedStatus];
     const submittedColors = sanitizeStatusLayerForPortZones(
         statusColorLayers[submittedStatus]
     );
     const payload = JSON.stringify({
         status: submittedStatus,
         baseColor: FACTORY_STATUS_COLORS[submittedStatus],
+        lightMode: submittedLightMode,
         colors: submittedColors,
     });
     const saveController = new AbortController();
@@ -3888,6 +3948,8 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
         if (ok) {
             statusColorLayers[submittedStatus] = submittedColors;
             statusDefaults[submittedStatus] = FACTORY_STATUS_COLORS[submittedStatus];
+            appliedStatusLightModes[submittedStatus] = submittedLightMode;
+            draftStatusLightModes[submittedStatus] = submittedLightMode;
             statusLayerDirty[submittedStatus] = false;
             saved = true;
         } else {

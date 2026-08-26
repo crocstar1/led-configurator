@@ -323,6 +323,18 @@ bool matrix_state_v3_calculate_output_layout(
   return true;
 }
 
+StatusLightMode matrix_state_resolve_status_light_mode(
+    size_t statusLayerIndex,
+    StatusLightMode storedMode) {
+  if (storedMode == StatusLightMode::STATIC_MODE ||
+      storedMode == StatusLightMode::PULSE_MODE) {
+    return storedMode;
+  }
+  return statusLayerIndex == MATRIX_STATE_LAYER_WAITING
+             ? StatusLightMode::PULSE_MODE
+             : StatusLightMode::STATIC_MODE;
+}
+
 void matrix_state_storage_clear_v3_spatial_data(MatrixStateV3 &state) {
   memset(state.zoneMap, ZONE_ID_OFF, sizeof(state.zoneMap));
   memset(state.layers, 0, sizeof(state.layers));
@@ -375,6 +387,17 @@ MatrixStateValidationResult matrix_state_storage_validate_v3(
       !bytesAreZero(state.reservedHeader, sizeof(state.reservedHeader)) ||
       !bytesAreZero(state.reservedTail, sizeof(state.reservedTail))) {
     return MatrixStateValidationResult::INVALID;
+  }
+
+  for (size_t statusIndex = 0;
+       statusIndex < MATRIX_STATE_STATUS_LIGHT_MODE_COUNT;
+       ++statusIndex) {
+    const StatusLightMode mode = state.statusLightModes[statusIndex];
+    if (mode != StatusLightMode::DEFAULT_MODE &&
+        mode != StatusLightMode::STATIC_MODE &&
+        mode != StatusLightMode::PULSE_MODE) {
+      return MatrixStateValidationResult::INVALID;
+    }
   }
 
   MatrixStateV3OutputLayout layout[LED_OUTPUT_COUNT] = {};

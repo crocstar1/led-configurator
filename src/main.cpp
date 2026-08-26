@@ -608,6 +608,19 @@ bool currentUiSupportsMatrixState(const MatrixStateV3 &state) {
     return true;
 }
 
+const char *statusLightModeApiName(StatusLightMode mode) {
+    return mode == StatusLightMode::PULSE_MODE ? "pulse" : "static";
+}
+
+bool parseStatusLightModeApiName(
+    const String &value,
+    StatusLightMode &mode) {
+    if (value == "static") mode = StatusLightMode::STATIC_MODE;
+    else if (value == "pulse") mode = StatusLightMode::PULSE_MODE;
+    else return false;
+    return true;
+}
+
 void pruneFreeCustomLayersForZoneMapSegment(
     MatrixStateV3 &state,
     const MatrixStateV3OutputLayout &outputLayout) {
@@ -1328,6 +1341,7 @@ bool parseStatusJsonObject(
 bool parseStatusSavePayload(
     const String &body,
     String &status,
+    String &lightMode,
     String &colorsJson,
     bool &hasBaseColor,
     String &baseColor) {
@@ -1337,6 +1351,7 @@ bool parseStatusSavePayload(
     }
 
     bool statusSeen = false;
+    bool lightModeSeen = false;
     bool colorsSeen = false;
     hasBaseColor = false;
     int position = 1;
@@ -1356,6 +1371,12 @@ bool parseStatusSavePayload(
                 return false;
             }
             statusSeen = true;
+        } else if (fieldName == "lightMode") {
+            if (lightModeSeen ||
+                !parseStatusJsonString(body, position, lightMode)) {
+                return false;
+            }
+            lightModeSeen = true;
         } else if (fieldName == "baseColor") {
             if (hasBaseColor ||
                 !parseStatusJsonString(body, position, baseColor)) {
@@ -1374,7 +1395,7 @@ bool parseStatusSavePayload(
 
         skipJsonWhitespace(body, position);
         if (position == body.length() - 1) {
-            return statusSeen && colorsSeen;
+            return statusSeen && lightModeSeen && colorsSeen;
         }
         if (position >= body.length() || body[position] != ',') return false;
         position++;
@@ -1555,7 +1576,19 @@ void handleGetConfig() {
     json += rgbToHex(matrixStateCandidate.chargingColor);
     json += "\",\"c_error\":\"";
     json += rgbToHex(matrixStateCandidate.errorColor);
-    json += "\",\"activePortCount\":";
+    json += "\",\"statusLightModes\":{\"waiting\":\"";
+    json += statusLightModeApiName(matrix_state_resolve_status_light_mode(
+        MATRIX_STATE_LAYER_WAITING,
+        matrixStateCandidate.statusLightModes[MATRIX_STATE_LAYER_WAITING]));
+    json += "\",\"charging\":\"";
+    json += statusLightModeApiName(matrix_state_resolve_status_light_mode(
+        MATRIX_STATE_LAYER_CHARGING,
+        matrixStateCandidate.statusLightModes[MATRIX_STATE_LAYER_CHARGING]));
+    json += "\",\"error\":\"";
+    json += statusLightModeApiName(matrix_state_resolve_status_light_mode(
+        MATRIX_STATE_LAYER_ERROR,
+        matrixStateCandidate.statusLightModes[MATRIX_STATE_LAYER_ERROR]));
+    json += "\"},\"activePortCount\":";
     json += String((int)matrixStateCandidate.activePortCount);
     json += ",\"selectedOutputIndex\":";
     json += String(selectedOutputIndex);
@@ -1891,12 +1924,14 @@ void handleSaveStatusColors() {
     }
 
     String requestedStatus;
+    String requestedLightMode;
     String colorsJson;
     String baseColorText;
     bool hasBaseColor = false;
     if (!parseStatusSavePayload(
             body,
             requestedStatus,
+            requestedLightMode,
             colorsJson,
             hasBaseColor,
             baseColorText)) {
@@ -1907,6 +1942,12 @@ void handleSaveStatusColors() {
     String status;
     if (!canonicalStatusName(requestedStatus, status)) {
         server.send(400, "text/plain", "BAD_STATUS");
+        return;
+    }
+
+    StatusLightMode lightMode = StatusLightMode::DEFAULT_MODE;
+    if (!parseStatusLightModeApiName(requestedLightMode, lightMode)) {
+        server.send(400, "text/plain", "BAD_LIGHT_MODE");
         return;
     }
 
@@ -1953,6 +1994,7 @@ void handleSaveStatusColors() {
         return;
     }
     memcpy(fallbackColor, factoryColor, sizeof(factoryColor));
+    matrixStateCandidate.statusLightModes[layerIndex] = lightMode;
 
     if (!saveAndApplyMatrixState("SAVE_LAYER_FAILED")) return;
     server.send(200, "text/plain", "OK");

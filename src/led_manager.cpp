@@ -264,17 +264,17 @@ bool storedLayerColor(const MatrixStateV3StoredLayer &layer,
   return true;
 }
 
-const MatrixStateV3StoredLayer *statusLayer(PortStatus status) {
+size_t statusLayerIndex(PortStatus status) {
   if (status == PORT_STATUS_WAITING) {
-    return &activeState.layers[MATRIX_STATE_LAYER_WAITING];
+    return MATRIX_STATE_LAYER_WAITING;
   }
   if (status == PORT_STATUS_CHARGING) {
-    return &activeState.layers[MATRIX_STATE_LAYER_CHARGING];
+    return MATRIX_STATE_LAYER_CHARGING;
   }
   if (status == PORT_STATUS_ERROR) {
-    return &activeState.layers[MATRIX_STATE_LAYER_ERROR];
+    return MATRIX_STATE_LAYER_ERROR;
   }
-  return nullptr;
+  return MATRIX_STATE_LAYER_COUNT;
 }
 
 const MatrixStateStoredFreeZone *freeZoneConfig(size_t outputIndex,
@@ -312,8 +312,12 @@ CRGB renderPortPixel(size_t logicalIndex,
   }
 
   CRGB color;
-  const MatrixStateV3StoredLayer *layer = statusLayer(status);
-  if (layer != nullptr && storedLayerColor(*layer, logicalIndex, color)) {
+  const size_t layerIndex = statusLayerIndex(status);
+  if (layerIndex >= MATRIX_STATE_STATUS_LIGHT_MODE_COUNT) {
+    return CRGB::Black;
+  }
+  const MatrixStateV3StoredLayer &layer = activeState.layers[layerIndex];
+  if (storedLayerColor(layer, logicalIndex, color)) {
     color.nscale8_video(activeState.portBrightness);
   } else if (status == PORT_STATUS_WAITING) {
     color = CRGB(activeState.waitingColor[0],
@@ -334,9 +338,12 @@ CRGB renderPortPixel(size_t logicalIndex,
 
   if (status == PORT_STATUS_ERROR) {
     color = visibleErrorColor(color);
-    return color;
   }
-  if (status == PORT_STATUS_WAITING) {
+
+  const StatusLightMode lightMode = matrix_state_resolve_status_light_mode(
+      layerIndex,
+      activeState.statusLightModes[layerIndex]);
+  if (lightMode == StatusLightMode::PULSE_MODE) {
     color.nscale8_video(pulseBrightness);
   }
   return color;
