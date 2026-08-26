@@ -1479,11 +1479,16 @@ const FREE_ZONE_MOBILE_MODE_LABELS = {
     custom: 'Пиксельный рисунок',
 };
 
+const TOPOLOGY_MAX = 7;
 const TOPOLOGY_OPTIONS = [
     { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'Светодиод 0 справа снизу, далее змейкой по столбцам.' },
     { value: 1, key: 'vert_up', label: 'Вертикальная · старт слева снизу', hint: 'Светодиод 0 слева снизу, далее змейкой по столбцам.' },
     { value: 2, key: 'horiz_right', label: 'Горизонтальная · старт слева сверху', hint: 'Светодиод 0 слева сверху, далее змейкой по строкам.' },
     { value: 3, key: 'horiz_left', label: 'Горизонтальная · старт справа сверху', hint: 'Светодиод 0 справа сверху, далее змейкой по строкам.' },
+    { value: 4, key: 'vert_right_top', label: 'Вертикальная · старт справа сверху', hint: 'Светодиод 0 справа сверху, далее змейкой по столбцам.' },
+    { value: 5, key: 'vert_left_top', label: 'Вертикальная · старт слева сверху', hint: 'Светодиод 0 слева сверху, далее змейкой по столбцам.' },
+    { value: 6, key: 'horiz_left_bottom', label: 'Горизонтальная · старт слева снизу', hint: 'Светодиод 0 слева снизу, далее змейкой по строкам.' },
+    { value: 7, key: 'horiz_right_bottom', label: 'Горизонтальная · старт справа снизу', hint: 'Светодиод 0 справа снизу, далее змейкой по строкам.' },
 ];
 const RUNTIME_STALE_WARNING_MS = 500;
 
@@ -2082,7 +2087,7 @@ function normalizeOutputDescriptor(raw, index) {
     const ledProtocol = String(source.ledProtocol ?? '');
     const colorOrder = String(source.colorOrder ?? '');
     if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 0 || cols < 0 ||
-        !Number.isInteger(topology) || topology < 0 || topology > 3 ||
+        !Number.isInteger(topology) || topology < 0 || topology > TOPOLOGY_MAX ||
         ledProtocol !== HARDWARE_SUPPORTED_PROTOCOL ||
         !HARDWARE_COLOR_ORDERS.includes(colorOrder)) {
         return null;
@@ -2615,6 +2620,11 @@ function topologyOption(value) {
     return TOPOLOGY_OPTIONS.find(item => item.value === Number(value)) || TOPOLOGY_OPTIONS[0];
 }
 
+function topologyIsVertical(value) {
+    const topology = Number(value);
+    return topology === 0 || topology === 1 || topology === 4 || topology === 5;
+}
+
 function ledIndexForTopology(x, y, topology) {
     let tx = x;
     let ty = y;
@@ -2631,6 +2641,16 @@ function ledIndexForTopology(x, y, topology) {
         case 3:
             tx = (COLS - 1) - x;
             ty = (ROWS - 1) - y;
+            return (ty % 2 === 0) ? (ty * COLS) + tx : (ty * COLS) + ((COLS - 1) - tx);
+        case 4:
+            tx = (COLS - 1) - x;
+            return (tx % 2 === 0) ? (tx * ROWS) + ((ROWS - 1) - ty) : (tx * ROWS) + ty;
+        case 5:
+            return (tx % 2 === 0) ? (tx * ROWS) + ((ROWS - 1) - ty) : (tx * ROWS) + ty;
+        case 6:
+            return (ty % 2 === 0) ? (ty * COLS) + tx : (ty * COLS) + ((COLS - 1) - tx);
+        case 7:
+            tx = (COLS - 1) - x;
             return (ty % 2 === 0) ? (ty * COLS) + tx : (ty * COLS) + ((COLS - 1) - tx);
         default:
             return -1;
@@ -2659,7 +2679,11 @@ function renderTopologyControls() {
         });
     }
 
-    const normalized = Math.max(0, Math.min(3, Number(pendingTopology) || 0));
+    const parsedTopology = Number(pendingTopology);
+    const normalized = Number.isInteger(parsedTopology) &&
+        parsedTopology >= 0 && parsedTopology <= TOPOLOGY_MAX
+        ? parsedTopology
+        : 0;
     pendingTopology = normalized;
     select.value = String(normalized);
     summary.textContent = topologyOption(normalized).hint;
@@ -2699,7 +2723,7 @@ function renderTopologyControls() {
         const direction = document.createElement('div');
         direction.className = 'topology-direction';
         const title = document.createElement('strong');
-        title.textContent = normalized < 2
+        title.textContent = topologyIsVertical(normalized)
             ? 'Вертикальная змейка по столбцам · чередование ↑ / ↓'
             : 'Горизонтальная змейка по строкам · чередование → / ←';
         const endpoints = document.createElement('span');

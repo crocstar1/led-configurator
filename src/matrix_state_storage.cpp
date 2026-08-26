@@ -13,7 +13,7 @@ static constexpr char MATRIX_NVS_NAMESPACE[] = "matrix";
 static constexpr char MATRIX_NVS_LEGACY_V2_KEY[] = "state_v2";
 static constexpr char MATRIX_NVS_V3_KEY[] = "state_v3";
 
-static constexpr uint8_t TOPOLOGY_MAX = 3;
+static constexpr uint8_t TOPOLOGY_MAX = 7;
 static constexpr uint8_t DEFAULT_PORT_BRIGHTNESS = 120;
 static constexpr uint8_t DEFAULT_FREE_ZONE_BRIGHTNESS = 100;
 static constexpr uint8_t FACTORY_STATUS_COLORS[3][3] = {

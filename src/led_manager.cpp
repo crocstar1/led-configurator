@@ -205,7 +205,7 @@ void runStartupAnimation() {
   startupShowColor(CRGB::Green);
 }
 
-// Preserve the four existing topology meanings for arbitrary rows/cols.
+// Preserve the existing topology meanings for arbitrary rows/cols.
 int logicalToPhysicalIndex(uint16_t x,
                            uint16_t y,
                            const MatrixStateV3Output &output,
@@ -236,6 +236,24 @@ int logicalToPhysicalIndex(uint16_t x,
     case 3:  // Right-top start, horizontal snake.
       tx = output.cols - 1U - x;
       ty = output.rows - 1U - y;
+      physicalIndex = static_cast<size_t>(ty) * output.cols +
+                      ((ty % 2U) == 0 ? tx : output.cols - 1U - tx);
+      break;
+    case 4:  // Right-top start, vertical snake.
+      tx = output.cols - 1U - x;
+      physicalIndex = static_cast<size_t>(tx) * output.rows +
+                      ((tx % 2U) == 0 ? output.rows - 1U - ty : ty);
+      break;
+    case 5:  // Left-top start, vertical snake.
+      physicalIndex = static_cast<size_t>(tx) * output.rows +
+                      ((tx % 2U) == 0 ? output.rows - 1U - ty : ty);
+      break;
+    case 6:  // Left-bottom start, horizontal snake.
+      physicalIndex = static_cast<size_t>(ty) * output.cols +
+                      ((ty % 2U) == 0 ? tx : output.cols - 1U - tx);
+      break;
+    case 7:  // Right-bottom start, horizontal snake.
+      tx = output.cols - 1U - x;
       physicalIndex = static_cast<size_t>(ty) * output.cols +
                       ((ty % 2U) == 0 ? tx : output.cols - 1U - tx);
       break;

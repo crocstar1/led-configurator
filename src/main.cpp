@@ -40,6 +40,7 @@ static constexpr uint32_t CONTROLLER_RESTART_DELAY_MS = 1000;
 static constexpr uint32_t SERVICE_BUTTON_DEBOUNCE_MS = 40;
 static constexpr uint32_t SERVICE_BUTTON_AP_HOLD_MS = 3000;
 static constexpr uint32_t SERVICE_BUTTON_RESET_HOLD_MS = 10000;
+static constexpr uint8_t MATRIX_TOPOLOGY_MAX = 7;
 // Worst current 500-pixel chunk is 9007 bytes (a full free-zone layer at 1x500/500x1).
 static constexpr size_t GET_CONFIG_CHUNK_RESERVE = 12U * 1024U;
 static constexpr size_t HARDWARE_CONFIG_BODY_LIMIT = 1024U;
@@ -1071,7 +1072,7 @@ bool parseHardwareOutputDescriptor(
         index != static_cast<int>(expectedIndex) ||
         rows < 0 || rows > static_cast<int>(MAX_LED_COUNT_PER_OUTPUT) ||
         cols < 0 || cols > static_cast<int>(MAX_LED_COUNT_PER_OUTPUT) ||
-        topology < 0 || topology > 3) {
+        topology < 0 || topology > MATRIX_TOPOLOGY_MAX) {
         return false;
     }
     if ((enabled && (rows == 0 || cols == 0)) ||
@@ -1101,7 +1102,7 @@ bool validateMultiOutputHardwareConfig(
     for (size_t outputIndex = 0; outputIndex < LED_OUTPUT_COUNT;
          outputIndex++) {
         const MatrixStateV3Output &output = hardware.outputs[outputIndex];
-        if (output.enabled > 1 || output.topology > 3 ||
+        if (output.enabled > 1 || output.topology > MATRIX_TOPOLOGY_MAX ||
             !hardware_config_led_output_supported(
                 static_cast<LedProtocol>(output.ledProtocol),
                 static_cast<LedColorOrder>(output.colorOrder))) {
@@ -1954,7 +1955,7 @@ void handleSaveTopology() {
         if (!extractJsonIntField(body, "topology", topology)) topology = -1;
     }
 
-    if (topology < 0 || topology > 3) {
+    if (topology < 0 || topology > MATRIX_TOPOLOGY_MAX) {
         server.send(400, "text/plain", "BAD_TOPOLOGY");
         return;
     }
