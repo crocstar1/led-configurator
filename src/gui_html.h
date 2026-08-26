@@ -1328,6 +1328,18 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                     </form>
                     <div class="hint" id="firmware_message">Выберите файл прошивки с расширением .bin.</div>
+                    <div class="section-divider"></div>
+                    <div class="section" aria-labelledby="controller_actions_title">
+                        <div>
+                            <label id="controller_actions_title">Управление контроллером</label>
+                            <div class="hint">Команды выполняются после подтверждения и не изменяют установленную прошивку.</div>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn secondary" id="controller_restart_btn" type="button">Перезагрузить контроллер</button>
+                            <button class="btn danger" id="controller_factory_reset_btn" type="button">Сбросить все настройки</button>
+                        </div>
+                        <div class="hint" id="controller_action_message" aria-live="polite"></div>
+                    </div>
                 </div>
             </section>
 
@@ -1563,6 +1575,8 @@ let authStatusRequestInFlight = false;
 let authSaveInProgress = false;
 let authReloadRequired = false;
 let firmwareUploadInProgress = false;
+let controllerActionInProgress = false;
+let controllerRestartExpected = false;
 
 const BRIGHTNESS_SAVE_DEBOUNCE_MS = 500;
 const TOPOLOGY_NUMBER_PREVIEW_MAX_PIXELS = 256;
@@ -1580,6 +1594,7 @@ const HARDWARE_COLOR_ORDERS = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'];
 const NETWORK_SCAN_POLL_MS = 500;
 const NETWORK_SCAN_UI_TIMEOUT_MS = 14000;
 const AUTH_SAVE_REQUEST_TIMEOUT_MS = 10000;
+const CONTROLLER_ACTION_REQUEST_TIMEOUT_MS = 10000;
 
 const grid = document.getElementById('matrix_grid');
 
@@ -3201,6 +3216,7 @@ function setServiceOpen(open) {
     if (open && activeServiceSection === 'firmware') {
         renderInstalledFirmwareInfo();
         loadDiagnostics();
+        updateControllerActionControls();
     }
 }
 
@@ -3221,6 +3237,7 @@ document.querySelectorAll('[data-service]').forEach(btn => {
             renderInstalledFirmwareInfo();
             loadDiagnostics();
             updateFirmwareFileState();
+            updateControllerActionControls();
         }
     });
 });
@@ -3242,6 +3259,12 @@ document.getElementById('firmware_file').addEventListener('change', updateFirmwa
 document.getElementById('firmware_form').addEventListener('submit', e => {
     e.preventDefault();
     uploadFirmware();
+});
+document.getElementById('controller_restart_btn').addEventListener('click', () => {
+    requestControllerAction('restart');
+});
+document.getElementById('controller_factory_reset_btn').addEventListener('click', () => {
+    requestControllerAction('factory_reset');
 });
 
 document.getElementById('zone_select').addEventListener('change', e => {
@@ -5301,6 +5324,104 @@ function setFirmwareMessage(text, isError = false) {
     el.style.color = isError ? 'var(--red)' : 'var(--muted)';
 }
 
+function setControllerActionMessage(text, isError = false) {
+    const el = document.getElementById('controller_action_message');
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+function updateControllerActionControls() {
+    const unavailable = !backendAvailable || mockMode;
+    const blocked = unavailable || controllerActionInProgress ||
+        controllerRestartExpected || firmwareUploadInProgress ||
+        hardwareRestartInProgress;
+    document.getElementById('controller_restart_btn').disabled = blocked;
+    document.getElementById('controller_factory_reset_btn').disabled = blocked;
+}
+
+async function requestControllerAction(action) {
+    if (mockMode || !backendAvailable) {
+        setControllerActionMessage(
+            'Демонстрация: команды контроллеру не отправляются.',
+            true
+        );
+        return;
+    }
+    if (controllerActionInProgress || controllerRestartExpected ||
+        firmwareUploadInProgress || hardwareRestartInProgress) return;
+
+    const factoryReset = action === 'factory_reset';
+    const confirmed = window.confirm(factoryReset
+        ? 'Будут удалены настройки матриц, зон, слоёв, яркости, топологий, сети и авторизации. Прошивка не удаляется. После перезагрузки потребуется подключиться к заводской точке доступа. Продолжить?'
+        : 'Перезагрузить контроллер? Несохранённые изменения интерфейса будут потеряны.');
+    if (!confirmed) return;
+
+    const endpoint = factoryReset ? '/factory_reset' : '/restart';
+    const expectedResponse = factoryReset ? 'RESETTING' : 'RESTARTING';
+    const controller = new AbortController();
+    const timeout = setTimeout(
+        () => controller.abort(),
+        CONTROLLER_ACTION_REQUEST_TIMEOUT_MS
+    );
+    controllerActionInProgress = true;
+    setControllerActionMessage(factoryReset
+        ? 'Сбрасываем настройки контроллера...'
+        : 'Отправляем команду перезагрузки...');
+    updateControllerActionControls();
+    updateFirmwareFileState();
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            signal: controller.signal,
+        });
+        const responseText = (await response.text()).trim();
+        if (response.status === 200 && responseText === expectedResponse) {
+            controllerRestartExpected = true;
+            setControllerActionMessage(factoryReset
+                ? 'Настройки сбрасываются, контроллер перезагружается. После запуска подключитесь к заводской точке доступа.'
+                : 'Контроллер перезагружается. Откройте страницу повторно после запуска.');
+            return;
+        }
+        if (response.status === 409 && responseText === 'RESTART_PENDING') {
+            controllerRestartExpected = true;
+            setControllerActionMessage(
+                'Перезагрузка уже запланирована. Дождитесь запуска контроллера.'
+            );
+            return;
+        }
+        if (response.status === 409 && responseText === 'OTA_IN_PROGRESS') {
+            setControllerActionMessage(
+                'Дождитесь завершения загрузки прошивки.',
+                true
+            );
+            return;
+        }
+        if (response.status === 500 && responseText === 'RESET_FAILED') {
+            setControllerActionMessage(
+                'Не удалось удалить все настройки. Контроллер не будет перезагружен автоматически.',
+                true
+            );
+            return;
+        }
+        setControllerActionMessage(
+            `Команда не выполнена: ${responseText || `HTTP ${response.status}`}.`,
+            true
+        );
+    } catch (error) {
+        controllerRestartExpected = true;
+        setControllerActionMessage(
+            'Результат неизвестен. Дождитесь возможной перезагрузки либо откройте страницу заново.',
+            true
+        );
+    } finally {
+        clearTimeout(timeout);
+        controllerActionInProgress = false;
+        updateControllerActionControls();
+        updateFirmwareFileState();
+    }
+}
+
 function firmwareErrorLabel(code) {
     const labels = {
         AUTH_REQUIRED: 'требуется авторизация',
@@ -5324,7 +5445,8 @@ function updateFirmwareFileState() {
     const file = input.files && input.files[0];
 
     setFirmwareProgress(0);
-    button.disabled = !file || firmwareUploadInProgress || authBackendRequestsBlocked();
+    button.disabled = !file || firmwareUploadInProgress || authBackendRequestsBlocked() ||
+        controllerActionInProgress || controllerRestartExpected;
 
     if (!file) {
         label.textContent = 'Файл не выбран.';
@@ -5351,7 +5473,8 @@ function updateFirmwareFileState() {
 }
 
 function uploadFirmware() {
-    if (authBackendRequestsBlocked() || firmwareUploadInProgress) return;
+    if (authBackendRequestsBlocked() || firmwareUploadInProgress ||
+        controllerActionInProgress || controllerRestartExpected) return;
     if (!backendAvailable) {
         setFirmwareMessage('Контроллер недоступен, загрузка прошивки невозможна.', true);
         return;
@@ -5380,6 +5503,7 @@ function uploadFirmware() {
     const xhr = new XMLHttpRequest();
     firmwareUploadInProgress = true;
     button.disabled = true;
+    updateControllerActionControls();
     setFirmwareProgress(0);
     setFirmwareMessage('Загрузка прошивки...');
 
@@ -5401,16 +5525,19 @@ function uploadFirmware() {
         }
         firmwareUploadInProgress = false;
         updateFirmwareFileState();
+        updateControllerActionControls();
         setFirmwareMessage(`Ошибка прошивки: ${firmwareErrorLabel(response || String(xhr.status))}.`, true);
     };
     xhr.onerror = () => {
         firmwareUploadInProgress = false;
         updateFirmwareFileState();
+        updateControllerActionControls();
         setFirmwareMessage('Ошибка соединения при загрузке прошивки.', true);
     };
     xhr.onabort = () => {
         firmwareUploadInProgress = false;
         updateFirmwareFileState();
+        updateControllerActionControls();
         setFirmwareMessage('Загрузка прошивки прервана.', true);
     };
     xhr.send(form);

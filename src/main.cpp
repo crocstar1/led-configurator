@@ -26,6 +26,9 @@ bool otaRestartPending = false;
 String otaUpdateError = "";
 unsigned long otaRestartAt = 0;
 
+static bool controllerRestartPending = false;
+static unsigned long controllerRestartAt = 0;
+
 static bool hardwareConfigRestartRequired = false;
 static bool hardwareConfigRestartScheduled = false;
 static bool matrixUiRequiresMultiOutput = false;
@@ -33,6 +36,7 @@ static unsigned long hardwareConfigRestartAt = 0;
 
 static constexpr uint32_t INPUT_TASK_PERIOD_MS = 50;
 static constexpr uint32_t HARDWARE_CONFIG_RESTART_DELAY_MS = 1000;
+static constexpr uint32_t CONTROLLER_RESTART_DELAY_MS = 1000;
 static constexpr uint32_t SERVICE_BUTTON_DEBOUNCE_MS = 40;
 static constexpr uint32_t SERVICE_BUTTON_AP_HOLD_MS = 3000;
 static constexpr uint32_t SERVICE_BUTTON_RESET_HOLD_MS = 10000;
@@ -43,6 +47,12 @@ static constexpr size_t HARDWARE_CONFIG_BODY_LIMIT = 1024U;
 struct MultiOutputHardwareConfig {
     uint8_t activePortCount;
     MatrixStateV3Output outputs[LED_OUTPUT_COUNT];
+};
+
+struct FactoryResetResult {
+    bool matrixCleared;
+    bool networkCleared;
+    bool authCleared;
 };
 
 static bool inputTaskStarted = false;
@@ -137,6 +147,25 @@ static bool serviceButtonIsPressed() {
         BOARD_SERVICE_BUTTON_ACTIVE_LEVEL;
 }
 
+static FactoryResetResult clearAllUserSettings() {
+    FactoryResetResult result = {
+        matrix_state_storage_clear_saved_state(),
+        network_config_clear_saved_settings(),
+        auth_config_clear_saved_settings(),
+    };
+    Serial.printf("Factory reset matrix state: %s\n",
+        result.matrixCleared ? "success" : "failed");
+    Serial.printf("Factory reset net_cfg: %s\n",
+        result.networkCleared ? "cleared" : "failed");
+    Serial.printf("Factory reset auth_cfg: %s\n",
+        result.authCleared ? "cleared" : "failed");
+    return result;
+}
+
+static bool factoryResetSucceeded(const FactoryResetResult &result) {
+    return result.matrixCleared && result.networkCleared && result.authCleared;
+}
+
 static void setupServiceButton() {
     pinMode(BOARD_SERVICE_BUTTON_PIN, INPUT_PULLUP);
     serviceButtonRawPressed = serviceButtonIsPressed();
@@ -162,17 +191,8 @@ static void handleServiceButtonFactoryReset() {
     serviceButtonResetHandled = true;
     Serial.println("BOOT service button held for 10 seconds; factory reset started");
 
-    const bool matrixCleared = matrix_state_storage_clear_saved_state();
-    const bool networkCleared = network_config_clear_saved_settings();
-    const bool authCleared = auth_config_clear_saved_settings();
-    Serial.printf("Factory reset matrix state: %s\n",
-        matrixCleared ? "success" : "failed");
-    Serial.printf("Factory reset net_cfg: %s\n",
-        networkCleared ? "cleared" : "failed");
-    Serial.printf("Factory reset auth_cfg: %s\n",
-        authCleared ? "cleared" : "failed");
-
-    if (matrixCleared && networkCleared && authCleared) {
+    const FactoryResetResult resetResult = clearAllUserSettings();
+    if (factoryResetSucceeded(resetResult)) {
         serviceButtonRestartPending = true;
         Serial.println("Factory reset complete; release BOOT to restart ESP32");
         return;
@@ -223,7 +243,7 @@ static void pollServiceButton() {
     if (!serviceButtonApHandled && heldMs >= SERVICE_BUTTON_AP_HOLD_MS) {
         handleServiceButtonApHold();
     }
-    if (!serviceButtonResetHandled &&
+    if (!serviceButtonResetHandled && !controllerRestartPending &&
         heldMs >= SERVICE_BUTTON_RESET_HOLD_MS) {
         handleServiceButtonFactoryReset();
     }
@@ -528,6 +548,68 @@ void appendFreeZoneConfigJson(
         outputIndex,
         outputLayout);
     json += "}";
+}
+
+static bool restartAlreadyScheduled() {
+    return controllerRestartPending || hardwareConfigRestartScheduled ||
+        otaRestartPending || serviceButtonRestartPending;
+}
+
+static bool otaUploadInProgress() {
+    return otaUploadAuthorized || Update.isRunning();
+}
+
+static bool rejectSaveForControllerRestart() {
+    if (!controllerRestartPending) return false;
+    server.send(409, "text/plain", "RESTART_PENDING");
+    return true;
+}
+
+static void scheduleControllerRestart() {
+    controllerRestartPending = true;
+    controllerRestartAt = millis() + CONTROLLER_RESTART_DELAY_MS;
+}
+
+void handleControllerRestart() {
+    if (!requireHttpAuth()) return;
+    if (otaUploadInProgress()) {
+        server.send(409, "text/plain", "OTA_IN_PROGRESS");
+        return;
+    }
+    if (restartAlreadyScheduled()) {
+        server.send(409, "text/plain", "RESTART_PENDING");
+        return;
+    }
+
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", "RESTARTING");
+    scheduleControllerRestart();
+    Serial.println("Web restart requested; restarting ESP32 in 1 second");
+}
+
+void handleControllerFactoryReset() {
+    if (!requireHttpAuth()) return;
+    if (otaUploadInProgress()) {
+        server.send(409, "text/plain", "OTA_IN_PROGRESS");
+        return;
+    }
+    if (restartAlreadyScheduled()) {
+        server.send(409, "text/plain", "RESTART_PENDING");
+        return;
+    }
+
+    Serial.println("Web factory reset started");
+    const FactoryResetResult resetResult = clearAllUserSettings();
+    if (!factoryResetSucceeded(resetResult)) {
+        Serial.println("Web factory reset incomplete; automatic restart cancelled");
+        server.send(500, "text/plain", "RESET_FAILED");
+        return;
+    }
+
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", "RESETTING");
+    scheduleControllerRestart();
+    Serial.println("Web factory reset complete; restarting ESP32 in 1 second");
 }
 
 void appendZoneMetadataJson(
@@ -1434,6 +1516,7 @@ bool snapshotMatrixState() {
 }
 
 bool rejectMatrixSaveForRestart() {
+    if (rejectSaveForControllerRestart()) return true;
     if (hardwareConfigRestartRequired) {
         server.send(409, "text/plain", "RESTART_PENDING");
         return true;
@@ -2205,6 +2288,7 @@ void handleScanNetworks() {
 
 void handleSaveNetworkConfig() {
     if (!requireHttpAuth()) return;
+    if (rejectSaveForControllerRestart()) return;
 
     NetworkConfig next = network_config_get();
 
@@ -2268,6 +2352,7 @@ void handleSaveNetworkConfig() {
 
 void handleNetworkReconnect() {
     if (!requireHttpAuth()) return;
+    if (rejectSaveForControllerRestart()) return;
     network_schedule_apply(1500);
     server.send(200, "text/plain", "RECONNECT_SCHEDULED");
 }
@@ -2287,6 +2372,7 @@ void handleAuthStatus() {
 
 void handleSaveAuth() {
     if (!requireHttpAuth()) return;
+    if (rejectSaveForControllerRestart()) return;
 
     const String enabledValue = server.arg("enabled");
     if (enabledValue != "0" && enabledValue != "1") {
@@ -2484,14 +2570,22 @@ void setup() {
     server.on("/auth_status", HTTP_GET, handleAuthStatus);
     server.on("/save_auth", HTTP_POST, handleSaveAuth);
     server.on("/diagnostics", handleDiagnostics);
+    server.on("/restart", HTTP_POST, handleControllerRestart);
+    server.on("/factory_reset", HTTP_POST, handleControllerFactoryReset);
 
     server.on("/update", HTTP_POST, []() {
         if (!requireHttpAuth()) return;
+        if (controllerRestartPending) {
+            server.send(409, "text/plain", "RESTART_PENDING");
+            return;
+        }
         server.sendHeader("Connection", "close");
         if (otaUpdateSuccess && !Update.hasError()) {
             otaRestartPending = true;
             otaRestartAt = millis() + 1000;
             server.send(200, "text/plain", "OK");
+        } else if (otaUpdateError == "RESTART_PENDING") {
+            server.send(409, "text/plain", "RESTART_PENDING");
         } else {
             server.send(500, "text/plain", otaUpdateError.length() ? otaUpdateError : "UPDATE_FAILED");
         }
@@ -2503,6 +2597,10 @@ void setup() {
             otaUpdateError = "";
             if (!otaUploadAuthorized) {
                 otaUpdateError = "AUTH_REQUIRED";
+                return;
+            }
+            if (restartAlreadyScheduled()) {
+                otaUpdateError = "RESTART_PENDING";
                 return;
             }
             if (upload.filename.length() == 0) {
@@ -2553,9 +2651,15 @@ void setup() {
 
 void loop() {
     pollServiceButton();
-    if (serviceButtonRestartPending) return;
     const bool serviceButtonReleased =
         !serviceButtonRawPressed && !serviceButtonStablePressed;
+    if (serviceButtonReleased && controllerRestartPending &&
+        static_cast<int32_t>(millis() - controllerRestartAt) >= 0) {
+        controllerRestartPending = false;
+        Serial.flush();
+        ESP.restart();
+    }
+    if (serviceButtonRestartPending) return;
 
     server.handleClient();
     network_loop();
