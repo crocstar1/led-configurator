@@ -1101,7 +1101,6 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     </div>
                     <div class="status-line" id="status_editor_context"></div>
                     <div class="btn-row">
-                        <button class="btn primary field-hidden" id="apply_status_solid_btn" type="button">Залить выбранную область</button>
                         <button class="btn danger" id="clear_status_btn" type="button">Сбросить ожидание всех портов</button>
                     </div>
                     <div>
@@ -2224,7 +2223,6 @@ function updateStatusEditorControls() {
     const scopeSelect = document.getElementById('status_scope_select');
     const modeSelect = document.getElementById('status_mode_select');
     const colorInput = document.getElementById('status_color');
-    const applyButton = document.getElementById('apply_status_solid_btn');
     const clearButton = document.getElementById('clear_status_btn');
     const context = document.getElementById('status_editor_context');
     const notice = document.getElementById('status_mode_notice');
@@ -2232,9 +2230,7 @@ function updateStatusEditorControls() {
     scopeSelect.disabled = blocked;
     modeSelect.disabled = blocked;
     colorInput.disabled = blocked;
-    applyButton.disabled = blocked;
     clearButton.disabled = blocked;
-    applyButton.classList.toggle('field-hidden', !solidMode);
     clearButton.classList.toggle('field-hidden', solidMode);
     document.getElementById('status_color_label').textContent =
         solidMode ? 'Цвет заливки' : 'Цвет кисти';
@@ -2242,7 +2238,7 @@ function updateStatusEditorControls() {
         activeStatusScope === 'all' ? 'всех активных портов' : `Порта ${activeStatusScope}`
     }`;
     notice.textContent = solidMode
-        ? `Кнопка заливки изменит координаты области «${statusScopeLabel()}» только в выбранном статусе.`
+        ? `Выбранный цвет сразу показан как черновик области «${statusScopeLabel()}». Запись выполняется кнопкой «Сохранить слой статуса».`
         : `Рисование разрешено только в области «${statusScopeLabel()}». Остальные пиксели портов заблокированы.`;
     context.textContent = `${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${
         statusEditModeLabel()
@@ -2367,7 +2363,6 @@ function updateMatrixSaveControls() {
         'status_scope_select',
         'status_mode_select',
         'status_color',
-        'apply_status_solid_btn',
         'clear_zone_btn',
         'clear_all_zones_btn',
         'clear_status_btn',
@@ -2866,7 +2861,7 @@ function shouldLockPixel(zoneId) {
         return !(zoneId === '0' || zoneId === activeZoneId);
     }
     if (activeTab === 'status') {
-        if (!isEditablePortZone(zoneId) || statusEditMode !== 'pixels') return true;
+        if (!isEditablePortZone(zoneId)) return true;
         return !statusScopeMatchesZone(zoneId);
     }
     if (activeTab === 'free') {
@@ -3276,7 +3271,11 @@ function resetSelectedStatusScope() {
 
 document.getElementById('status_color').addEventListener('input', e => {
     statusBrushColors[activeStatus] = e.target.value;
-    redrawMatrix();
+    if (statusEditMode === 'solid') {
+        applyStatusSolidColor();
+    } else {
+        redrawMatrix();
+    }
 });
 document.getElementById('status_scope_select').addEventListener('change', e => {
     if (matrixSavesBlockedByHardwareTransition()) return;
@@ -3288,8 +3287,6 @@ document.getElementById('status_mode_select').addEventListener('change', e => {
     statusEditMode = e.target.value === 'solid' ? 'solid' : 'pixels';
     redrawMatrix();
 });
-document.getElementById('apply_status_solid_btn').addEventListener('click', applyStatusSolidColor);
-
 document.getElementById('zone_brush_btn').addEventListener('click', () => {
     zoneTool = 'brush';
     document.getElementById('zone_brush_btn').classList.add('active');
