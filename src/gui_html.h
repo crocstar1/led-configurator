@@ -968,7 +968,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <span>Включите выход в аппаратных настройках, чтобы настроить матрицу.</span>
                 </div>
             </div>
-            <div id="matrix_mobile_legend" class="matrix-mobile-legend field-hidden" role="list" aria-label="Краткая легенда зон" tabindex="0"></div>
+            <div id="matrix_mobile_legend" class="matrix-mobile-legend field-hidden" role="list" aria-label="Краткая легенда зон матрицы" tabindex="0"></div>
             <div class="status-line field-hidden" id="edit_state_line" role="status" aria-live="polite"></div>
         </section>
 
@@ -1455,6 +1455,17 @@ const DEFAULT_FREE_STATIC_COLORS = {
     '8': '#af52de',
 };
 const FREE_ZONE_IDS = ['5', '6', '7', '8'];
+const FREE_ZONE_SHORT_LABELS = {
+    '5': 'СЗ1',
+    '6': 'СЗ2',
+    '7': 'СЗ3',
+    '8': 'СЗ4',
+};
+const FREE_ZONE_MOBILE_MODE_LABELS = {
+    static: 'Статично',
+    rainbow: 'Радуга',
+    custom: 'Пиксельный рисунок',
+};
 
 const TOPOLOGY_OPTIONS = [
     { value: 0, key: 'vert_down', label: 'Вертикальная · старт справа снизу', hint: 'Светодиод 0 справа снизу, далее змейкой по столбцам.' },
@@ -2797,7 +2808,6 @@ function buildSelects() {
 
 function buildLegend() {
     const legend = document.getElementById('zone_legend');
-    const mobileLegend = document.getElementById('matrix_mobile_legend');
     legend.innerHTML = '';
     const mobileItems = [];
 
@@ -2817,7 +2827,7 @@ function buildLegend() {
         const zoneId = String(z.id);
         const mobileLabel = z.type === 'port'
             ? `П${z.linked_port ?? z.linkedPort ?? z.id}`
-            : ({ '5': 'СЗ1', '6': 'СЗ2', '7': 'СЗ3', '8': 'СЗ4' })[zoneId];
+            : FREE_ZONE_SHORT_LABELS[zoneId];
         if (!mobileLabel) return;
 
         const mobileItem = document.createElement('div');
@@ -2834,13 +2844,32 @@ function buildLegend() {
         mobileItems.push(mobileItem);
     });
 
-    mobileLegend.replaceChildren(...mobileItems);
-    mobileLegend.classList.toggle('field-hidden', activeTab !== 'zones');
+    if (activeTab === 'zones') {
+        updateMatrixMobileLegend(mobileItems, 'Краткая легенда зон матрицы');
+    }
+}
+
+function updateMatrixMobileLegend(items, ariaLabel) {
+    const mobileLegend = document.getElementById('matrix_mobile_legend');
+    mobileLegend.replaceChildren(...items);
+    mobileLegend.setAttribute('aria-label', ariaLabel);
+    mobileLegend.classList.toggle('field-hidden', items.length === 0);
+}
+
+function freeZoneLegendBackground(applied) {
+    if (applied.mode === 'rainbow') {
+        return 'linear-gradient(90deg, #ff3b30, #ff9500, #34c759, #0055ff, #af52de)';
+    }
+    if (applied.mode === 'custom') {
+        return Object.values(applied.customLayer)[0] || '#000000';
+    }
+    return applied.staticColor;
 }
 
 function buildFreeLegend() {
     const legend = document.getElementById('free_legend');
     legend.innerHTML = '';
+    const mobileItems = [];
 
     zoneMeta.filter(z => z.type === 'free').forEach(z => {
         const zoneId = String(z.id);
@@ -2849,17 +2878,34 @@ function buildFreeLegend() {
         item.className = 'legend-item' + (zoneId === activeFreeZone ? ' selected' : '');
         const swatch = document.createElement('span');
         swatch.className = 'swatch';
-        swatch.style.background = applied.mode === 'rainbow'
-            ? 'linear-gradient(90deg, #ff3b30, #ff9500, #34c759, #0055ff, #af52de)'
-            : applied.mode === 'custom'
-                ? (Object.values(applied.customLayer)[0] || '#000000')
-                : applied.staticColor;
+        swatch.style.background = freeZoneLegendBackground(applied);
         const text = document.createElement('span');
         text.textContent = `${zoneDisplayName(z)} · ${modeLabel(applied.mode)}`;
         item.appendChild(swatch);
         item.appendChild(text);
         legend.appendChild(item);
+
+        if (!z.enabled || z.reserved) return;
+        const modeText = FREE_ZONE_MOBILE_MODE_LABELS[applied.mode] || modeLabel(applied.mode);
+        const mobileItem = document.createElement('div');
+        mobileItem.className = item.className;
+        mobileItem.setAttribute('role', 'listitem');
+        mobileItem.setAttribute('aria-label', `${zoneDisplayName(z)} — ${modeText}`);
+        const mobileSwatch = document.createElement('span');
+        mobileSwatch.className = 'swatch';
+        mobileSwatch.setAttribute('aria-hidden', 'true');
+        mobileSwatch.style.background = freeZoneLegendBackground(applied);
+        const mobileText = document.createElement('span');
+        mobileText.textContent = `${FREE_ZONE_SHORT_LABELS[zoneId]} · ${modeText}`;
+        mobileItem.append(mobileSwatch, mobileText);
+        mobileItems.push(mobileItem);
     });
+
+    if (activeTab === 'free') {
+        updateMatrixMobileLegend(mobileItems, 'Легенда свободных зон');
+    } else if (activeTab !== 'zones') {
+        updateMatrixMobileLegend([], 'Легенда свободных зон');
+    }
 }
 
 function pixelStatusColor(key, zoneId) {
