@@ -3,6 +3,7 @@
 #include <Update.h>
 #include <ctype.h>
 #include <inttypes.h>
+#include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <esp_timer.h>
 #include "firmware_version.h"
@@ -16,6 +17,10 @@
 #include "network_config.h"
 #include "auth_config.h"
 
+extern "C" bool verifyRollbackLater() {
+    return true;
+}
+
 WebServer server(80);
 static MatrixStateV3 matrixStateCandidate;
 static uint8_t previousZoneMap[MAX_TOTAL_LED_COUNT];
@@ -28,6 +33,8 @@ unsigned long otaRestartAt = 0;
 
 static bool controllerRestartPending = false;
 static unsigned long controllerRestartAt = 0;
+static bool otaRollbackVerificationPending = false;
+static uint32_t otaRollbackVerificationStartedAt = 0;
 
 static bool hardwareConfigRestartRequired = false;
 static bool hardwareConfigRestartScheduled = false;
@@ -40,6 +47,7 @@ static constexpr uint32_t CONTROLLER_RESTART_DELAY_MS = 1000;
 static constexpr uint32_t SERVICE_BUTTON_DEBOUNCE_MS = 40;
 static constexpr uint32_t SERVICE_BUTTON_AP_HOLD_MS = 3000;
 static constexpr uint32_t SERVICE_BUTTON_RESET_HOLD_MS = 10000;
+static constexpr uint32_t OTA_ROLLBACK_VERIFY_DELAY_MS = 5000;
 static constexpr uint8_t MATRIX_TOPOLOGY_MAX = 7;
 // Worst current 500-pixel chunk is 9007 bytes (a full free-zone layer at 1x500/500x1).
 static constexpr size_t GET_CONFIG_CHUNK_RESERVE = 12U * 1024U;
@@ -2648,6 +2656,20 @@ void setup() {
         }
     });
     server.begin();
+
+    const esp_partition_t *runningPartition = esp_ota_get_running_partition();
+    esp_ota_img_states_t otaState;
+    const esp_err_t otaStateResult =
+        esp_ota_get_state_partition(runningPartition, &otaState);
+    if (otaStateResult == ESP_OK &&
+        otaState == ESP_OTA_IMG_PENDING_VERIFY) {
+        otaRollbackVerificationPending = true;
+        otaRollbackVerificationStartedAt = millis();
+        Serial.println("OTA rollback verification pending for 5 seconds");
+    } else if (otaStateResult != ESP_OK) {
+        Serial.printf("OTA rollback state check failed: %d\n",
+            static_cast<int>(otaStateResult));
+    }
 }
 
 void loop() {
@@ -2681,5 +2703,18 @@ void loop() {
     if (serviceButtonReleased && otaRestartPending && millis() >= otaRestartAt) {
         otaRestartPending = false;
         ESP.restart();
+    }
+    if (otaRollbackVerificationPending &&
+        static_cast<uint32_t>(millis() - otaRollbackVerificationStartedAt) >=
+            OTA_ROLLBACK_VERIFY_DELAY_MS) {
+        otaRollbackVerificationPending = false;
+        const esp_err_t verifyResult =
+            esp_ota_mark_app_valid_cancel_rollback();
+        if (verifyResult == ESP_OK) {
+            Serial.println("OTA firmware confirmed");
+        } else {
+            Serial.printf("OTA firmware confirmation failed: %d\n",
+                static_cast<int>(verifyResult));
+        }
     }
 }
