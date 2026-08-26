@@ -289,13 +289,6 @@ const MatrixStateStoredFreeZone *freeZoneConfig(size_t outputIndex,
   return &activeState.freeZones[outputIndex][zoneIndex];
 }
 
-CRGB visibleErrorColor(CRGB preferred) {
-  if (static_cast<uint16_t>(preferred.r) + preferred.g + preferred.b < 40) {
-    return CRGB(255, 0, 0);
-  }
-  return preferred;
-}
-
 CRGB renderPortPixel(size_t logicalIndex,
                      uint8_t zoneId,
                      const StatusMapperState &ports,
@@ -317,28 +310,22 @@ CRGB renderPortPixel(size_t logicalIndex,
     return CRGB::Black;
   }
   const MatrixStateV3StoredLayer &layer = activeState.layers[layerIndex];
-  if (storedLayerColor(layer, logicalIndex, color)) {
-    color.nscale8_video(activeState.portBrightness);
-  } else if (status == PORT_STATUS_WAITING) {
-    color = CRGB(activeState.waitingColor[0],
-                 activeState.waitingColor[1],
-                 activeState.waitingColor[2]);
-    color.nscale8_video(activeState.portBrightness);
-  } else if (status == PORT_STATUS_CHARGING) {
-    color = CRGB(activeState.chargingColor[0],
-                 activeState.chargingColor[1],
-                 activeState.chargingColor[2]);
-    color.nscale8_video(activeState.portBrightness);
-  } else {
-    color = CRGB(activeState.errorColor[0],
-                 activeState.errorColor[1],
-                 activeState.errorColor[2]);
-    color.nscale8_video(activeState.portBrightness);
+  if (!storedLayerColor(layer, logicalIndex, color)) {
+    if (status == PORT_STATUS_WAITING) {
+      color = CRGB(activeState.waitingColor[0],
+                   activeState.waitingColor[1],
+                   activeState.waitingColor[2]);
+    } else if (status == PORT_STATUS_CHARGING) {
+      color = CRGB(activeState.chargingColor[0],
+                   activeState.chargingColor[1],
+                   activeState.chargingColor[2]);
+    } else {
+      color = CRGB(activeState.errorColor[0],
+                   activeState.errorColor[1],
+                   activeState.errorColor[2]);
+    }
   }
-
-  if (status == PORT_STATUS_ERROR) {
-    color = visibleErrorColor(color);
-  }
+  color.nscale8_video(activeState.portBrightness);
 
   const StatusLightMode lightMode = matrix_state_resolve_status_light_mode(
       layerIndex,
