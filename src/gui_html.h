@@ -1021,7 +1021,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                             <option value="3">3</option>
                                             <option value="4">4</option>
                                         </select>
-                                        <div class="hint" id="hardware_active_ports_hint">Общая настройка для LED1…LED4.</div>
+                                        <div class="hint" id="hardware_active_ports_hint">Общая настройка для всех работающих матриц.</div>
                                     </div>
                                     <div>
                                         <label for="hardware_protocol">Тип светодиодов</label>
@@ -1042,7 +1042,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                     </select>
                                 </div>
                                 <div class="notice">Указывайте фактический размер подключённой матрицы. Это не обрезка изображения. Чтобы отключить часть матрицы, оставьте физический размер неизменным и назначьте ненужным пикселям «Без зоны».</div>
-                                <div class="hint">Изменение включения, размеров любого выхода или числа активных портов очищает разметку и семь пространственных слоёв на всех LED-выходах. Тип светодиодов и порядок цветов применяются после перезагрузки без очистки этих данных.</div>
+                                <div class="hint">Изменение включения, размера матрицы или числа активных портов очищает разметку и рисунки всех матриц.</div>
                                 <div class="btn-row">
                                     <button class="btn primary" id="save_hardware_config_btn" type="button">Сохранить аппаратные настройки</button>
                                 </div>
@@ -1062,6 +1062,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <div class="hint" id="topology_message"></div>
                         </div>
                     </details>
+                    <div class="section-divider"></div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_zones_btn">Сохранить зоны</button>
                         <button class="btn danger" id="clear_zone_btn">Очистить выбранную зону</button>
@@ -1107,7 +1108,6 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         </div>
                     </div>
                     <div class="notice" id="status_mode_notice"></div>
-                    <div class="status-line" id="status_editor_context"></div>
                     <div class="btn-row">
                         <button class="btn danger" id="clear_status_btn" type="button">Сбросить цвет ожидания к заводскому</button>
                     </div>
@@ -1117,12 +1117,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                             <input type="range" id="ports_brightness" min="0" max="255" value="120">
                             <input type="number" id="ports_brightness_input" min="0" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
                         </div>
-                        <div class="hint">Яркость применяется автоматически после изменения. Значение 0 полностью выключает индикацию портов, включая ошибку.</div>
+                        <div class="hint">Яркость применяется автоматически после изменения.</div>
                     </div>
+                    <div class="section-divider"></div>
                     <div class="btn-row">
                         <button class="btn primary" id="save_status_btn">Сохранить слой статуса</button>
                     </div>
-                    <div class="hint">Сохраняется полный координатный слой только выбранного статуса. После сохранения пиксели без собственного цвета используют заводской базовый цвет.</div>
+                    <div class="hint">Сохраняется полный координатный слой только выбранного статуса.</div>
                 </div>
             </section>
 
@@ -1169,6 +1170,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                     <div class="section-divider"></div>
                     <label>Легенда</label>
                     <div class="legend" id="free_legend"></div>
+                    <div class="section-divider"></div>
                     <div class="btn-row">
                         <button class="btn danger" id="free_erase_btn">Очистить рисунок</button>
                         <button class="btn primary" id="apply_free_btn">Сохранить настройки зоны</button>
@@ -1280,6 +1282,7 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                                 <input id="network_dns" name="dns" type="text" inputmode="numeric">
                             </div>
                         </div>
+                        <div class="section-divider"></div>
                         <div class="grid-2">
                             <div>
                                 <label for="network_ap_ssid">SSID точки доступа</label>
@@ -2291,10 +2294,8 @@ function updateStatusEditorControls() {
     const lightModeSelect = document.getElementById('status_light_mode');
     const colorInput = document.getElementById('status_color');
     const clearButton = document.getElementById('clear_status_btn');
-    const context = document.getElementById('status_editor_context');
     const notice = document.getElementById('status_mode_notice');
     const lightModeDraft = draftStatusLightModes[activeStatus];
-    const lightModeChanged = lightModeDraft !== appliedStatusLightModes[activeStatus];
 
     scopeSelect.disabled = blocked;
     modeSelect.disabled = blocked;
@@ -2308,10 +2309,6 @@ function updateStatusEditorControls() {
     notice.textContent = solidMode
         ? `Выбранный цвет сразу показан как черновик области «${statusScopeLabel()}». Запись выполняется кнопкой «Сохранить слой статуса».`
         : `Рисование разрешено только в области «${statusScopeLabel()}». Остальные пиксели портов заблокированы.`;
-    context.textContent = `${statusLabel(activeStatus)} · ${statusScopeLabel()} · ${
-        statusEditModeLabel()
-    } · свечение: ${statusLightModeLabel(lightModeDraft)}${lightModeChanged ? ' (черновик)' : ''
-    } · ${statusLayerDirty[activeStatus] ? 'есть несохранённые изменения' : 'изменения сохранены'}`;
     document.querySelectorAll('[data-status]').forEach(button => {
         button.disabled = blocked;
     });
