@@ -157,6 +157,10 @@ static bool serviceButtonIsPressed() {
 }
 
 static FactoryResetResult clearAllUserSettings() {
+    const bool ledShutdownPrepared = led_prepare_for_restart();
+    Serial.printf("Factory reset LED shutdown: %s\n",
+        ledShutdownPrepared ? "success" : "failed");
+
     FactoryResetResult result = {
         matrix_state_storage_clear_saved_state(),
         network_config_clear_saved_settings(),
