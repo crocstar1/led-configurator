@@ -1388,7 +1388,7 @@ const DEFAULT_ZONES = [
     { id: 5, name: 'Свободная зона 1', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
     { id: 6, name: 'Свободная зона 2', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
     { id: 7, name: 'Свободная зона 3', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
-    { id: 8, name: 'Свободная зона 4', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'custom' },
+    { id: 8, name: 'Свободная зона 4', type: 'free', enabled: true, reserved: false, linked_port: null, mode: 'static' },
 ];
 
 const zoneColors = {
@@ -1514,7 +1514,7 @@ let zoneMeta = [...DEFAULT_ZONES];
 let statusColorLayers = { waiting: {}, charging: {}, error: {} };
 let appliedStatusLightModes = { ...FACTORY_STATUS_LIGHT_MODES };
 let draftStatusLightModes = { ...FACTORY_STATUS_LIGHT_MODES };
-let freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'custom' };
+let freeModes = { '5': 'static', '6': 'static', '7': 'static', '8': 'static' };
 let freeCustomLayers = { '5': {}, '6': {}, '7': {}, '8': {} };
 let freeStaticColors = { ...DEFAULT_FREE_STATIC_COLORS };
 let freeBrushColors = { ...DEFAULT_FREE_STATIC_COLORS };
@@ -1696,7 +1696,7 @@ function buildMockConfig(outputIndex = 0) {
             { zoneId: 5, enabled: true, mode: 'static', staticColor: '#ffffff', brightness: 100, customLayer: {} },
             { zoneId: 6, enabled: true, mode: 'static', staticColor: '#34c759', brightness: 100, customLayer: {} },
             { zoneId: 7, enabled: true, mode: 'static', staticColor: '#ff9500', brightness: 100, customLayer: {} },
-            { zoneId: 8, enabled: true, mode: 'custom', staticColor: '#af52de', brightness: 100, customLayer: {} },
+            { zoneId: 8, enabled: true, mode: 'static', staticColor: '#af52de', brightness: 100, customLayer: {} },
         ],
     };
 }

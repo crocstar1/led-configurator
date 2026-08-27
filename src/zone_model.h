@@ -47,7 +47,7 @@ static constexpr ZoneMetadata ZONE_METADATA[] = {
     {ZONE_ID_LOGO, "Свободная зона 1", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
     {ZONE_ID_QR, "Свободная зона 2", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
     {ZONE_ID_SERVICE, "Свободная зона 3", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
-    {ZONE_ID_CUSTOM, "Свободная зона 4", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_CUSTOM},
+    {ZONE_ID_CUSTOM, "Свободная зона 4", ZONE_TYPE_FREE, true, false, -1, FREE_ZONE_STATIC},
 };
 
 static constexpr size_t ZONE_METADATA_COUNT = sizeof(ZONE_METADATA) / sizeof(ZONE_METADATA[0]);
