@@ -1664,8 +1664,13 @@ void handleGetConfig() {
 
     json += "{\"topo\":";
     json += String((int)output.topology);
-    json += ",\"b_ports\":";
-    json += String((int)matrixStateCandidate.portBrightness);
+    json += ",\"statusBrightness\":{\"waiting\":";
+    json += String((int)matrixStateCandidate.statusBrightness[MATRIX_STATE_LAYER_WAITING]);
+    json += ",\"charging\":";
+    json += String((int)matrixStateCandidate.statusBrightness[MATRIX_STATE_LAYER_CHARGING]);
+    json += ",\"error\":";
+    json += String((int)matrixStateCandidate.statusBrightness[MATRIX_STATE_LAYER_ERROR]);
+    json += "}";
     json += ",\"c_wait\":\"";
     json += rgbToHex(matrixStateCandidate.waitingColor);
     json += "\",\"c_charge\":\"";
@@ -1993,13 +1998,27 @@ void handleSetBright() {
         return;
     }
 
-    if (!snapshotMatrixState()) return;
-    if (type == "ports") {
-        matrixStateCandidate.portBrightness = (uint8_t)parsedValue;
-    } else {
+    if (type != "ports") {
         server.send(400, "text/plain", "BAD_TYPE");
         return;
     }
+
+    size_t statusArgCount = 0;
+    for (int i = 0; i < server.args(); ++i) {
+        if (server.argName(i) == "status") ++statusArgCount;
+    }
+    const String status = server.arg("status");
+    size_t layerIndex = MATRIX_STATE_LAYER_COUNT;
+    if (status == "waiting") layerIndex = MATRIX_STATE_LAYER_WAITING;
+    else if (status == "charging") layerIndex = MATRIX_STATE_LAYER_CHARGING;
+    else if (status == "error") layerIndex = MATRIX_STATE_LAYER_ERROR;
+    if (statusArgCount != 1 || layerIndex == MATRIX_STATE_LAYER_COUNT) {
+        server.send(400, "text/plain", "BAD_STATUS");
+        return;
+    }
+
+    if (!snapshotMatrixState()) return;
+    matrixStateCandidate.statusBrightness[layerIndex] = (uint8_t)parsedValue;
 
     if (!saveAndApplyMatrixState("SAVE_FAILED")) return;
     server.send(200, "text/plain", "OK");

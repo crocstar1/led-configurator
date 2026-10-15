@@ -19,7 +19,7 @@ static constexpr size_t MATRIX_STATE_LAYER_COUNT = 7;
 static constexpr size_t MATRIX_STATE_STATUS_LIGHT_MODE_COUNT = 3;
 
 static constexpr uint32_t MATRIX_STATE_V3_MAGIC = 0x33534D54UL;  // "TMS3"
-static constexpr uint16_t MATRIX_STATE_V3_FORMAT_VERSION = 3;
+static constexpr uint16_t MATRIX_STATE_V3_FORMAT_VERSION = 4;
 static constexpr size_t MATRIX_STATE_V3_LAYER_COUNT = 7;
 static constexpr size_t MATRIX_STATE_V3_LAYER_MASK_BYTES =
     (MAX_TOTAL_LED_COUNT + 7U) / 8U;
@@ -95,12 +95,15 @@ struct MatrixStateV3 {
   uint16_t formatVersion;
   uint16_t structureSize;
   uint8_t activePortCount;
-  uint8_t portBrightness;
+  // Former common brightness byte; zero in format 4.
+  uint8_t reservedLegacyBrightness;
   uint8_t waitingColor[3];
   uint8_t chargingColor[3];
   uint8_t errorColor[3];
   StatusLightMode statusLightModes[MATRIX_STATE_STATUS_LIGHT_MODE_COUNT];
-  uint8_t reservedHeader[10];
+  // Waiting, charging, error: same order as the status layers.
+  uint8_t statusBrightness[MATRIX_STATE_STATUS_LIGHT_MODE_COUNT];
+  uint8_t reservedHeader[7];
   MatrixStateV3Output outputs[LED_OUTPUT_COUNT];
   // Persisted as [outputIndex][freeZoneIndex] for LED1..LED4.
   MatrixStateStoredFreeZone freeZones[LED_OUTPUT_COUNT][FREE_ZONE_COUNT];
@@ -227,8 +230,8 @@ static_assert(offsetof(MatrixStateV3, structureSize) == 6,
               "Unexpected V3 structure-size offset");
 static_assert(offsetof(MatrixStateV3, activePortCount) == 8,
               "Unexpected V3 active-port offset");
-static_assert(offsetof(MatrixStateV3, portBrightness) == 9,
-              "Unexpected V3 port-brightness offset");
+static_assert(offsetof(MatrixStateV3, reservedLegacyBrightness) == 9,
+              "Unexpected V3 legacy-brightness offset");
 static_assert(offsetof(MatrixStateV3, waitingColor) == 10,
               "Unexpected V3 waiting-color offset");
 static_assert(offsetof(MatrixStateV3, chargingColor) == 13,
@@ -237,7 +240,10 @@ static_assert(offsetof(MatrixStateV3, errorColor) == 16,
               "Unexpected V3 error-color offset");
 static_assert(offsetof(MatrixStateV3, statusLightModes) == 19,
               "Unexpected V3 status-light-mode offset");
-static_assert(offsetof(MatrixStateV3, reservedHeader) == 22,
+static_assert(offsetof(MatrixStateV3, statusBrightness) == 22 &&
+                  sizeof(decltype(MatrixStateV3::statusBrightness)) == 3,
+              "Unexpected V3 status-brightness layout");
+static_assert(offsetof(MatrixStateV3, reservedHeader) == 25,
               "Unexpected V3 reserved-header offset");
 static_assert(offsetof(MatrixStateV3, outputs) == 32,
               "Unexpected V3 output-descriptor offset");

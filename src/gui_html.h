@@ -1112,12 +1112,13 @@ const char PAGE_MAIN[] PROGMEM = R"=====(
                         <button class="btn danger" id="clear_status_btn" type="button">Сбросить цвет ожидания к заводскому</button>
                     </div>
                     <div>
-                        <label for="ports_brightness">Общая яркость портовых зон</label>
+                        <label for="ports_brightness" id="status_brightness_label">Яркость ожидания</label>
                         <div class="brightness-control">
                             <input type="range" id="ports_brightness" min="0" max="255" value="120">
-                            <input type="number" id="ports_brightness_input" min="0" max="255" value="120" inputmode="numeric" aria-label="Яркость портов числом">
+                            <input type="number" id="ports_brightness_input" min="0" max="255" value="120" inputmode="numeric" aria-label="Яркость ожидания">
                         </div>
-                        <div class="hint">Яркость применяется автоматически после изменения.</div>
+                        <div class="hint">Применяется автоматически ко всем портовым зонам выбранного статуса на всех включённых матрицах.</div>
+                        <div class="hint" id="status_brightness_message" aria-live="polite"></div>
                     </div>
                     <div class="section-divider"></div>
                     <div class="btn-row">
@@ -1413,6 +1414,8 @@ const FACTORY_STATUS_LIGHT_MODES = {
     charging: 'static',
     error: 'static',
 };
+const STATUS_KEYS = ['waiting', 'charging', 'error'];
+const FACTORY_STATUS_BRIGHTNESS = { waiting: 120, charging: 120, error: 120 };
 const STATUS_LIGHT_MODE_LABELS = {
     static: 'Статично',
     pulse: 'Пульсация',
@@ -1562,11 +1565,14 @@ let freeBrightnessBatchInProgress = false;
 let statusLayerDirty = { waiting: false, charging: false, error: false };
 let freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
 let uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
-let portsBrightnessValue = 120;
-let portsBrightnessDirty = false;
-let portsBrightnessRevision = 0;
-let portsBrightnessSaveTimer = null;
-let portsBrightnessSaveInProgress = 0;
+let portsBrightnessValues = { ...FACTORY_STATUS_BRIGHTNESS };
+let appliedStatusBrightness = { ...FACTORY_STATUS_BRIGHTNESS };
+let portsBrightnessDirty = { waiting: false, charging: false, error: false };
+let portsBrightnessRevisions = { waiting: 0, charging: 0, error: 0 };
+let portsBrightnessUncertain = { waiting: false, charging: false, error: false };
+let portsBrightnessSaveTimers = {};
+let portsBrightnessPending = {};
+let portsBrightnessSaveInProgress = false;
 let freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
 let freeBrightnessRevisions = { '5': 0, '6': 0, '7': 0, '8': 0 };
 let freeBrightnessSaveTimers = {};
@@ -1665,7 +1671,7 @@ function buildMockConfig(outputIndex = 0) {
     ];
     const selected = mockOutputs[Math.max(0, Math.min(3, Number(outputIndex) || 0))];
     return {
-        b_ports: 120,
+        statusBrightness: { ...FACTORY_STATUS_BRIGHTNESS },
         c_wait: FACTORY_STATUS_COLORS.waiting,
         c_charge: FACTORY_STATUS_COLORS.charging,
         c_error: FACTORY_STATUS_COLORS.error,
@@ -2287,6 +2293,7 @@ function renderOutputTabs() {
 }
 
 function updateStatusEditorControls() {
+    syncStatusBrightnessControls();
     const blocked = freeZoneEditorBlocked();
     const solidMode = statusEditMode === 'solid';
     const scopeSelect = document.getElementById('status_scope_select');
@@ -2370,15 +2377,16 @@ function hasUnsavedSpatialDrafts() {
 }
 
 function brightnessSavePendingOrInProgress() {
-    return portsBrightnessSaveTimer !== null ||
-        portsBrightnessSaveInProgress > 0 ||
+    return Object.keys(portsBrightnessSaveTimers).length > 0 ||
+        Object.keys(portsBrightnessPending).length > 0 ||
+        portsBrightnessSaveInProgress ||
         Object.keys(freeBrightnessSaveTimers).length > 0 ||
         Object.keys(freeBrightnessSaveInProgress).length > 0 ||
         freeBrightnessBatchInProgress;
 }
 
 function hasUnsavedPreservedSettings() {
-    return portsBrightnessDirty ||
+    return Object.values(portsBrightnessDirty).some(Boolean) ||
         Object.values(freeBrightnessDirty).some(Boolean) ||
         Object.values(uncertainFreeZoneState).some(Boolean) ||
         hasUnsavedFreeZoneScalarDrafts();
@@ -2387,13 +2395,12 @@ function hasUnsavedPreservedSettings() {
 function hasPendingMatrixChanges(includeTopology = true) {
     return zoneMapDirty ||
         (includeTopology && Number(pendingTopology) !== Number(matrixConfig.topology)) ||
-        portsBrightnessDirty ||
+        Object.values(portsBrightnessDirty).some(Boolean) ||
         Object.values(statusLayerDirty).some(Boolean) ||
         Object.values(freeZoneDirty).some(Boolean) ||
         Object.values(freeBrightnessDirty).some(Boolean) ||
         Object.values(uncertainFreeZoneState).some(Boolean) ||
-        portsBrightnessSaveTimer !== null ||
-        Object.keys(freeBrightnessSaveTimers).length > 0;
+        brightnessSavePendingOrInProgress();
 }
 
 function updateMatrixSaveControls() {
@@ -2464,12 +2471,24 @@ function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
     if (!hardwareState) throw new Error('invalid output descriptors');
     const loadedStatusLightModes = statusLightModesFromResponse(cfg.statusLightModes);
     if (!loadedStatusLightModes) throw new Error('invalid status light modes');
+    const loadedStatusBrightness = cfg.statusBrightness;
+    if (!loadedStatusBrightness || !STATUS_KEYS.every(status =>
+        Number.isInteger(loadedStatusBrightness[status]) &&
+        loadedStatusBrightness[status] >= 0 && loadedStatusBrightness[status] <= 255
+    )) throw new Error('invalid status brightness');
     const responseOutputIndex = Number(cfg.selectedOutputIndex);
     if (!Number.isInteger(responseOutputIndex) || responseOutputIndex !== selectedOutputIndex) {
         throw new Error('unexpected selected output');
     }
 
-    const preservePortBrightnessDraft = hardwareConfigInitialized && portsBrightnessDirty;
+    STATUS_KEYS.forEach(status => {
+        // Brightness is shared by outputs. A segment reload must not replace
+        // an unsaved/uncertain draft with an older controller value.
+        if (!portsBrightnessDirty[status]) {
+            appliedStatusBrightness[status] = loadedStatusBrightness[status];
+            portsBrightnessValues[status] = loadedStatusBrightness[status];
+        }
+    });
     appliedOutputs = cloneOutputDescriptors(hardwareState.outputs);
     appliedActivePortCount = hardwareState.activePortCount;
     hardwareMaxLedCount = hardwareState.maxLedCount;
@@ -2497,11 +2516,8 @@ function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
     hardwareZonesMap = sanitizeZoneMapForSize(cfg.hardware_map || {});
     savedHardwareZonesMap = { ...hardwareZonesMap };
     uncertainZoneMapSubmission = null;
-    if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
-    portsBrightnessSaveTimer = null;
     Object.values(freeBrightnessSaveTimers).forEach(timer => clearTimeout(timer));
     freeBrightnessSaveTimers = {};
-    portsBrightnessRevision += 1;
     Object.keys(freeBrightnessRevisions).forEach(zoneId => { freeBrightnessRevisions[zoneId] += 1; });
     zoneMapDirty = false;
     statusLayerDirty = { waiting: false, charging: false, error: false };
@@ -2509,7 +2525,6 @@ function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
     draftStatusLightModes = { ...loadedStatusLightModes };
     freeZoneDirty = { '5': false, '6': false, '7': false, '8': false };
     uncertainFreeZoneState = { '5': false, '6': false, '7': false, '8': false };
-    if (!preservePortBrightnessDraft) portsBrightnessDirty = false;
     freeBrightnessDirty = { '5': false, '6': false, '7': false, '8': false };
     statusColorLayers.waiting = sanitizeStatusLayerForPortZones(cfg.layers?.wait || {});
     statusColorLayers.charging = sanitizeStatusLayerForPortZones(cfg.layers?.charge || {});
@@ -2525,13 +2540,7 @@ function applyConfig(cfg, { resetHardwareDrafts = false } = {}) {
         Array.isArray(cfg.zones) && cfg.zones.length ? cfg.zones : DEFAULT_ZONES,
         activePortCount
     );
-    if (!preservePortBrightnessDraft) {
-        portsBrightnessValue = setBrightnessPair(
-            'ports_brightness',
-            'ports_brightness_input',
-            cfg.b_ports ?? 120
-        );
-    }
+    syncStatusBrightnessControls();
     appliedFreeZones = {};
     FREE_ZONE_IDS.forEach(zoneId => setAppliedFreeZoneState(zoneId, defaultFreeZoneState(zoneId)));
     if (Array.isArray(cfg.free_zones)) {
@@ -2588,7 +2597,7 @@ function updateDirtyIndicators() {
     const statusIndicator = document.getElementById('status_dirty_indicator');
     const freeIndicator = document.getElementById('free_dirty_indicator');
 
-    const hasDirtyStatusLayer = portsBrightnessDirty || Object.values(statusLayerDirty).some(Boolean);
+    const hasDirtyStatusLayer = Object.values(portsBrightnessDirty).some(Boolean) || Object.values(statusLayerDirty).some(Boolean);
     const hasDirtyFreeZone = Object.values(freeZoneDirty).some(Boolean) ||
         Object.values(freeBrightnessDirty).some(Boolean) ||
         Object.values(uncertainFreeZoneState).some(Boolean);
@@ -3891,7 +3900,7 @@ document.getElementById('save_topology_btn').addEventListener('click', async () 
         topologySaveInProgress = false;
         updateMatrixSaveControls();
     }
-    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    flushPendingPortsBrightness();
     if (!zoneMapDirty) flushPendingFreeZoneBrightness();
 });
 
@@ -3959,9 +3968,7 @@ document.getElementById('save_zones_btn').addEventListener('click', async () => 
         zoneMapSaveInProgress = false;
         updateMatrixSaveControls();
     }
-    if (portsBrightnessDirty) {
-        schedulePortsBrightnessSave(portsBrightnessValue, true);
-    }
+    flushPendingPortsBrightness();
     if (zonesSaved) {
         redrawMatrix();
     }
@@ -4054,7 +4061,7 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
         statusSaveInProgress = false;
         updateMatrixSaveControls();
     }
-    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    flushPendingPortsBrightness();
     if (!zoneMapDirty) flushPendingFreeZoneBrightness();
     updateDirtyIndicators();
     updateEditState();
@@ -4064,28 +4071,42 @@ document.getElementById('save_status_btn').addEventListener('click', async () =>
 
 document.getElementById('clear_status_btn').addEventListener('click', resetSelectedStatusScope);
 
-function updatePortsBrightness(value) {
+function syncStatusBrightnessControls() {
+    const label = `Яркость ${STATUS_RESET_LABELS[activeStatus]}`;
+    document.getElementById('status_brightness_label').textContent = label;
+    document.getElementById('ports_brightness_input').setAttribute('aria-label', label);
+    setBrightnessPair('ports_brightness', 'ports_brightness_input', portsBrightnessValues[activeStatus]);
+    const unconfirmed = STATUS_KEYS.filter(status => portsBrightnessUncertain[status]);
+    document.getElementById('status_brightness_message').textContent = unconfirmed.length
+        ? `Не подтверждено сохранение яркости: ${unconfirmed.map(status => STATUS_RESET_LABELS[status]).join(', ')}. Повторите изменение или перечитайте страницу для сверки.`
+        : '';
+}
+
+function updatePortsBrightness(value, status = activeStatus) {
     const safe = setBrightnessPair('ports_brightness', 'ports_brightness_input', value);
-    if (safe !== portsBrightnessValue) {
-        portsBrightnessValue = safe;
-        portsBrightnessRevision += 1;
-        portsBrightnessDirty = true;
+    if (safe !== portsBrightnessValues[status]) {
+        portsBrightnessValues[status] = safe;
+        portsBrightnessRevisions[status] += 1;
+        portsBrightnessDirty[status] = true;
         updateDirtyIndicators();
         redrawMatrix();
     }
     return safe;
 }
 
-async function persistPortsBrightness(value, revision) {
+async function persistPortsBrightness(status, value, revision) {
     if (!backendAvailable || matrixSavesBlockedByHardwareTransition() ||
-        portsBrightnessSaveInProgress > 0) return false;
+        portsBrightnessSaveInProgress) return false;
 
-    portsBrightnessSaveInProgress = 1;
+    delete portsBrightnessPending[status];
+    portsBrightnessSaveInProgress = true;
+    renderOutputTabs();
     const saveController = new AbortController();
     const saveTimeout = setTimeout(() => saveController.abort(), MATRIX_SAVE_REQUEST_TIMEOUT_MS);
     try {
         const body = new URLSearchParams();
         body.set('type', 'ports');
+        body.set('status', status);
         body.set('val', String(value));
         const res = await fetch('/set_bright', {
             method: 'POST',
@@ -4093,59 +4114,80 @@ async function persistPortsBrightness(value, revision) {
             body,
             signal: saveController.signal,
         });
-        const ok = res.ok && (await res.text()) === 'OK';
-        if (revision === portsBrightnessRevision) {
-            portsBrightnessDirty = !ok;
-            updateDirtyIndicators();
+        const ok = res.status === 200 && (await res.text()) === 'OK';
+        if (ok) appliedStatusBrightness[status] = value;
+        if (revision === portsBrightnessRevisions[status]) {
+            portsBrightnessDirty[status] = !ok;
+            portsBrightnessUncertain[status] = !ok;
         }
-        if (!ok) alert('Не удалось сохранить яркость портовых зон.');
+        if (!ok) alert(`Не удалось подтвердить сохранение яркости ${STATUS_RESET_LABELS[status]}. Черновик оставлен в браузере.`);
         return ok;
     } catch (err) {
-        if (revision === portsBrightnessRevision) {
-            portsBrightnessDirty = true;
-            updateDirtyIndicators();
+        if (revision === portsBrightnessRevisions[status]) {
+            portsBrightnessDirty[status] = true;
+            portsBrightnessUncertain[status] = true;
         }
-        alert('Контроллер недоступен: яркость портовых зон изменена только в браузере.');
+        alert(`Результат сохранения яркости ${STATUS_RESET_LABELS[status]} неизвестен. Черновик оставлен в браузере.`);
         return false;
     } finally {
-        const newerDraftExists = revision !== portsBrightnessRevision;
         clearTimeout(saveTimeout);
-        portsBrightnessSaveInProgress = 0;
-        if (newerDraftExists && portsBrightnessDirty) {
-            schedulePortsBrightnessSave(portsBrightnessValue, true);
-        }
+        portsBrightnessSaveInProgress = false;
+        syncStatusBrightnessControls();
+        updateDirtyIndicators();
+        renderOutputTabs();
+        flushPendingPortsBrightness();
     }
 }
 
-function schedulePortsBrightnessSave(value, immediate = false) {
-    if (portsBrightnessSaveTimer !== null) clearTimeout(portsBrightnessSaveTimer);
-    portsBrightnessSaveTimer = null;
-    if (!portsBrightnessDirty || !backendAvailable || matrixSavesBlockedByHardwareTransition()) return;
+function flushPendingPortsBrightness() {
+    if (mockMode || !backendAvailable || portsBrightnessSaveInProgress ||
+        matrixSavesBlockedByHardwareTransition() || controllerRestartExpected ||
+        controllerActionInProgress) return;
+    const status = STATUS_KEYS.find(key => portsBrightnessPending[key]);
+    if (!status) return;
+    const { value, revision } = portsBrightnessPending[status];
+    persistPortsBrightness(status, value, revision);
+}
 
-    const revision = portsBrightnessRevision;
-    portsBrightnessSaveTimer = setTimeout(() => {
-        portsBrightnessSaveTimer = null;
-        persistPortsBrightness(value, revision);
+function schedulePortsBrightnessSave(status, value, immediate = false) {
+    if (portsBrightnessSaveTimers[status] !== undefined) {
+        clearTimeout(portsBrightnessSaveTimers[status]);
+        delete portsBrightnessSaveTimers[status];
+    }
+    delete portsBrightnessPending[status];
+    if (!portsBrightnessDirty[status] || mockMode || !backendAvailable) return;
+
+    const revision = portsBrightnessRevisions[status];
+    portsBrightnessSaveTimers[status] = setTimeout(() => {
+        delete portsBrightnessSaveTimers[status];
+        portsBrightnessPending[status] = { value, revision };
+        flushPendingPortsBrightness();
     }, immediate ? 0 : BRIGHTNESS_SAVE_DEBOUNCE_MS);
+    renderOutputTabs();
 }
 
 document.getElementById('ports_brightness').addEventListener('input', e => {
-    updatePortsBrightness(e.target.value);
+    const status = activeStatus;
+    const value = updatePortsBrightness(e.target.value, status);
+    schedulePortsBrightnessSave(status, value);
 });
 
 document.getElementById('ports_brightness').addEventListener('change', e => {
-    const value = updatePortsBrightness(e.target.value);
-    schedulePortsBrightnessSave(value, true);
+    const status = activeStatus;
+    const value = updatePortsBrightness(e.target.value, status);
+    schedulePortsBrightnessSave(status, value, true);
 });
 
 document.getElementById('ports_brightness_input').addEventListener('input', e => {
-    const value = updatePortsBrightness(e.target.value);
-    schedulePortsBrightnessSave(value);
+    const status = activeStatus;
+    const value = updatePortsBrightness(e.target.value, status);
+    schedulePortsBrightnessSave(status, value);
 });
 
 document.getElementById('ports_brightness_input').addEventListener('change', e => {
-    const value = updatePortsBrightness(e.target.value);
-    schedulePortsBrightnessSave(value, true);
+    const status = activeStatus;
+    const value = updatePortsBrightness(e.target.value, status);
+    schedulePortsBrightnessSave(status, value, true);
 });
 
 function setActiveFreeBrightness(value) {
@@ -4388,7 +4430,7 @@ document.getElementById('apply_free_btn').addEventListener('click', async () => 
         freeZoneSaveInProgress = false;
         updateMatrixSaveControls();
     }
-    if (portsBrightnessDirty) schedulePortsBrightnessSave(portsBrightnessValue, true);
+    flushPendingPortsBrightness();
     if (saved && !zoneMapDirty) flushPendingFreeZoneBrightness();
     updateDirtyIndicators();
     updateEditState();
@@ -4576,6 +4618,7 @@ async function switchSelectedOutput(outputIndex) {
             selectedOutputLoadInProgress = false;
             renderOutputTabs();
             redrawMatrix();
+            flushPendingPortsBrightness();
         }
     }
 }
@@ -4636,6 +4679,7 @@ async function loadConfig() {
     } finally {
         configLoadInProgress = false;
         updateMatrixSaveControls();
+        flushPendingPortsBrightness();
     }
 }
 
@@ -5370,6 +5414,11 @@ async function requestControllerAction(action) {
     }
     if (controllerActionInProgress || controllerRestartExpected ||
         firmwareUploadInProgress || hardwareRestartInProgress) return;
+
+    if (brightnessSavePendingOrInProgress()) {
+        setControllerActionMessage('Дождитесь завершения сохранения яркости.', true);
+        return;
+    }
 
     const factoryReset = action === 'factory_reset';
     const confirmed = window.confirm(factoryReset

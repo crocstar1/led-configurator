@@ -348,7 +348,8 @@ void matrix_state_storage_set_v3_factory_defaults(MatrixStateV3 &state) {
   state.formatVersion = MATRIX_STATE_V3_FORMAT_VERSION;
   state.structureSize = static_cast<uint16_t>(sizeof(state));
   state.activePortCount = hardware.activePortCount;
-  state.portBrightness = DEFAULT_PORT_BRIGHTNESS;
+  memset(state.statusBrightness, DEFAULT_PORT_BRIGHTNESS,
+         sizeof(state.statusBrightness));
   memcpy(state.waitingColor,
          FACTORY_STATUS_COLORS[MATRIX_STATE_LAYER_WAITING],
          sizeof(state.waitingColor));
@@ -384,6 +385,7 @@ MatrixStateValidationResult matrix_state_storage_validate_v3(
 
   if (state.activePortCount < 1 ||
       state.activePortCount > MAX_PORT_COUNT ||
+      state.reservedLegacyBrightness != 0 ||
       !bytesAreZero(state.reservedHeader, sizeof(state.reservedHeader)) ||
       !bytesAreZero(state.reservedTail, sizeof(state.reservedTail))) {
     return MatrixStateValidationResult::INVALID;
@@ -471,6 +473,24 @@ MatrixStateLoadResult matrix_state_storage_load_v3(MatrixStateV3 &state) {
   }
   if (readResult != ReadBlobResult::OK) {
     return MatrixStateLoadResult::STORAGE_ERROR;
+  }
+
+  // Convert only the immediately preceding format, in the existing scratch
+  // buffer. Bytes 22..31 were reserved and must be zero in that format.
+  if (storageBuffer.magic == MATRIX_STATE_V3_MAGIC &&
+      storageBuffer.structureSize == sizeof(MatrixStateV3) &&
+      storageBuffer.formatVersion == 3) {
+    if (!bytesAreZero(storageBuffer.statusBrightness,
+                      sizeof(storageBuffer.statusBrightness)) ||
+        !bytesAreZero(storageBuffer.reservedHeader,
+                      sizeof(storageBuffer.reservedHeader))) {
+      return MatrixStateLoadResult::CORRUPT;
+    }
+    memset(storageBuffer.statusBrightness,
+           storageBuffer.reservedLegacyBrightness,
+           sizeof(storageBuffer.statusBrightness));
+    storageBuffer.reservedLegacyBrightness = 0;
+    storageBuffer.formatVersion = MATRIX_STATE_V3_FORMAT_VERSION;
   }
 
   const MatrixStateValidationResult validation =

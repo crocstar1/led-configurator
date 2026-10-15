@@ -370,6 +370,27 @@ Edit/preview mode:
 
 ## Currently In Work
 
+Status brightness stage (2026-10-15):
+
+- Waiting, charging and error now have independent global brightness values,
+  each defaulting to 120 and applying to every port zone on every enabled output.
+- MatrixStateV3 keeps its 23068-byte size, magic, state_v3 key and array offsets.
+  Its persisted formatVersion is 4. Brightness occupies former reserved bytes
+  22..24; byte 9 is now reserved/zero. Only the immediately previous format 3
+  is converted in the existing storage buffer: byte 9 is copied to all three
+  brightness values. Loading does not write the converted snapshot to NVS.
+- GET /get_config returns statusBrightness.waiting/charging/error instead of
+  b_ports. POST /set_bright requires type=ports, status and integer val=0..255.
+- The single UI brightness control follows the selected status. Three small
+  revision/pending states serialize autosaves; failures preserve drafts without
+  automatic retry. LED-output reloads preserve unsaved global brightness.
+- Verification: esp32dev build, embedded JavaScript syntax and diff checks pass.
+  Node-based checks exercise the actual client handlers, including captured
+  status/revision, sequential autosaves, stale replies, timeout, HTTP error,
+  output reload, color reset/save, boundaries and mock behavior.
+- Real ESP32 checks remain: mixed simultaneous port statuses, static/pulse,
+  brightness 0/255, NVS read-back/reboot, previous-format loading and reset.
+
 The safe cleanup, diagnostics reliability pass, API/storage correctness pass,
 mechanical neutral rename, and LED reliability pass have been successfully
 built locally.

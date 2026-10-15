@@ -318,13 +318,13 @@ CRGB renderPortPixel(size_t logicalIndex,
   if (status == PORT_STATUS_DISABLED) {
     return CRGB::Black;
   }
-  if (activeState.portBrightness == 0) {
-    return CRGB::Black;
-  }
-
   CRGB color;
   const size_t layerIndex = statusLayerIndex(status);
   if (layerIndex >= MATRIX_STATE_STATUS_LIGHT_MODE_COUNT) {
+    return CRGB::Black;
+  }
+  const uint8_t brightness = activeState.statusBrightness[layerIndex];
+  if (brightness == 0) {
     return CRGB::Black;
   }
   const MatrixStateV3StoredLayer &layer = activeState.layers[layerIndex];
@@ -343,7 +343,7 @@ CRGB renderPortPixel(size_t logicalIndex,
                    activeState.errorColor[2]);
     }
   }
-  color.nscale8_video(activeState.portBrightness);
+  color.nscale8_video(brightness);
 
   const StatusLightMode lightMode = matrix_state_resolve_status_light_mode(
       layerIndex,
